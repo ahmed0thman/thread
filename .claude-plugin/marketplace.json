@@ -1,0 +1,12 @@
+{
+  "name": "thread-marketplace",
+  "owner": { "name": "Ahmed Hisham" },
+  "description": "Marketplace for the thread plugin: side threads with on-demand hand-back and a kanban board.",
+  "plugins": [
+    {
+      "name": "thread",
+      "source": ".",
+      "description": "Side threads that share the session's context and report back on demand, plus a kanban board of tasks and ideas."
+    }
+  ]
+}
