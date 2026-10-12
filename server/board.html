@@ -4,11 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<script>
+// Apply the saved theme, or the system one, before the first paint.
+(function () {
+  var t = null;
+  try { t = localStorage.getItem('thread-board-theme'); } catch (e) { /* storage unavailable */ }
+  if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  document.documentElement.dataset.theme = t;
+})();
+</script>
 <link rel="icon" href="data:,">
 <title>Thread board</title>
 <style>
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #f6f7f9;
   --surface: #ffffff;
   --surface-2: #f0f2f5;
@@ -47,41 +56,40 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111317;
-    --surface: #1b1e24;
-    --surface-2: #23272f;
-    --col: #16191e;
-    --text: #e6e9ee;
-    --muted: #a0aab8;
-    --border: #2c313a;
-    --border-strong: #454c58;
-    --accent: #7fa8ff;
-    --accent-hover: #9bbcff;
-    --accent-bg: #1c2a49;
-    --on-accent: #0b1220;
-    --focus: #8db3ff;
-    --scrim: rgba(0, 0, 0, 0.6);
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111317;
+  --surface: #1b1e24;
+  --surface-2: #23272f;
+  --col: #16191e;
+  --text: #e6e9ee;
+  --muted: #a0aab8;
+  --border: #2c313a;
+  --border-strong: #454c58;
+  --accent: #7fa8ff;
+  --accent-hover: #9bbcff;
+  --accent-bg: #1c2a49;
+  --on-accent: #0b1220;
+  --focus: #8db3ff;
+  --scrim: rgba(0, 0, 0, 0.6);
 
-    --did: #8fb5ff;      --did-bg: #1c2a47;
-    --found: #5fd6cb;    --found-bg: #112f2d;
-    --decided: #bca4f7;  --decided-bg: #2a2145;
-    --changed: #f0b45c;  --changed-bg: #3a2a10;
-    --open: #f294b8;     --open-bg: #3d1a2b;
-    --error: #ff948b;    --error-bg: #3a1e1c;
+  --did: #8fb5ff;      --did-bg: #1c2a47;
+  --found: #5fd6cb;    --found-bg: #112f2d;
+  --decided: #bca4f7;  --decided-bg: #2a2145;
+  --changed: #f0b45c;  --changed-bg: #3a2a10;
+  --open: #f294b8;     --open-bg: #3d1a2b;
+  --error: #ff948b;    --error-bg: #3a1e1c;
 
-    --run: #8fb5ff;      --run-bg: #1c2a47;
-    --fin: #62d392;      --fin-bg: #14301f;
-    --fail: #ff948b;     --fail-bg: #3a1e1c;
-    --end: #aab3c0;      --end-bg: #272b33;
+  --run: #8fb5ff;      --run-bg: #1c2a47;
+  --fin: #62d392;      --fin-bg: #14301f;
+  --fail: #ff948b;     --fail-bg: #3a1e1c;
+  --end: #aab3c0;      --end-bg: #272b33;
 
-    --warn: #e8b35e;     --warn-bg: #36280f;
-    --danger: #ff948b;   --danger-bg: #3a1e1c;
-    --ok: #62d392;
-    --idea: #e8b35e;
-    --thread: #bca4f7;
-  }
+  --warn: #e8b35e;     --warn-bg: #36280f;
+  --danger: #ff948b;   --danger-bg: #3a1e1c;
+  --ok: #62d392;
+  --idea: #e8b35e;
+  --thread: #bca4f7;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -185,7 +193,7 @@ textarea.input { resize: vertical; line-height: 1.45; }
 .btn.danger { color: var(--danger); }
 .btn.danger:hover:not(:disabled) { background: var(--danger-bg); border-color: var(--danger); }
 .btn.danger.solid { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
-@media (prefers-color-scheme: dark) { .btn.danger.solid { color: #1a0a09; } }
+:root[data-theme="dark"] .btn.danger.solid { color: #1a0a09; }
 .btn.danger.solid:hover:not(:disabled) { filter: brightness(0.92); background: var(--danger); }
 .btn.small { min-height: 28px; padding: 0 9px; font-size: 12px; }
 .btn.ghost { border-color: transparent; background: transparent; }
@@ -467,7 +475,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .node .shape { width: 11px; height: 11px; }
 .node.err { background: var(--error); border-radius: 50%; color: #fff; }
 .node.err .shape { color: #fff; width: 10px; height: 10px; }
-@media (prefers-color-scheme: dark) { .node.err { color: #1a0a09; } .node.err .shape { color: #1a0a09; } }
+:root[data-theme="dark"] .node.err, :root[data-theme="dark"] .node.err .shape { color: #1a0a09; }
 .step-top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); min-height: 20px; }
 .klabel { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--k); }
 .step-text { display: block; margin-top: 1px; overflow-wrap: anywhere; }
@@ -565,6 +573,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   <header class="top">
     <h1>Thread board</h1>
     <span class="dir" id="dir"><span class="dir-head" id="dir-head"></span><span class="dir-tail" id="dir-tail"></span></span>
+    <button type="button" class="btn" id="theme-btn"></button>
     <span class="conn" id="conn" role="status" data-state="connecting"><span class="shape s-ring"></span><span id="conn-text">Connecting</span></span>
   </header>
   <nav class="ptabs-wrap" id="ptabs-wrap" aria-label="Projects" hidden>
@@ -762,6 +771,28 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   $('banner-close').addEventListener('click', () => {
     clearError();
     if (panel && panel.drawer) panel.drawer.focus({ preventScroll: true });
+  });
+
+  // ---------- theme ----------
+  // The page follows the system theme until the user picks one with the button.
+  const THEME_KEY = 'thread-board-theme';
+  function savedTheme() {
+    try { const t = localStorage.getItem(THEME_KEY); return t === 'light' || t === 'dark' ? t : null; } catch (e) { return null; }
+  }
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    const btn = $('theme-btn');
+    btn.textContent = theme === 'dark' ? 'Theme: Dark' : 'Theme: Light';
+    btn.title = 'Switch to the ' + (theme === 'dark' ? 'light' : 'dark') + ' theme';
+  }
+  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
+  $('theme-btn').addEventListener('click', function () {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* not saved: the choice lasts for this page only */ }
+    applyTheme(next);
+  });
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function (e) {
+    if (!savedTheme()) applyTheme(e.matches ? 'dark' : 'light');
   });
 
   function setOnline(ok) {

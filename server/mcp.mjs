@@ -2,7 +2,7 @@
 // stdout carries JSON-RPC only; every log line goes to stderr.
 import * as core from './core.mjs';
 
-const SERVER_INFO = { name: 'thread', version: '0.5.0' };
+const SERVER_INFO = { name: 'thread', version: '0.5.1' };
 const DEFAULT_PROTOCOL = '2025-06-18';
 
 function log(...a) {
