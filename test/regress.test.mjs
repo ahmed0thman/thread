@@ -145,3 +145,99 @@ test('inside a side thread, continueThread and endThread are refused', async (t)
   await assert.rejects(core.continueThread(projectDir, card.id, 'more'), /side thread cannot/);
   await assert.rejects(core.endThread(projectDir, card.id), /side thread cannot/);
 });
+
+// ---- hand-back parsing, step map, and the board's thread endpoints
+
+const REPLY_WITH_MAP = [
+  'Intro line.',
+  '## Happened', '- read the plan', '## Decided', '- use Postgres', '## Changed', 'Nothing.', '## Open', '- one question',
+  '```thread-map',
+  '[{"kind":"did","text":"read the plan","ref":"PLAN.md:12"},{"kind":"bogus","text":"kind falls back"},{"text":""},{"kind":"decided","text":"use Postgres"}]',
+  '```',
+].join('\n');
+
+test('parseHandback splits body, the four sections and the step map', () => {
+  const v = core.parseHandback(REPLY_WITH_MAP);
+  assert.equal(v.body, 'Intro line.');
+  assert.equal(v.sections.happened, '- read the plan');
+  assert.equal(v.sections.decided, '- use Postgres');
+  assert.equal(v.sections.changed, 'Nothing.');
+  assert.equal(v.sections.open, '- one question');
+  assert.deepEqual(v.map, [
+    { kind: 'did', text: 'read the plan', ref: 'PLAN.md:12' },
+    { kind: 'did', text: 'kind falls back' },
+    { kind: 'decided', text: 'use Postgres' },
+  ]);
+});
+
+test('parseHandback tolerates free text, a broken map block and non-strings', () => {
+  assert.deepEqual(core.parseHandback('just text').map, []);
+  assert.equal(core.parseHandback('just text').body, 'just text');
+  const broken = core.parseHandback('a\n## Open\n- x\n```thread-map\nnot json\n```');
+  assert.deepEqual(broken.map, []);
+  assert.equal(broken.sections.open, '- x');
+  assert.equal(core.parseHandback(undefined).body, '');
+});
+
+test('the prompt asks for the step map on first and follow-up turns', () => {
+  const card = { id: 'c1', title: 't', thread: { sessionId: null, mode: 'read', turns: [{ prompt: 'do it' }] } };
+  assert.match(core.buildPrompt(card), /thread-map/);
+  card.thread.sessionId = '11111111-2222-4333-8444-555555555555';
+  assert.match(core.buildPrompt(card), /thread-map/);
+});
+
+async function seedFinishedThread(projectDir, result) {
+  const paths = core.projectPaths(projectDir);
+  fs.mkdirSync(paths.dir, { recursive: true });
+  const ts = new Date().toISOString();
+  fs.writeFileSync(paths.state, JSON.stringify({
+    version: 1, projectDir, seq: 1,
+    cards: [{
+      id: 'c1', kind: 'thread', title: 'done thread', note: '', status: 'review', source: 'claude', seenByClaude: true, createdAt: ts, updatedAt: ts,
+      thread: {
+        parentSessionId: PARENT_SESSION, sessionId: '11111111-2222-4333-8444-555555555555', mode: 'read', runState: 'idle', pid: null,
+        turns: [{ prompt: 'p', startedAt: ts, finishedAt: ts, ok: true, result, error: null }],
+        lastResult: result, reported: false, announced: true,
+      },
+    }],
+  }));
+}
+
+test('reportThread leaves the step map out of the text given to the main session', async (t) => {
+  const { projectDir } = setup(t);
+  await seedFinishedThread(projectDir, REPLY_WITH_MAP);
+  const { text } = await core.reportThread(projectDir, 'c1');
+  assert.match(text, /## Decided/);
+  assert.doesNotMatch(text, /thread-map/);
+});
+
+test('the board API returns parsed views, sends a follow-up turn and ends a thread', async (t) => {
+  const { projectDir } = setup(t);
+  await seedFinishedThread(projectDir, REPLY_WITH_MAP);
+  const { startBoardServer } = await import(path.join(path.dirname(CORE_PATH), 'http.mjs'));
+  const { server, url } = await startBoardServer(projectDir, { port: 0 });
+  t.after(() => new Promise((r) => server.close(r)));
+  const post = (p, body, headers = { 'Content-Type': 'application/json' }) => fetch(url + p, { method: 'POST', headers, body: JSON.stringify(body) });
+
+  const state = await (await fetch(url + 'api/state')).json();
+  assert.equal(state.cards[0].thread.turns[0].view.map.length, 3);
+  assert.equal(state.cards[0].thread.turns[0].view.sections.decided, '- use Postgres');
+  assert.equal(JSON.parse(fs.readFileSync(core.projectPaths(projectDir).state, 'utf8')).cards[0].thread.turns[0].view, undefined, 'views are not stored');
+
+  assert.equal((await post('api/threads/c1/messages', { message: 'more' }, {})).status, 415);
+  assert.equal((await post('api/threads/c1/messages', { message: '' })).status, 400);
+  assert.equal((await post('api/threads/nope/messages', { message: 'x' })).status, 400);
+
+  const sent = await post('api/threads/c1/messages', { message: 'look again' });
+  assert.equal(sent.status, 200);
+  const card = await sent.json();
+  assert.equal(card.thread.runState, 'running');
+  assert.equal(card.thread.turns.length, 2);
+  assert.equal((await post('api/threads/c1/messages', { message: 'again' })).status, 400, 'refused while running');
+  await waitFor(() => core.readState(projectDir).cards[0].thread.runState === 'idle');
+
+  const ended = await post('api/threads/c1/end', {});
+  assert.equal(ended.status, 200);
+  assert.equal((await ended.json()).thread.runState, 'ended');
+  assert.equal((await post('api/threads/c1/messages', { message: 'x' })).status, 400, 'refused after end');
+});

@@ -2,7 +2,7 @@
 // stdout carries JSON-RPC only; every log line goes to stderr.
 import * as core from './core.mjs';
 
-const SERVER_INFO = { name: 'thread', version: '0.1.0' };
+const SERVER_INFO = { name: 'thread', version: '0.2.0' };
 const DEFAULT_PROTOCOL = '2025-06-18';
 
 function log(...a) {
@@ -175,7 +175,7 @@ const oneLine = (s, n = 160) => {
 
 function threadLine(c) {
   const t = c.thread || {};
-  return `${c.id} "${oneLine(c.title, 80)}" — ${t.runState || '?'}, mode ${t.mode || '?'}, ${(t.turns || []).length} turn(s), reported: ${t.reported ? 'yes' : 'no'}`;
+  return `${c.id} "${oneLine(c.title, 80)}" — ${t.runState || '?'}, mode ${t.mode || '?'}, ${(t.turns || []).length} turn(s), reported: ${t.reported ? 'yes' : 'no'}, session ${t.sessionId || 'not known yet'}`;
 }
 
 // ---------- board server ----------

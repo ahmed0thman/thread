@@ -317,6 +317,53 @@ export async function markSeen(projectDirArg) {
 
 // ---------------------------------------------------------------- threads
 
+const MAP_INSTRUCTION = 'After the digest, add a fenced code block tagged thread-map holding a JSON array of at most 12 steps in the order they happened, each {"kind":"did|found|decided|changed|open","text":"one short sentence","ref":"optional path:line"}.';
+const MAP_BLOCK_RE = /```thread-map[^\n]*\n([\s\S]*?)```/i;
+const MAP_KINDS = ['did', 'found', 'decided', 'changed', 'open'];
+const SECTION_KEYS = ['happened', 'decided', 'changed', 'open'];
+
+// Split a thread reply into its free text, the four digest sections and the
+// ordered step map. Tolerant by design: a reply that follows none of the format
+// comes back as body only.
+export function parseHandback(text) {
+  const out = { body: '', sections: { happened: '', decided: '', changed: '', open: '' }, map: [] };
+  if (typeof text !== 'string') return out;
+  let rest = text;
+  const block = MAP_BLOCK_RE.exec(rest);
+  if (block) {
+    rest = rest.replace(MAP_BLOCK_RE, '');
+    try {
+      const arr = JSON.parse(block[1]);
+      if (Array.isArray(arr)) {
+        for (const item of arr.slice(0, 20)) {
+          if (!item || typeof item !== 'object' || typeof item.text !== 'string' || !item.text.trim()) continue;
+          const step = { kind: MAP_KINDS.includes(item.kind) ? item.kind : 'did', text: item.text.trim().slice(0, 400) };
+          if (typeof item.ref === 'string' && item.ref.trim()) step.ref = item.ref.trim().slice(0, 200);
+          out.map.push(step);
+        }
+      }
+    } catch { /* not valid JSON: ignore the block */ }
+  }
+  const re = /^##\s+(Happened|Decided|Changed|Open)\s*$/gim;
+  const marks = [];
+  let m;
+  while ((m = re.exec(rest)) !== null) marks.push({ key: m[1].toLowerCase(), start: m.index, end: re.lastIndex });
+  if (!marks.length) {
+    out.body = rest.trim();
+    return out;
+  }
+  out.body = rest.slice(0, marks[0].start).trim();
+  marks.forEach((mk, i) => {
+    const chunk = rest.slice(mk.end, i + 1 < marks.length ? marks[i + 1].start : rest.length).trim();
+    if (SECTION_KEYS.includes(mk.key)) out.sections[mk.key] = chunk;
+  });
+  return out;
+}
+
+function stripMap(text) {
+  return typeof text === 'string' ? text.replace(MAP_BLOCK_RE, '').trimEnd() : text;
+}
+
 export function buildClaudeArgs(card) {
   const t = card.thread;
   const modeArgs = t.mode === 'write'
@@ -341,12 +388,14 @@ export function buildPrompt(card) {
         ? 'You may edit files. Keep changes limited to this task.'
         : 'Do not modify any files. Read, search and analyse only.',
       'End your reply with a hand-back digest using exactly these headings: "## Happened", "## Decided", "## Changed", "## Open".',
+      MAP_INSTRUCTION,
     ].join('\n');
   }
   return [
     `[side thread ${card.id}: follow-up]`,
     text,
     'End your reply with the same four-heading hand-back digest.',
+    MAP_INSTRUCTION,
   ].join('\n');
 }
 
@@ -463,11 +512,12 @@ export async function reportThread(projectDirArg, id) {
     }
     th.reported = true;
     const last = th.turns[th.turns.length - 1];
-    let text = th.lastResult;
+    const digest = stripMap(th.lastResult);
+    let text = digest;
     if (th.runState === 'running') {
-      text = `(a newer turn of thread ${id} is still running; this is the previous result)\n${th.lastResult}`;
+      text = `(a newer turn of thread ${id} is still running; this is the previous result)\n${digest}`;
     } else if (last && last.ok === false) {
-      text = `(the newest turn of thread ${id} failed: ${last.error || 'unknown error'}; this is the last successful result)\n${th.lastResult}`;
+      text = `(the newest turn of thread ${id} failed: ${last.error || 'unknown error'}; this is the last successful result)\n${digest}`;
     }
     return { card, text };
   });

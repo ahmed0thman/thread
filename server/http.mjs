@@ -119,7 +119,7 @@ function makeHandler(projectDir) {
 
     if (method === 'GET' && path === '/api/state') {
       const state = await core.reconcile(projectDir);
-      send(res, 200, { projectDir, statuses: core.STATUSES, cards: state.cards });
+      send(res, 200, { projectDir, statuses: core.STATUSES, cards: state.cards.map(withViews) });
       return;
     }
 
@@ -154,9 +154,30 @@ function makeHandler(projectDir) {
       return;
     }
 
+    const tm = /^\/api\/threads\/([A-Za-z0-9_-]{1,64})\/(messages|end)$/.exec(path);
+    if (tm && method === 'POST') {
+      requireJson(req);
+      const body = await readJsonBody(req);
+      const card = tm[2] === 'messages'
+        ? await core.continueThread(projectDir, tm[1], body && body.message)
+        : await core.endThread(projectDir, tm[1]);
+      send(res, 200, withViews(card));
+      return;
+    }
+
     req.resume();
     send(res, 404, { error: 'not found' });
   };
+}
+
+// Attach the parsed hand-back (free text, digest sections, step map) to each
+// turn for the board page. Computed per response; never stored.
+function withViews(card) {
+  if (!card || card.kind !== 'thread' || !card.thread) return card;
+  const turns = (card.thread.turns || []).map((t) => (
+    typeof t.result === 'string' ? { ...t, view: core.parseHandback(t.result) } : t
+  ));
+  return { ...card, thread: { ...card.thread, turns } };
 }
 
 function requireJson(req) {
