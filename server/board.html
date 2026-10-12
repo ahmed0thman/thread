@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thread board</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --col: #eceef2;
+  --text: #1d2129;
+  --muted: #566070;
+  --border: #d3d8df;
+  --accent: #2456c9;
+  --accent-bg: #dde7fb;
+  --thread: #6b3fc4;
+  --thread-bg: #ebe3fa;
+  --ok: #1a7f45;
+  --warn: #9a5b00;
+  --danger: #b42318;
+  --danger-bg: #fdecea;
+  --focus: #2456c9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --surface: #1e2127;
+    --col: #1a1d22;
+    --text: #e4e7eb;
+    --muted: #9ba5b3;
+    --border: #2f343d;
+    --accent: #7aa7ff;
+    --accent-bg: #1f2c47;
+    --thread: #b79bf5;
+    --thread-bg: #2a2142;
+    --ok: #55c98a;
+    --warn: #e0a64a;
+    --danger: #ff8f84;
+    --danger-bg: #3a1f1d;
+    --focus: #7aa7ff;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; overflow-x: hidden; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  min-height: 100vh;
+}
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+}
+h1 { font-size: 16px; margin: 0; font-weight: 650; }
+.dir {
+  flex: 1 1 140px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.conn::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.conn[data-state="online"]::before { background: var(--ok); }
+.conn[data-state="offline"] { color: var(--danger); font-weight: 600; }
+.conn[data-state="offline"]::before { background: var(--danger); }
+
+.banner {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 8px 12px 0; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--danger); background: var(--danger-bg); color: var(--text);
+}
+.banner span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+.add { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; }
+.add .f-title { flex: 2 1 180px; min-width: 0; }
+.add .f-note { flex: 3 1 220px; min-width: 0; }
+
+input, textarea, select, button {
+  font: inherit; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px; min-height: 30px;
+}
+textarea { width: 100%; resize: vertical; }
+button { cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #ffffff; }
+@media (prefers-color-scheme: dark) { button.primary { color: #0b1220; } }
+button.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+button.small { padding: 2px 8px; min-height: 26px; font-size: 12px; }
+
+.board {
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(232px, 1fr);
+  gap: 10px; padding: 2px 12px 16px; overflow-x: auto; align-items: start;
+}
+.col {
+  background: var(--col); border: 1px solid var(--border); border-radius: 8px;
+  min-width: 0; display: flex; flex-direction: column;
+}
+.col.over { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-bg); }
+.col-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px 4px;
+}
+.col-head h2 { font-size: 12px; margin: 0; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.count {
+  font-size: 12px; min-width: 22px; text-align: center; padding: 0 6px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+}
+.col-body { display: flex; flex-direction: column; gap: 6px; padding: 6px; min-height: 64px; }
+.empty { color: var(--muted); font-size: 12px; text-align: center; padding: 10px 0; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px; min-width: 0;
+}
+.card.thread { border-left: 3px solid var(--thread); }
+.card[draggable="true"] { cursor: grab; }
+.card.dragging { opacity: 0.45; }
+.badges { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-bottom: 4px; }
+.chip {
+  font-size: 11px; line-height: 1.5; padding: 0 7px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+}
+.chip.kind-task { color: var(--accent); border-color: var(--accent); }
+.chip.kind-idea { color: var(--warn); border-color: var(--warn); }
+.chip.kind-thread { color: var(--thread); border-color: var(--thread); background: var(--thread-bg); }
+.chip.run-running { color: var(--accent); border-color: var(--accent); }
+.chip.run-idle { color: var(--ok); border-color: var(--ok); }
+.chip.run-failed { color: var(--danger); border-color: var(--danger); }
+.chip.run-ended { color: var(--muted); }
+.chip.reported { color: var(--ok); border-color: var(--ok); }
+.chip.not-reported { color: var(--warn); border-color: var(--warn); }
+.unseen { font-size: 11px; color: var(--warn); display: inline-flex; align-items: center; gap: 4px; }
+.unseen::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+.card h3 { font-size: 14px; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.note { margin: 3px 0 0; color: var(--muted); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.actions select { flex: 1 1 auto; min-width: 0; padding: 2px 4px; min-height: 26px; font-size: 12px; }
+.actions .spacer { flex: 1 1 auto; }
+.edit-form { display: flex; flex-direction: column; gap: 6px; }
+.edit-form input { width: 100%; }
+.edit-form .row { display: flex; gap: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Thread board</h1>
+  <span class="dir" id="dir" title=""></span>
+  <span class="conn" id="conn" role="status" data-state="connecting">connecting</span>
+</header>
+
+<div class="banner" id="banner" role="alert" hidden>
+  <span id="banner-text"></span>
+  <button type="button" class="small" id="banner-close" aria-label="Dismiss error message">Dismiss</button>
+</div>
+
+<form class="add" id="add" autocomplete="off">
+  <input class="f-title" id="f-title" type="text" required placeholder="New card title" aria-label="Card title" maxlength="200">
+  <input class="f-note" id="f-note" type="text" placeholder="Note (optional)" aria-label="Card note">
+  <select id="f-status" aria-label="Status for new card"></select>
+  <select id="f-kind" aria-label="Kind of new card">
+    <option value="task">task</option>
+    <option value="idea">idea</option>
+  </select>
+  <button type="submit" class="primary" id="f-add">Add card</button>
+</form>
+
+<main class="board" id="board" aria-label="Board columns"></main>
+
+<script>
+(function () {
+  'use strict';
+
+  var STATUSES = ['idea', 'new', 'in_progress', 'review', 'blocked', 'done'];
+  var LABELS = { idea: 'Idea', 'new': 'New', in_progress: 'In progress', review: 'Review', blocked: 'Blocked', done: 'Done' };
+  var POLL_MS = 2000;
+
+  var elDir = document.getElementById('dir');
+  var elConn = document.getElementById('conn');
+  var elBanner = document.getElementById('banner');
+  var elBannerText = document.getElementById('banner-text');
+  var elBoard = document.getElementById('board');
+  var form = document.getElementById('add');
+  var fTitle = document.getElementById('f-title');
+  var fNote = document.getElementById('f-note');
+  var fStatus = document.getElementById('f-status');
+  var fKind = document.getElementById('f-kind');
+  var fAdd = document.getElementById('f-add');
+
+  var current = null;      // newest state from the server
+  var currentKey = '';     // JSON of the newest state
+  var renderedKey = null;  // JSON of what is on screen
+  var editingId = null;    // card being edited, blocks re-rendering
+  var dragging = false;    // drag in progress, blocks re-rendering
+  var pollSeq = 0;
+  var appliedSeq = 0;
+
+  function h(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+
+  function label(status) { return LABELS[status] || String(status); }
+
+  function statusSelect(value, ariaLabel) {
+    var s = h('select');
+    s.setAttribute('aria-label', ariaLabel);
+    STATUSES.forEach(function (st) {
+      var o = h('option', null, label(st));
+      o.value = st;
+      if (st === value) o.selected = true;
+      s.appendChild(o);
+    });
+    return s;
+  }
+
+  // ---------- errors and connection ----------
+
+  function showError(message) {
+    elBannerText.textContent = String(message || 'Something went wrong.');
+    elBanner.hidden = false;
+  }
+  function clearError() { elBanner.hidden = true; }
+  document.getElementById('banner-close').addEventListener('click', clearError);
+
+  function setOnline(ok) {
+    var state = ok ? 'online' : 'offline';
+    if (elConn.dataset.state !== state) {
+      elConn.dataset.state = state;
+      elConn.textContent = state;
+    }
+  }
+
+  // ---------- network ----------
+
+  async function api(method, path, body) {
+    var opts = { method: method, headers: { 'Content-Type': 'application/json' }, cache: 'no-store' };
+    if (method !== 'GET') opts.body = JSON.stringify(body || {});
+    var res;
+    try {
+      res = await fetch(path, opts);
+    } catch (e) {
+      throw new Error('Could not reach the board server.');
+    }
+    var data = null;
+    try { data = await res.json(); } catch (e) { data = null; }
+    if (!res.ok) {
+      throw new Error((data && data.error) ? data.error : 'Request failed (status ' + res.status + ')');
+    }
+    return data;
+  }
+
+  async function poll() {
+    var seq = ++pollSeq;
+    try {
+      var opts = { cache: 'no-store' };
+      if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) opts.signal = AbortSignal.timeout(5000);
+      var res = await fetch('/api/state', opts);
+      if (!res.ok) throw new Error('status ' + res.status);
+      var data = await res.json();
+      if (!data || !Array.isArray(data.cards)) throw new Error('bad state');
+      if (seq < appliedSeq) return;
+      appliedSeq = seq;
+      setOnline(true);
+      apply(data);
+    } catch (e) {
+      if (seq > appliedSeq) setOnline(false);
+    }
+  }
+
+  // ---------- rendering ----------
+
+  function apply(data) {
+    current = data;
+    currentKey = JSON.stringify(data);
+    var dir = data.projectDir ? String(data.projectDir) : '';
+    if (elDir.textContent !== dir) {
+      elDir.textContent = dir;
+      elDir.title = dir;
+    }
+    maybeRender();
+  }
+
+  function maybeRender() {
+    if (!current) return;
+    if (editingId !== null || dragging) return;
+    if (currentKey === renderedKey) return;
+    render(current);
+    renderedKey = currentKey;
+  }
+
+  function forceRender() {
+    renderedKey = null;
+    maybeRender();
+  }
+
+  function render(state) {
+    // remember scroll and focus so a refresh is invisible
+    var scrollLeft = elBoard.scrollLeft;
+    var colScroll = {};
+    Array.prototype.forEach.call(elBoard.querySelectorAll('.col'), function (c) {
+      colScroll[c.dataset.status] = c.scrollTop;
+    });
+    var focusId = null, focusRole = null;
+    var a = document.activeElement;
+    if (a && a !== document.body && elBoard.contains(a) && a.dataset && a.dataset.role) {
+      var owner = a.closest('[data-id]');
+      if (owner) { focusId = owner.dataset.id; focusRole = a.dataset.role; }
+    }
+
+    var byStatus = {};
+    STATUSES.forEach(function (s) { byStatus[s] = []; });
+    state.cards.forEach(function (c) {
+      if (byStatus[c.status]) byStatus[c.status].push(c);
+    });
+
+    var frag = document.createDocumentFragment();
+    STATUSES.forEach(function (s) { frag.appendChild(buildColumn(s, byStatus[s])); });
+    elBoard.replaceChildren(frag);
+
+    elBoard.scrollLeft = scrollLeft;
+    Array.prototype.forEach.call(elBoard.querySelectorAll('.col'), function (c) {
+      if (colScroll[c.dataset.status]) c.scrollTop = colScroll[c.dataset.status];
+    });
+    if (focusId) {
+      var target = elBoard.querySelector('[data-id="' + cssEscape(focusId) + '"] [data-role="' + cssEscape(focusRole) + '"]');
+      if (target) target.focus({ preventScroll: true });
+    }
+  }
+
+  function cssEscape(s) {
+    return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/[^a-zA-Z0-9_-]/g, '');
+  }
+
+  function buildColumn(status, cards) {
+    var col = h('section', 'col');
+    col.dataset.status = status;
+    col.setAttribute('aria-label', label(status));
+
+    var head = h('div', 'col-head');
+    head.appendChild(h('h2', null, label(status)));
+    var count = h('span', 'count', String(cards.length));
+    count.setAttribute('aria-label', cards.length + (cards.length === 1 ? ' card' : ' cards'));
+    head.appendChild(count);
+    col.appendChild(head);
+
+    var body = h('div', 'col-body');
+    if (cards.length === 0) body.appendChild(h('div', 'empty', 'No cards'));
+    cards.forEach(function (c) { body.appendChild(buildCard(c)); });
+    col.appendChild(body);
+
+    col.addEventListener('dragenter', function (e) {
+      if (!dragging) return;
+      e.preventDefault();
+      col.classList.add('over');
+    });
+    col.addEventListener('dragover', function (e) {
+      if (!dragging) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      col.classList.add('over');
+    });
+    col.addEventListener('dragleave', function (e) {
+      if (!col.contains(e.relatedTarget)) col.classList.remove('over');
+    });
+    col.addEventListener('drop', function (e) {
+      if (!dragging) return;
+      e.preventDefault();
+      var id = e.dataTransfer ? e.dataTransfer.getData('text/plain') : '';
+      endDrag();
+      moveCard(id, status);
+    });
+    return col;
+  }
+
+  function findCard(id) {
+    if (!current) return null;
+    for (var i = 0; i < current.cards.length; i++) {
+      if (current.cards[i].id === id) return current.cards[i];
+    }
+    return null;
+  }
+
+  function buildCard(card) {
+    var isThread = card.kind === 'thread' && !!card.thread;
+    var t = isThread ? card.thread : null;
+    var running = isThread && t.runState === 'running';
+
+    var el = h('article', 'card' + (isThread ? ' thread' : ''));
+    el.dataset.id = card.id;
+
+    if (!isThread) {
+      el.draggable = true;
+      el.addEventListener('dragstart', function (e) {
+        if (editingId !== null) { e.preventDefault(); return; }
+        dragging = true;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', card.id);
+        el.classList.add('dragging');
+      });
+      el.addEventListener('dragend', endDrag);
+    }
+
+    var badges = h('div', 'badges');
+    var kindText = isThread ? 'thread' : String(card.kind);
+    badges.appendChild(h('span', 'chip kind-' + kindText, kindText));
+    if (card.seenByClaude === false) badges.appendChild(h('span', 'unseen', 'not yet seen by Claude'));
+    el.appendChild(badges);
+
+    el.appendChild(h('h3', null, card.title));
+    if (card.note) el.appendChild(h('p', 'note', card.note));
+
+    if (isThread) {
+      var meta = h('div', 'meta');
+      meta.appendChild(h('span', 'chip run-' + t.runState, String(t.runState)));
+      meta.appendChild(h('span', 'chip', 'mode: ' + t.mode));
+      var n = Array.isArray(t.turns) ? t.turns.length : 0;
+      meta.appendChild(h('span', 'chip', n + (n === 1 ? ' turn' : ' turns')));
+      meta.appendChild(t.reported ? h('span', 'chip reported', 'reported') : h('span', 'chip not-reported', 'not reported'));
+      el.appendChild(meta);
+    }
+
+    var actions = h('div', 'actions');
+    if (!isThread) {
+      var sel = statusSelect(card.status, 'Status of ' + card.title);
+      sel.dataset.role = 'status';
+      sel.addEventListener('change', function () { moveCard(card.id, sel.value); });
+      actions.appendChild(sel);
+    } else {
+      actions.appendChild(h('span', 'spacer'));
+    }
+
+    var edit = h('button', 'small', 'Edit');
+    edit.type = 'button';
+    edit.dataset.role = 'edit';
+    edit.setAttribute('aria-label', 'Edit card ' + card.title);
+    edit.addEventListener('click', function () { startEdit(card.id); });
+    actions.appendChild(edit);
+
+    var del = h('button', 'small danger', 'Delete');
+    del.type = 'button';
+    del.dataset.role = 'delete';
+    del.setAttribute('aria-label', 'Delete card ' + card.title);
+    if (running) {
+      del.disabled = true;
+      del.title = 'A thread turn is running. End the thread first.';
+    }
+    del.addEventListener('click', function () { deleteCard(card); });
+    actions.appendChild(del);
+
+    el.appendChild(actions);
+    return el;
+  }
+
+  // ---------- drag ----------
+
+  function endDrag() {
+    var was = dragging;
+    dragging = false;
+    Array.prototype.forEach.call(document.querySelectorAll('.col.over'), function (c) { c.classList.remove('over'); });
+    Array.prototype.forEach.call(document.querySelectorAll('.card.dragging'), function (c) { c.classList.remove('dragging'); });
+    if (was) maybeRender();
+  }
+  document.addEventListener('dragend', endDrag);
+
+  // ---------- writes ----------
+
+  async function moveCard(id, status) {
+    var card = findCard(id);
+    if (!card || card.kind === 'thread' || card.status === status) { forceRender(); return; }
+    clearError();
+    try {
+      await api('PATCH', '/api/cards/' + encodeURIComponent(id), { status: status });
+    } catch (e) {
+      showError(e.message);
+    }
+    await poll();
+    forceRender();
+  }
+
+  async function deleteCard(card) {
+    if (!window.confirm('Delete card "' + card.title + '"?')) return;
+    clearError();
+    try {
+      await api('DELETE', '/api/cards/' + encodeURIComponent(card.id), {});
+    } catch (e) {
+      showError(e.message);
+    }
+    await poll();
+  }
+
+  // ---------- inline edit ----------
+
+  function finishEdit() {
+    editingId = null;
+    forceRender();
+  }
+
+  function startEdit(id) {
+    if (editingId !== null && editingId !== id) {
+      editingId = null;
+      forceRender();
+    }
+    var card = findCard(id);
+    var el = elBoard.querySelector('[data-id="' + cssEscape(id) + '"]');
+    if (!card || !el) return;
+    editingId = id;
+    el.draggable = false;
+    el.classList.remove('dragging');
+    el.replaceChildren();
+
+    var f = h('div', 'edit-form');
+    var title = h('input');
+    title.type = 'text';
+    title.value = card.title;
+    title.maxLength = 200;
+    title.setAttribute('aria-label', 'Title of card ' + card.title);
+    var note = h('textarea');
+    note.rows = 3;
+    note.value = card.note || '';
+    note.setAttribute('aria-label', 'Note of card ' + card.title);
+    var row = h('div', 'row');
+    var save = h('button', 'small primary', 'Save');
+    save.type = 'button';
+    save.setAttribute('aria-label', 'Save changes to card ' + card.title);
+    var cancel = h('button', 'small', 'Cancel');
+    cancel.type = 'button';
+    cancel.setAttribute('aria-label', 'Cancel editing card ' + card.title);
+    row.appendChild(save);
+    row.appendChild(cancel);
+    f.appendChild(title);
+    f.appendChild(note);
+    f.appendChild(row);
+    el.appendChild(f);
+    title.focus();
+    title.select();
+
+    async function doSave() {
+      var newTitle = title.value.trim();
+      if (!newTitle) { showError('Title is required.'); title.focus(); return; }
+      var patch = {};
+      if (newTitle !== card.title) patch.title = newTitle;
+      if (note.value !== (card.note || '')) patch.note = note.value;
+      if (Object.keys(patch).length === 0) { finishEdit(); return; }
+      clearError();
+      save.disabled = true;
+      try {
+        await api('PATCH', '/api/cards/' + encodeURIComponent(id), patch);
+      } catch (e) {
+        showError(e.message);
+        save.disabled = false;
+        return; // stay in edit mode so nothing typed is lost
+      }
+      editingId = null;
+      await poll();
+      forceRender();
+    }
+
+    save.addEventListener('click', doSave);
+    cancel.addEventListener('click', finishEdit);
+    f.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); finishEdit(); }
+      else if (e.key === 'Enter' && e.target === title) { e.preventDefault(); doSave(); }
+      else if (e.key === 'Enter' && e.target === note && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doSave(); }
+    });
+  }
+
+  // ---------- add form ----------
+
+  STATUSES.forEach(function (st) {
+    var o = h('option', null, label(st));
+    o.value = st;
+    if (st === 'new') o.selected = true;
+    fStatus.appendChild(o);
+  });
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    var title = fTitle.value.trim();
+    if (!title) { showError('Title is required.'); fTitle.focus(); return; }
+    var body = { title: title, status: fStatus.value, kind: fKind.value };
+    if (fNote.value.trim()) body.note = fNote.value.trim();
+    clearError();
+    fAdd.disabled = true;
+    try {
+      await api('POST', '/api/cards', body);
+      fTitle.value = '';
+      fNote.value = '';
+      fTitle.focus();
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      fAdd.disabled = false;
+    }
+    await poll();
+  });
+
+  // ---------- start ----------
+
+  (async function loop() {
+    await poll();
+    setTimeout(loop, POLL_MS);
+  })();
+})();
+</script>
+</body>
+</html>

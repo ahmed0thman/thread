@@ -1,0 +1,1 @@
+{"name":"thread","version":"0.1.0","description":"Side threads that share the session's context and report back on demand, plus a kanban board of tasks and ideas.","author":{"name":"Ahmed Hisham"},"license":"MIT","keywords":["threads","kanban","board","side-task"]}
