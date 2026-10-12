@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import net from 'node:net';
+import readline from 'node:readline';
+import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -16,6 +19,15 @@ export const HOOK_PATH = path.join(ROOT, 'scripts', 'hook.mjs');
 
 export const PARENT_SESSION = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 export const THREAD_SESSION = '11111111-2222-4333-8444-555555555555';
+
+/** A thread reply with the four headings and a step map that has one unusable and one unknown-kind step. */
+export const REPLY_WITH_MAP = [
+  'Intro line.',
+  '## Happened', '- read the plan', '## Decided', '- use Postgres', '## Changed', 'Nothing.', '## Open', '- one question',
+  '```thread-map',
+  '[{"kind":"did","text":"read the plan","ref":"PLAN.md:12"},{"kind":"bogus","text":"kind falls back"},{"text":""},{"kind":"decided","text":"use Postgres"}]',
+  '```',
+].join('\n');
 
 /** Remove environment that would change behaviour when the suite runs inside a Claude session. */
 export function cleanAmbientEnv() {
@@ -201,4 +213,61 @@ export function runNode(args, { env = process.env, input, cwd, timeout = 15000 }
     if (input !== undefined) child.stdin.end(input);
     else child.stdin.end();
   });
+}
+
+export function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.on('error', reject);
+    s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
+  });
+}
+
+/** A JSON-RPC client over the stdio of a spawned MCP server. The board page is off unless extraEnv turns it on. */
+export class McpClient {
+  constructor(e, extraEnv = {}) {
+    this.lines = [];
+    this.stderr = '';
+    this.nextId = 1;
+    this.pending = new Map();
+    this.child = spawn(process.execPath, [MCP_PATH], {
+      env: { ...process.env, THREAD_NO_HTTP: '1', THREAD_PROJECT_DIR: e.projectDir, ...extraEnv },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    this.child.stdin.on('error', () => {});
+    this.child.stderr.on('data', (d) => (this.stderr += d));
+    this.exited = new Promise((r) => this.child.on('exit', (code, sig) => r({ code, sig })));
+    readline.createInterface({ input: this.child.stdout }).on('line', (line) => {
+      this.lines.push(line);
+      let msg;
+      try { msg = JSON.parse(line); } catch { return; }
+      if (msg && msg.id !== undefined && msg.id !== null && this.pending.has(msg.id)) {
+        this.pending.get(msg.id)(msg);
+        this.pending.delete(msg.id);
+      }
+    });
+  }
+  raw(text) { this.child.stdin.write(text + '\n'); }
+  send(obj) { this.raw(JSON.stringify(obj)); }
+  notify(method, params) { this.send({ jsonrpc: '2.0', method, params }); }
+  request(method, params, timeout = 8000) {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`no reply to ${method} (id ${id}); stderr: ${this.stderr.slice(-300)}`)); }, timeout);
+      this.pending.set(id, (m) => { clearTimeout(timer); resolve(m); });
+      this.send({ jsonrpc: '2.0', id, method, params });
+    });
+  }
+  /** tools/call. The result keeps its `content` and gains `isError` (a boolean) and `text` (the first content block). */
+  async call(name, args = {}) {
+    const r = await this.request('tools/call', { name, arguments: args });
+    assert.equal(r.error, undefined, `tools/call ${name} returned a JSON-RPC error: ${JSON.stringify(r.error)}`);
+    return { ...r.result, isError: r.result.isError === true, text: r.result.content[0].text };
+  }
+  async init() {
+    const r = await this.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
+    this.notify('notifications/initialized');
+    return r;
+  }
+  kill() { this.child.kill('SIGKILL'); }
 }

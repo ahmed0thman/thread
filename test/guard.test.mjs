@@ -3,16 +3,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import readline from 'node:readline';
 import {
-  setupThreadEnv, waitFor, cleanAmbientEnv, writeStateFile, emptyState, threadCard, MCP_PATH, PARENT_SESSION,
+  setupThreadEnv, waitFor, cleanAmbientEnv, writeStateFile, emptyState, threadCard, McpClient, PARENT_SESSION, REPLY_WITH_MAP,
 } from './helpers.mjs';
 import * as core from '../server/core.mjs';
+import { startBoardServer } from '../server/http.mjs';
 
 cleanAmbientEnv();
-delete process.env.THREAD_DEPTH;
-delete process.env.CLAUDE_CODE_SESSION_ID;
 
 const OTHER = '99999999-9999-4999-8999-999999999999';
 const THIRD = '77777777-7777-4777-8777-777777777777';
@@ -53,6 +50,14 @@ test('without a session id reportThread behaves as before', async (t) => {
   const r = await core.reportThread(e.projectDir, 'c1');
   assert.equal(r.text, DIGEST);
   assert.equal(thread(e.projectDir).reported, true);
+});
+
+test('reportThread leaves the step map out of the text given to the main session', async (t) => {
+  const e = setupThreadEnv(t);
+  seed(e, [threadCard({ id: 'c1' }, { lastResult: REPLY_WITH_MAP })]);
+  const { text } = await core.reportThread(e.projectDir, 'c1');
+  assert.match(text, /## Decided/);
+  assert.doesNotMatch(text, /thread-map/);
 });
 
 test('another session gets needsConfirm, no text, and reported stays false', async (t) => {
@@ -139,8 +144,8 @@ test('reportThread refuses inside a side thread', async (t) => {
 test('endThread: the parent and a caller without a session id end the thread directly', async (t) => {
   const e = setupThreadEnv(t);
   seed(e, [threadCard({ id: 'c1' }), threadCard({ id: 'c2' })]);
-  assert.equal((await core.endThread(e.projectDir, 'c1', { sessionId: PARENT_SESSION })).thread.runState, 'ended');
-  assert.equal((await core.endThread(e.projectDir, 'c2')).thread.runState, 'ended');
+  assert.equal((await core.endThread(e.projectDir, 'c1', { sessionId: PARENT_SESSION })).card.thread.runState, 'ended');
+  assert.equal((await core.endThread(e.projectDir, 'c2')).card.thread.runState, 'ended');
 });
 
 test('endThread: another session needs the code and the thread is not ended until it is given', async (t) => {
@@ -171,8 +176,8 @@ test('endThread: another session needs the code and the thread is not ended unti
   const { code: code3 } = await core.endThread(e.projectDir, 'c1', { sessionId: OTHER });
   const done = await core.endThread(e.projectDir, 'c1', { sessionId: OTHER, confirmCode: code3 });
   assert.equal(done.needsConfirm, undefined);
-  assert.equal(done.thread.runState, 'ended');
-  assert.equal(done.status, 'done');
+  assert.equal(done.card.thread.runState, 'ended');
+  assert.equal(done.card.status, 'done');
   assert.equal(thread(e.projectDir).pendingConfirm, undefined);
 });
 
@@ -214,42 +219,10 @@ test('pickReportable splits mine and others and ignores running, failed-without-
 
 // ---------------------------------------------------------------- MCP
 
-class McpClient {
-  constructor(e, extraEnv = {}) {
-    this.stderr = '';
-    this.nextId = 1;
-    this.pending = new Map();
-    this.child = spawn(process.execPath, [MCP_PATH], {
-      env: { ...process.env, THREAD_NO_HTTP: '1', THREAD_PROJECT_DIR: e.projectDir, ...extraEnv },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    this.child.stdin.on('error', () => {});
-    this.child.stderr.on('data', (d) => (this.stderr += d));
-    readline.createInterface({ input: this.child.stdout }).on('line', (line) => {
-      let msg;
-      try { msg = JSON.parse(line); } catch { return; }
-      if (msg && this.pending.has(msg.id)) { this.pending.get(msg.id)(msg); this.pending.delete(msg.id); }
-    });
-  }
-  request(method, params) {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`no reply to ${method}; stderr: ${this.stderr.slice(-300)}`)), 8000);
-      this.pending.set(id, (m) => { clearTimeout(timer); resolve(m); });
-      this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-    });
-  }
-  async call(name, args = {}) {
-    const r = await this.request('tools/call', { name, arguments: args });
-    assert.equal(r.error, undefined);
-    return { isError: r.result.isError === true, text: r.result.content[0].text };
-  }
-}
-
 async function mcp(t, e, extraEnv) {
   const c = new McpClient(e, extraEnv);
-  t.after(() => c.child.kill('SIGKILL'));
-  await c.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
+  t.after(() => c.kill());
+  await c.init();
   return c;
 }
 
@@ -408,30 +381,12 @@ test('a thread whose project folder was removed fails with "project folder not f
 });
 
 test('the board API never exposes a pending confirm code', async (t) => {
-  const fs = await import('node:fs');
-  const os = await import('node:os');
-  const path = await import('node:path');
-  const { CORE_PATH, PARENT_SESSION } = await import('./helpers.mjs');
-  const core = await import(CORE_PATH);
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'thread-leak-'));
-  const saved = process.env.THREAD_DATA_DIR;
-  process.env.THREAD_DATA_DIR = path.join(base, 'data');
-  const projectDir = path.join(base, 'project');
-  fs.mkdirSync(projectDir, { recursive: true });
-  const paths = core.projectPaths(projectDir);
-  fs.mkdirSync(paths.dir, { recursive: true });
-  const ts = new Date().toISOString();
-  fs.writeFileSync(paths.state, JSON.stringify({ version: 1, projectDir, seq: 1, cards: [{
-    id: 'c1', kind: 'thread', title: 't', note: '', status: 'review', source: 'claude', seenByClaude: true, createdAt: ts, updatedAt: ts,
-    thread: { parentSessionId: PARENT_SESSION, sessionId: '11111111-2222-4333-8444-555555555555', mode: 'read', runState: 'idle', pid: null,
-      turns: [{ prompt: 'p', startedAt: ts, finishedAt: ts, ok: true, result: 'r\n## Happened\n- x', error: null }], lastResult: 'r\n## Happened\n- x', reported: false, announced: true },
-  }] }));
-  const other = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-  const first = await core.reportThread(projectDir, 'c1', { sessionId: other });
+  const e = setupThreadEnv(t);
+  seed(e);
+  const first = await core.reportThread(e.projectDir, 'c1', { sessionId: OTHER });
   assert.equal(first.needsConfirm, true);
-  const { startBoardServer } = await import(path.join(path.dirname(CORE_PATH), 'http.mjs'));
-  const { server, url } = await startBoardServer(projectDir, { port: 0 });
-  t.after(() => new Promise((r) => server.close(() => { if (saved === undefined) delete process.env.THREAD_DATA_DIR; else process.env.THREAD_DATA_DIR = saved; fs.rmSync(base, { recursive: true, force: true }); r(); })));
+  const { server, url } = await startBoardServer(e.projectDir, { port: 0 });
+  t.after(() => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }));
   const body = await (await fetch(url + 'api/state')).text();
   assert.equal(body.includes(first.code), false, 'confirm code leaked');
   assert.equal(body.includes('pendingConfirm'), false);

@@ -30,11 +30,6 @@ function emit(eventName, additionalContext) {
   return new Promise((resolve) => process.stdout.write(out + '\n', () => resolve()));
 }
 
-function oneLine(s, n) {
-  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
-  return t.length > n ? t.slice(0, n - 1) + '…' : t;
-}
-
 async function main() {
   if (process.env.THREAD_DEPTH) return;
 
@@ -44,16 +39,19 @@ async function main() {
   if (!input || typeof input !== 'object') return;
 
   const event = process.argv[2] || input.hook_event_name;
+  if (event !== 'SessionStart' && event !== 'UserPromptSubmit') return;
   const sessionId = typeof input.session_id === 'string' ? input.session_id : '';
+  // Checked here, not through core, so the SessionStart note survives a core that fails to load.
   if (!/^[0-9A-Za-z-]{8,64}$/.test(sessionId)) return;
+
+  let core = null;
+  try { core = await import(new URL('../server/core.mjs', import.meta.url).href); } catch { /* the note below does not need it */ }
 
   // Register the session and its name. Never hold up the user's prompt waiting on the state lock.
   const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
-  let core = null;
-  if (projectDir && (event === 'SessionStart' || event === 'UserPromptSubmit')) {
+  if (core && projectDir) {
     process.env.THREAD_LOCK_WAIT_MS = '1000';
     try {
-      core = await import(new URL('../server/core.mjs', import.meta.url).href);
       await core.touchSession(projectDir, sessionId, {
         transcriptPath: input.transcript_path,
         sessionTitle: input.session_title,
@@ -70,23 +68,23 @@ async function main() {
   }
 
   if (event === 'UserPromptSubmit') {
-    if (!projectDir || !core) return;
+    if (!core || !projectDir) return;
     const { reconcile, pendingAnnouncements, readState } = core;
 
     await reconcile(projectDir);
     const announced = await pendingAnnouncements(projectDir, sessionId);
     const state = readState(projectDir);
-    const unseen = (state.cards || []).filter((c) => c.seenByClaude === false);
+    const unseen = state.cards.filter((c) => c.seenByClaude === false);
 
     if (!announced.length && !unseen.length) return;
 
     const lines = [];
     for (const c of announced) {
-      const verb = c.thread && c.thread.runState === 'failed' ? 'failed' : 'finished';
+      const verb = c.thread.runState === 'failed' ? 'failed' : 'finished';
       const tail = verb === 'failed'
         ? 'call thread_status for details if relevant'
         : 'not yet reported; call thread_report only if the user asks or it is relevant';
-      lines.push(`Thread ${c.id} "${oneLine(c.title, 50)}" ${verb} — ${tail}`);
+      lines.push(`Thread ${c.id} "${core.clip(c.title, 50)}" ${verb} — ${tail}`);
     }
     if (unseen.length) {
       lines.push(`${unseen.length} new board card${unseen.length === 1 ? '' : 's'} from the user — call board_list when the current task allows`);

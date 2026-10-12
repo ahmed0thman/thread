@@ -1,74 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import readline from 'node:readline';
-import { setupThreadEnv, waitFor, cleanAmbientEnv, MCP_PATH, PARENT_SESSION } from './helpers.mjs';
+import { setupThreadEnv, waitFor, cleanAmbientEnv, freePort, McpClient, PARENT_SESSION } from './helpers.mjs';
 import * as core from '../server/core.mjs';
-import net from 'node:net';
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const s = net.createServer();
-    s.on('error', reject);
-    s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
-  });
-}
 
 cleanAmbientEnv();
-delete process.env.THREAD_DEPTH;
-delete process.env.CLAUDE_CODE_SESSION_ID;
 
 const EXPECTED_TOOLS = [
   'thread_start', 'thread_continue', 'thread_status', 'thread_report', 'thread_end',
   'board_add', 'board_update', 'board_remove', 'board_list', 'board_open',
 ];
-
-class McpClient {
-  constructor(e, extraEnv = {}) {
-    this.lines = [];
-    this.stderr = '';
-    this.nextId = 1;
-    this.pending = new Map();
-    this.child = spawn(process.execPath, [MCP_PATH], {
-      env: { ...process.env, THREAD_NO_HTTP: '1', THREAD_PROJECT_DIR: e.projectDir, ...extraEnv },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    this.child.stdin.on('error', () => {});
-    this.child.stderr.on('data', (d) => (this.stderr += d));
-    this.exited = new Promise((r) => this.child.on('exit', (code, sig) => r({ code, sig })));
-    readline.createInterface({ input: this.child.stdout }).on('line', (line) => {
-      this.lines.push(line);
-      let msg;
-      try { msg = JSON.parse(line); } catch { return; }
-      if (msg && msg.id !== undefined && msg.id !== null && this.pending.has(msg.id)) {
-        this.pending.get(msg.id)(msg);
-        this.pending.delete(msg.id);
-      }
-    });
-  }
-  raw(text) { this.child.stdin.write(text + '\n'); }
-  send(obj) { this.raw(JSON.stringify(obj)); }
-  notify(method, params) { this.send({ jsonrpc: '2.0', method, params }); }
-  request(method, params, timeout = 8000) {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`no reply to ${method} (id ${id}); stderr: ${this.stderr.slice(-300)}`)); }, timeout);
-      this.pending.set(id, (m) => { clearTimeout(timer); resolve(m); });
-      this.send({ jsonrpc: '2.0', id, method, params });
-    });
-  }
-  async call(name, args = {}) {
-    const r = await this.request('tools/call', { name, arguments: args });
-    assert.equal(r.error, undefined, `tools/call ${name} returned a JSON-RPC error: ${JSON.stringify(r.error)}`);
-    return r.result;
-  }
-  async init() {
-    const r = await this.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
-    this.notify('notifications/initialized');
-    return r;
-  }
-  kill() { this.child.kill('SIGKILL'); }
-}
 
 function start(t, e, extraEnv) {
   const c = new McpClient(e, extraEnv);

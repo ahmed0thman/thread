@@ -1,56 +1,38 @@
-// thread plugin: state + thread lifecycle (library). Zero dependencies, node: built-ins only.
-import { createHash, randomBytes } from 'node:crypto';
+// Shared library for the MCP server, the board, the runner and the hook: cards, the thread lifecycle,
+// hand-back parsing and the project listing. State and sessions live in state.mjs and sessions.mjs and
+// are re-exported here. Zero dependencies, node: built-ins only.
+import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdir, open, readFile, rename, rm, rmdir, stat, writeFile, unlink } from 'node:fs/promises';
-import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { rm } from 'node:fs/promises';
+import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dataDir, envValue, now, projectKey, projectPaths, readState, updateState, withLock } from './state.mjs';
+import { collapse, sameSession } from './sessions.mjs';
+
+export * from './state.mjs';
+export * from './sessions.mjs';
 
 export const STATUSES = ['idea', 'new', 'in_progress', 'review', 'blocked', 'done'];
 
-const KINDS = ['task', 'idea'];
-const MODES = ['read', 'write'];
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const KINDS = ['task', 'idea'];
+export const MODES = ['read', 'write'];
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const KEY_RE = /^[0-9a-f]{12}$/;
+export const VERSION = (() => {
+  try {
+    const v = JSON.parse(readFileSync(new URL('../.claude-plugin/plugin.json', import.meta.url), 'utf8')).version;
+    return typeof v === 'string' && v ? v : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 const RUNNER_PATH = fileURLToPath(new URL('./runner.mjs', import.meta.url));
-
-const LOCK_RETRY_MS = 25;
-const LOCK_WAIT_MS = 5000;
-const LOCK_STALE_MS = 10000;
 const HEARTBEAT_STALE_MS = 15000;
-
-// ---------------------------------------------------------------- paths
-
-function envValue(name) {
-  const v = process.env[name];
-  if (typeof v !== 'string') return '';
-  const t = v.trim();
-  if (!t || t.startsWith('${')) return '';
-  return t;
-}
-
-export function dataDir() {
-  return envValue('THREAD_DATA_DIR') || envValue('CLAUDE_PLUGIN_DATA') || join(homedir(), '.claude', 'thread-data');
-}
-
-export function projectDir() {
-  return resolve(envValue('THREAD_PROJECT_DIR') || envValue('CLAUDE_PROJECT_DIR') || process.cwd());
-}
-
-export function projectKey(projectDirArg) {
-  return createHash('sha1').update(resolve(String(projectDirArg))).digest('hex').slice(0, 12);
-}
-
-export function projectPaths(projectDirArg) {
-  const dir = join(dataDir(), 'projects', projectKey(projectDirArg));
-  return { dir, state: join(dir, 'state.json'), lock: join(dir, 'state.lock'), logs: join(dir, 'logs') };
-}
 
 // ---------------------------------------------------------------- project listing
 
-const KEY_RE = /^[0-9a-f]{12}$/;
-
-function dirExists(p) {
+export function dirExists(p) {
   try { return statSync(p).isDirectory(); } catch { return false; }
 }
 
@@ -123,145 +105,16 @@ export async function forgetProject(key) {
     if (!again) throw new Error('unknown project');
     if (again.exists) throw new Error(`project folder still exists: ${again.projectDir}`);
     const state = readState(again.projectDir);
-    const busy = state.cards.find((c) => c && c.kind === 'thread' && c.thread && c.thread.runState === 'running' && runnerAlive(again.projectDir, c));
+    const busy = state.cards.find((c) => isThread(c) && c.thread.runState === 'running' && runnerAlive(again.projectDir, c));
     if (busy) throw new Error(`thread ${busy.id} is still running; end it before forgetting the project`);
     await rm(target, { recursive: true, force: true });
     return true;
   });
 }
 
-// ---------------------------------------------------------------- state io
+// ---------------------------------------------------------------- cards and run state
 
-function emptyState(projectDirArg) {
-  return { version: 1, projectDir: projectDirArg, seq: 0, cards: [] };
-}
-
-export function readState(projectDirArg) {
-  const p = projectPaths(projectDirArg).state;
-  let raw;
-  try {
-    raw = readFileSync(p, 'utf8');
-  } catch (e) {
-    if (e && e.code === 'ENOENT') return emptyState(projectDirArg);
-    throw new Error(`cannot read state file ${p}: ${e.message}`);
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    throw new Error(`state file is corrupt (not valid JSON): ${p}: ${e.message}`);
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.cards)) {
-    throw new Error(`state file is corrupt (unexpected shape): ${p}`);
-  }
-  if (typeof parsed.seq !== 'number') parsed.seq = 0;
-  return parsed;
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function lockWaitMs() {
-  const n = Number(process.env.THREAD_LOCK_WAIT_MS);
-  return Number.isFinite(n) && n > 0 ? n : LOCK_WAIT_MS;
-}
-
-// Remove a lock abandoned by a dead process. The removal runs under a second
-// mkdir guard with a re-stat, so two waiters cannot both steal: without it the
-// slower one would delete the lock the faster one had just taken.
-async function stealIfStale(lockPath) {
-  let st;
-  try { st = await stat(lockPath); } catch { return; }
-  if (Date.now() - st.mtimeMs <= LOCK_STALE_MS) return;
-  const guard = `${lockPath}.steal`;
-  try {
-    await mkdir(guard);
-  } catch {
-    try {
-      const g = await stat(guard);
-      if (Date.now() - g.mtimeMs > LOCK_STALE_MS) await rmdir(guard);
-    } catch { /* guard already gone */ }
-    return;
-  }
-  try {
-    const again = await stat(lockPath);
-    if (Date.now() - again.mtimeMs > LOCK_STALE_MS) await rm(lockPath, { recursive: true, force: true });
-  } catch { /* lock already gone */ } finally {
-    await rmdir(guard).catch(() => {});
-  }
-}
-
-// The lock is a directory holding one owner file. Returns the owner file path.
-async function acquireLock(lockPath) {
-  const deadline = Date.now() + lockWaitMs();
-  const owner = join(lockPath, `owner-${process.pid}-${randomBytes(6).toString('hex')}`);
-  for (;;) {
-    try {
-      await mkdir(lockPath);
-      await writeFile(owner, '');
-      return owner;
-    } catch (e) {
-      // ENOENT: the directory vanished between mkdir and writeFile; retry.
-      if (!e || (e.code !== 'EEXIST' && e.code !== 'ENOENT')) throw e;
-    }
-    await stealIfStale(lockPath);
-    if (Date.now() >= deadline) {
-      throw new Error(`could not acquire state lock within ${lockWaitMs() / 1000}s: ${lockPath}`);
-    }
-    await sleep(LOCK_RETRY_MS + Math.floor(Math.random() * 15));
-  }
-}
-
-// Removes only our own owner file; rmdir then fails harmlessly if the lock was
-// stolen and retaken by someone else in the meantime.
-async function releaseLock(lockPath, owner) {
-  await unlink(owner).catch(() => {});
-  await rmdir(lockPath).catch(() => {});
-}
-
-async function withLock(projectDirArg, fn) {
-  const paths = projectPaths(projectDirArg);
-  await mkdir(paths.dir, { recursive: true });
-  const owner = await acquireLock(paths.lock);
-  try {
-    return await fn(paths);
-  } finally {
-    await releaseLock(paths.lock, owner);
-  }
-}
-
-// Read the state while holding the lock (no write). Used by the runner so it
-// never sees a half-launched card.
-export async function readStateLocked(projectDirArg) {
-  return withLock(projectDirArg, () => readState(projectDirArg));
-}
-
-export async function updateState(projectDirArg, fn) {
-  return withLock(projectDirArg, async (paths) => {
-    const existed = existsSync(paths.state);
-    const state = readState(projectDirArg);
-    if (!state.projectDir) state.projectDir = projectDirArg;
-    const before = JSON.stringify(state);
-    const result = await fn(state);
-    const after = JSON.stringify(state);
-    if (!existed || before !== after) {
-      const tmp = `${paths.state}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-      try {
-        await writeFile(tmp, after, 'utf8');
-        await rename(tmp, paths.state);
-      } catch (e) {
-        await unlink(tmp).catch(() => {});
-        throw e;
-      }
-    }
-    return result;
-  });
-}
-
-// ---------------------------------------------------------------- helpers
-
-const now = () => new Date().toISOString();
-
-export function isAlive(pid) {
+function isAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
@@ -274,7 +127,7 @@ export function isAlive(pid) {
 // A runner is alive only if its pid exists and it has written a recent
 // heartbeat naming that pid. The pid alone is not enough: after a crash the
 // number can be reused by an unrelated process.
-export function runnerAlive(projectDirArg, card) {
+function runnerAlive(projectDirArg, card) {
   const th = card && card.thread;
   if (!th || !isAlive(th.pid)) return false;
   const turn = th.turns[th.turns.length - 1];
@@ -289,15 +142,17 @@ export function runnerAlive(projectDirArg, card) {
   }
 }
 
+export const isThread = (card) => !!card && card.kind === 'thread' && !!card.thread;
+
 function findCard(state, id) {
   const card = state.cards.find((c) => c.id === id);
-  if (!card) throw new Error(`unknown card id: ${id}`);
+  if (!card) throw new Error(`card not found: ${id}`);
   return card;
 }
 
-function findThread(state, id) {
-  const card = state.cards.find((c) => c.id === id);
-  if (!card || card.kind !== 'thread' || !card.thread) throw new Error(`thread not found: ${id}`);
+export function findThread(state, id) {
+  const card = findCard(state, id);
+  if (!isThread(card)) throw new Error(`card ${id} is not a thread`);
   return card;
 }
 
@@ -317,149 +172,20 @@ function statusForRunState(runState) {
   }
 }
 
-function setRunState(card, runState) {
+export function setRunState(card, runState) {
   card.thread.runState = runState;
   card.status = statusForRunState(runState);
   card.updatedAt = now();
 }
 
-function oneLine(s, max = 300) {
-  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
-  return t.length > max ? t.slice(-max) : t;
+// The first n characters of a collapsed text, with an ellipsis when cut.
+export function clip(s, n) {
+  const t = collapse(s);
+  return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
 
-// ---------------------------------------------------------------- sessions
-
-const SESSION_ID_RE = /^[0-9A-Za-z-]{8,64}$/;
-const TRANSCRIPT_CHUNK = 256 * 1024;
-const SESSION_THROTTLE_MS = 60000;
-const NAME_MAX = 120;
-const FIRST_MESSAGE_MAX = 60;
-const NAME_RANK = { none: 0, 'first-message': 1, 'ai-title': 2, title: 3 };
-
-const collapse = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
-
-function validTranscriptPath(p) {
-  return typeof p === 'string' && p.length > 0 && isAbsolute(p) && p.endsWith('.jsonl');
-}
-
-function parseJsonLine(line) {
-  try {
-    const v = JSON.parse(line);
-    return v && typeof v === 'object' ? v : null;
-  } catch {
-    return null;
-  }
-}
-
-async function readAt(fh, position, length) {
-  const buf = Buffer.alloc(length);
-  const { bytesRead } = await fh.read(buf, 0, length, position);
-  return buf.subarray(0, bytesRead).toString('utf8');
-}
-
-// The first usable user text in one transcript line, or ''.
-function userTextOf(obj) {
-  const content = obj && obj.message && obj.message.content;
-  const blocks = typeof content === 'string'
-    ? [content]
-    : Array.isArray(content)
-      ? content.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text)
-      : [];
-  for (const raw of blocks) {
-    const t = collapse(raw);
-    if (t && !t.startsWith('<')) return t;
-  }
-  return '';
-}
-
-// Reads at most the last 256 KB for an ai-title line and at most the first
-// 256 KB for the first user message. Never throws; null when nothing is found.
-async function nameFromTranscript(file) {
-  if (!validTranscriptPath(file)) return null;
-  let fh;
-  try {
-    fh = await open(file, 'r');
-    const { size } = await fh.stat();
-    if (!size) return null;
-    const len = Math.min(size, TRANSCRIPT_CHUNK);
-    const tailStart = size - len;
-    const tailLines = (await readAt(fh, tailStart, len)).split('\n');
-    if (tailStart > 0) tailLines.shift(); // partial first line
-    for (let i = tailLines.length - 1; i >= 0; i--) {
-      if (!tailLines[i].includes('ai-title')) continue;
-      const o = parseJsonLine(tailLines[i]);
-      if (o && o.type === 'ai-title' && typeof o.aiTitle === 'string' && collapse(o.aiTitle)) {
-        return { name: collapse(o.aiTitle).slice(0, NAME_MAX), source: 'ai-title' };
-      }
-    }
-    const headLines = (tailStart === 0 ? tailLines : (await readAt(fh, 0, len)).split('\n'));
-    if (size > len) headLines.pop(); // partial last line
-    for (const line of headLines) {
-      if (!line.includes('"user"')) continue;
-      const o = parseJsonLine(line);
-      if (!o || o.type !== 'user') continue;
-      const t = userTextOf(o);
-      if (t) {
-        return { name: t.length > FIRST_MESSAGE_MAX ? t.slice(0, FIRST_MESSAGE_MAX - 1) + '…' : t, source: 'first-message' };
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  } finally {
-    if (fh) await fh.close().catch(() => {});
-  }
-}
-
-function sessionsOf(state) {
-  return state && state.sessions && typeof state.sessions === 'object' && !Array.isArray(state.sessions) ? state.sessions : {};
-}
-
-function recentlyNamed(rec) {
-  if (!rec || (rec.nameSource !== 'title' && rec.nameSource !== 'ai-title') || !rec.name) return false;
-  const seen = Date.parse(rec.lastSeenAt);
-  return Number.isFinite(seen) && Date.now() - seen < SESSION_THROTTLE_MS;
-}
-
-export async function touchSession(projectDirArg, sessionId, { transcriptPath, sessionTitle } = {}) {
-  if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) return null;
-  const key = sessionId.toLowerCase();
-  const tp = validTranscriptPath(transcriptPath) ? transcriptPath : '';
-  let prev;
-  try { prev = sessionsOf(readState(projectDirArg))[key]; } catch { prev = undefined; }
-  if (recentlyNamed(prev)) return prev;
-
-  let found = null;
-  const title = typeof sessionTitle === 'string' ? collapse(sessionTitle) : '';
-  if (title) found = { name: title.slice(0, NAME_MAX), source: 'title' };
-  else found = await nameFromTranscript(tp || (prev && prev.transcriptPath));
-
-  return updateState(projectDirArg, (state) => {
-    if (!state.sessions || typeof state.sessions !== 'object' || Array.isArray(state.sessions)) state.sessions = {};
-    const ts = now();
-    let rec = state.sessions[key];
-    if (!rec || typeof rec !== 'object') {
-      rec = { name: '', nameSource: 'none', transcriptPath: '', firstSeenAt: ts, lastSeenAt: ts };
-      state.sessions[key] = rec;
-    }
-    // A found name replaces the old one unless it is a weaker source.
-    if (found && (NAME_RANK[found.source] ?? 0) >= (NAME_RANK[rec.nameSource] ?? 0)) {
-      rec.name = found.name;
-      rec.nameSource = found.source;
-    }
-    if (tp) rec.transcriptPath = tp;
-    rec.lastSeenAt = ts;
-    return JSON.parse(JSON.stringify(rec));
-  });
-}
-
-export function sessionLabel(state, sessionId) {
-  const id = String(sessionId ?? '');
-  const short = id.slice(0, 8);
-  const rec = sessionsOf(state)[id.toLowerCase()];
-  return rec && typeof rec.name === 'string' && rec.name ? `${rec.name} · ${short}` : `session ${short}`;
-}
+// The last n characters of a collapsed text: for error text, where the end matters.
+export const tail = (s, n = 500) => collapse(s).slice(-n);
 
 // ---------------------------------------------------------------- board cards
 
@@ -514,7 +240,7 @@ export async function updateCard(projectDirArg, id, { title, note, status } = {}
 export async function removeCard(projectDirArg, id) {
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, id);
-    if (card.kind === 'thread' && card.thread && card.thread.runState === 'running' && isAlive(card.thread.pid)) {
+    if (isThread(card) && card.thread.runState === 'running' && isAlive(card.thread.pid)) {
       throw new Error(`thread ${id} is still running; end it before removing the card`);
     }
     state.cards = state.cards.filter((c) => c.id !== id);
@@ -591,7 +317,7 @@ function stripMap(text) {
 const DEFAULT_ALLOW_TOOLS = ['WebSearch', 'WebFetch'];
 const MAX_EXTRA_DIRS = 5;
 
-export function allowedTools() {
+function allowedTools() {
   const raw = envValue('THREAD_ALLOW_TOOLS');
   if (!raw) return DEFAULT_ALLOW_TOOLS;
   if (/^(none|off)$/i.test(raw)) return [];
@@ -604,19 +330,19 @@ export function allowedTools() {
 // absolute directory; anything else is an error the caller can show.
 function normalizeDirs(dirs) {
   if (dirs == null) return [];
-  if (!Array.isArray(dirs)) throw new Error('extra_dirs must be a list of folder paths');
+  if (!Array.isArray(dirs)) throw new Error('extra folders must be a list of paths');
   const out = [];
   for (const d of dirs) {
     const p = typeof d === 'string' ? d.trim() : '';
     if (!p) continue;
-    if (p.startsWith('-') || !isAbsolute(p)) throw new Error(`extra_dirs entries must be absolute paths: ${p}`);
+    if (p.startsWith('-') || !isAbsolute(p)) throw new Error(`extra folders must be absolute paths: ${p}`);
     let st;
-    try { st = statSync(p); } catch { throw new Error(`extra_dirs folder not found: ${p}`); }
-    if (!st.isDirectory()) throw new Error(`extra_dirs entry is not a folder: ${p}`);
+    try { st = statSync(p); } catch { throw new Error(`extra folder not found: ${p}`); }
+    if (!st.isDirectory()) throw new Error(`extra folder is not a folder: ${p}`);
     const r = resolve(p);
     if (!out.includes(r)) out.push(r);
   }
-  if (out.length > MAX_EXTRA_DIRS) throw new Error(`at most ${MAX_EXTRA_DIRS} extra_dirs are allowed`);
+  if (out.length > MAX_EXTRA_DIRS) throw new Error(`at most ${MAX_EXTRA_DIRS} extra folders are allowed`);
   return out;
 }
 
@@ -660,6 +386,11 @@ export function buildPrompt(card) {
   ].join('\n');
 }
 
+// A side thread runs with THREAD_DEPTH set and must not manage threads itself.
+function refuseInsideThread(verb) {
+  if (process.env.THREAD_DEPTH) throw new Error(`a side thread cannot ${verb} threads`);
+}
+
 function closeOpenTurn(card, error) {
   const turn = card.thread.turns[card.thread.turns.length - 1];
   if (turn && turn.finishedAt == null) {
@@ -695,7 +426,7 @@ function launchRunner(projectDirArg, card) {
       env: childEnv(),
     });
   } catch (e) {
-    markFailed(card, `could not start runner: ${oneLine(e.message)}`);
+    markFailed(card, `could not start runner: ${tail(e.message, 300)}`);
     return;
   }
   const pid = child.pid ?? null;
@@ -704,16 +435,16 @@ function launchRunner(projectDirArg, card) {
     // Async spawn failure: record it unless the runner already took over.
     updateState(projectDirArg, (state) => {
       const c = state.cards.find((x) => x.id === card.id);
-      if (c && c.kind === 'thread' && c.thread.runState === 'running' && (c.thread.pid === pid || c.thread.pid == null)) {
-        markFailed(c, `could not start runner: ${oneLine(e.message)}`);
+      if (isThread(c) && c.thread.runState === 'running' && (c.thread.pid === pid || c.thread.pid == null)) {
+        markFailed(c, `could not start runner: ${tail(e.message, 300)}`);
       }
     }).catch(() => {});
   });
   child.unref();
 }
 
-export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', dirs } = {}) {
-  if (process.env.THREAD_DEPTH) throw new Error('threads cannot start threads');
+export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs } = {}) {
+  refuseInsideThread('start');
   if (typeof sessionId !== 'string' || !UUID_RE.test(sessionId)) {
     throw new Error('session_id must be a UUID (the main session id)');
   }
@@ -722,7 +453,7 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
   if (!t) throw new Error('title must not be empty');
   if (!k) throw new Error('task must not be empty');
   if (!MODES.includes(mode)) throw new Error(`invalid mode "${mode}" (use read or write)`);
-  const extraDirs = normalizeDirs(dirs);
+  const dirs = normalizeDirs(extraDirs);
   return updateState(projectDirArg, (state) => {
     state.seq += 1;
     const ts = now();
@@ -740,7 +471,7 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
         parentSessionId: sessionId.toLowerCase(),
         sessionId: null,
         mode,
-        dirs: extraDirs,
+        dirs,
         runState: 'running',
         pid: null,
         turns: [{ prompt: k, startedAt: ts, finishedAt: null, ok: null, result: null, error: null }],
@@ -756,7 +487,7 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
 }
 
 export async function continueThread(projectDirArg, id, message, { sessionId } = {}) {
-  if (process.env.THREAD_DEPTH) throw new Error('a side thread cannot continue threads');
+  refuseInsideThread('continue');
   const m = typeof message === 'string' ? message.trim() : '';
   if (!m) throw new Error('message must not be empty');
   return updateState(projectDirArg, (state) => {
@@ -781,10 +512,6 @@ export async function continueThread(projectDirArg, id, message, { sessionId } =
 
 const CONFIRM_TTL_MS = 10 * 60 * 1000;
 
-function sameSession(a, b) {
-  return typeof a === 'string' && typeof b === 'string' && a.length > 0 && a.toLowerCase() === b.toLowerCase();
-}
-
 // Guard for a call made by a session other than the one that started the thread.
 // Returns null when the call may go ahead (the caller is the parent, or the
 // confirm code is valid and has been used up); otherwise issues a fresh code.
@@ -805,7 +532,7 @@ function checkCaller(th, action, sessionId, confirmCode) {
 }
 
 export async function reportThread(projectDirArg, id, { sessionId, confirmCode } = {}) {
-  if (process.env.THREAD_DEPTH) throw new Error('a side thread cannot report threads');
+  refuseInsideThread('report');
   return updateState(projectDirArg, (state) => {
     const card = findThread(state, id);
     const th = card.thread;
@@ -815,7 +542,7 @@ export async function reportThread(projectDirArg, id, { sessionId, confirmCode }
     let otherSession = false;
     if (sessionId != null) {
       const g = checkCaller(th, 'report', sessionId, confirmCode);
-      if (!g.ok) return { needsConfirm: true, action: 'report', code: g.code, card };
+      if (!g.ok) return { card, needsConfirm: true, action: 'report', code: g.code };
       otherSession = g.other;
     }
     if (otherSession) {
@@ -837,15 +564,15 @@ export async function reportThread(projectDirArg, id, { sessionId, confirmCode }
 }
 
 export async function endThread(projectDirArg, id, { sessionId, confirmCode } = {}) {
-  if (process.env.THREAD_DEPTH) throw new Error('a side thread cannot end threads');
+  refuseInsideThread('end');
   let pidToKill = null;
   const result = await updateState(projectDirArg, (state) => {
     const c = findThread(state, id);
     const th = c.thread;
-    if (th.runState === 'ended') return c;
+    if (th.runState === 'ended') return { card: c };
     if (sessionId != null) {
       const g = checkCaller(th, 'end', sessionId, confirmCode);
-      if (!g.ok) return { needsConfirm: true, action: 'end', code: g.code, card: c };
+      if (!g.ok) return { card: c, needsConfirm: true, action: 'end', code: g.code };
     }
     const wasRunning = th.runState === 'running';
     const pid = th.pid;
@@ -855,7 +582,7 @@ export async function endThread(projectDirArg, id, { sessionId, confirmCode } = 
     }
     th.pid = null;
     setRunState(c, 'ended');
-    return c;
+    return { card: c };
   });
   if (pidToKill) {
     try { process.kill(pidToKill, 'SIGTERM'); } catch { /* already gone */ }
@@ -870,7 +597,7 @@ export async function pickReportable(projectDirArg, sessionId) {
   const mine = [];
   const others = [];
   for (const card of state.cards) {
-    if (card.kind !== 'thread' || !card.thread) continue;
+    if (!isThread(card)) continue;
     const th = card.thread;
     if (th.lastResult == null || th.reported || th.runState === 'running') continue;
     (sameSession(sessionId, th.parentSessionId) ? mine : others).push(card);
@@ -881,7 +608,7 @@ export async function pickReportable(projectDirArg, sessionId) {
 export async function reconcile(projectDirArg) {
   return updateState(projectDirArg, (state) => {
     for (const card of state.cards) {
-      if (card.kind !== 'thread' || !card.thread) continue;
+      if (!isThread(card)) continue;
       if (card.thread.runState === 'running' && !runnerAlive(projectDirArg, card)) {
         markFailed(card, 'runner exited without a result');
       }
@@ -894,9 +621,9 @@ export async function pendingAnnouncements(projectDirArg, sessionId) {
   return updateState(projectDirArg, (state) => {
     const out = [];
     for (const card of state.cards) {
-      if (card.kind !== 'thread' || !card.thread) continue;
+      if (!isThread(card)) continue;
       const th = card.thread;
-      if (th.parentSessionId !== sessionId) continue;
+      if (!sameSession(th.parentSessionId, sessionId)) continue;
       if ((th.runState === 'idle' || th.runState === 'failed') && th.announced === false) {
         th.announced = true;
         out.push(JSON.parse(JSON.stringify(card)));

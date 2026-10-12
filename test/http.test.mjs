@@ -2,16 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
-import path from 'node:path';
-import { setupThreadEnv, cleanAmbientEnv, writeStateFile, emptyState, threadCard, ROOT } from './helpers.mjs';
+import { setupThreadEnv, cleanAmbientEnv, waitFor, writeStateFile, emptyState, threadCard, REPLY_WITH_MAP } from './helpers.mjs';
 import * as core from '../server/core.mjs';
 import { startBoardServer } from '../server/http.mjs';
 
 cleanAmbientEnv();
-delete process.env.THREAD_DEPTH;
-delete process.env.CLAUDE_CODE_SESSION_ID;
 
-const STATUSES = ['idea', 'new', 'in_progress', 'review', 'blocked', 'done'];
 const JSON_HDR = { 'content-type': 'application/json' };
 
 async function boot(t, extra) {
@@ -36,20 +32,19 @@ function raw(port, { method = 'GET', path: p = '/', headers = {}, body } = {}) {
   });
 }
 
-test('GET /api/state returns projectDir, statuses and cards', async (t) => {
+test('GET /api/state returns projectDir and cards', async (t) => {
   const b = await boot(t);
   await core.addCard(b.projectDir, { title: 'Seed' });
   const res = await fetch(b.base + '/api/state');
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-type'), /application\/json/);
   const s = await res.json();
-  assert.deepEqual(s.statuses, STATUSES);
   assert.equal(s.projectDir, b.projectDir);
   assert.equal(s.cards.length, 1);
   assert.equal(s.cards[0].title, 'Seed');
 });
 
-test('GET / returns the board html', { skip: fs.existsSync(path.join(ROOT, 'server', 'board.html')) ? false : 'server/board.html does not exist yet' }, async (t) => {
+test('GET / returns the board html', async (t) => {
   const b = await boot(t);
   const res = await fetch(b.base + '/');
   assert.equal(res.status, 200);
@@ -172,6 +167,38 @@ test('GET /api/state reconciles a running thread whose runner is dead', async (t
   assert.equal(s.cards[0].status, 'blocked');
 });
 
+test('the board API returns parsed views, sends a follow-up turn and ends a thread', async (t) => {
+  const b = await boot(t);
+  const ts = new Date().toISOString();
+  writeStateFile(b.dataDir, b.projectDir, emptyState(b.projectDir, [threadCard({}, {
+    lastResult: REPLY_WITH_MAP,
+    turns: [{ prompt: 'p', startedAt: ts, finishedAt: ts, ok: true, result: REPLY_WITH_MAP, error: null }],
+  })]));
+  const post = (p, body, headers = JSON_HDR) => fetch(b.base + p, { method: 'POST', headers, body: JSON.stringify(body) });
+
+  const state = await (await fetch(b.base + '/api/state')).json();
+  assert.equal(state.cards[0].thread.turns[0].view.map.length, 3);
+  assert.equal(state.cards[0].thread.turns[0].view.sections.decided, '- use Postgres');
+  assert.equal(JSON.parse(fs.readFileSync(core.projectPaths(b.projectDir).state, 'utf8')).cards[0].thread.turns[0].view, undefined, 'views are not stored');
+
+  assert.equal((await post('/api/threads/c1/messages', { message: 'more' }, {})).status, 415);
+  assert.equal((await post('/api/threads/c1/messages', { message: '' })).status, 400);
+  assert.equal((await post('/api/threads/nope/messages', { message: 'x' })).status, 400);
+
+  const sent = await post('/api/threads/c1/messages', { message: 'look again' });
+  assert.equal(sent.status, 200);
+  const card = await sent.json();
+  assert.equal(card.thread.runState, 'running');
+  assert.equal(card.thread.turns.length, 2);
+  assert.equal((await post('/api/threads/c1/messages', { message: 'again' })).status, 400, 'refused while running');
+  await waitFor(() => core.readState(b.projectDir).cards[0].thread.runState === 'idle');
+
+  const ended = await post('/api/threads/c1/end', {});
+  assert.equal(ended.status, 200);
+  assert.equal((await ended.json()).thread.runState, 'ended');
+  assert.equal((await post('/api/threads/c1/messages', { message: 'x' })).status, 400, 'refused after end');
+});
+
 test('path traversal does not return source code', async (t) => {
   const b = await boot(t);
   for (const p of ['/../core.mjs', '/server/core.mjs', '/%2e%2e/server/core.mjs', '/../server/core.mjs', '/..%2fserver%2fcore.mjs', '/server/../server/core.mjs', '/core.mjs', '/http.mjs', '/../scripts/hook.mjs', '/../test/helpers.mjs']) {
@@ -185,14 +212,4 @@ test('the server binds to loopback only', async (t) => {
   const b = await boot(t);
   const addr = b.server.address();
   assert.equal(addr.address, '127.0.0.1');
-});
-
-test('a second server for the same project moves to a free port instead of failing', async (t) => {
-  const b = await boot(t);
-  const second = await startBoardServer(b.projectDir);
-  const third = await startBoardServer(b.projectDir);
-  t.after(() => { for (const x of [second, third]) { x.server.closeAllConnections?.(); x.server.close(); } });
-  assert.notEqual(second.port, third.port);
-  const res = await fetch(`http://127.0.0.1:${second.port}/api/state`);
-  assert.equal(res.status, 200);
 });

@@ -2,7 +2,7 @@
 // stdout carries JSON-RPC only; every log line goes to stderr.
 import * as core from './core.mjs';
 
-const SERVER_INFO = { name: 'thread', version: '0.5.1' };
+const SERVER_INFO = { name: 'thread', version: core.VERSION };
 const DEFAULT_PROTOCOL = '2025-06-18';
 
 function log(...a) {
@@ -28,7 +28,7 @@ const replyError = (id, code, message) => send({ jsonrpc: '2.0', id, error: { co
 
 // ---------- tool definitions ----------
 
-const STATUSES = Array.isArray(core.STATUSES) ? core.STATUSES : ['idea', 'new', 'in_progress', 'review', 'blocked', 'done'];
+const { STATUSES, MODES, KINDS } = core;
 
 const ID_PROP = { type: 'string', description: 'Card id, for example "c4".' };
 const SESSION_PROP = { type: 'string', description: 'This session\'s id (a UUID), taken from the "[thread plugin]" note added at session start. Falls back to the CLAUDE_CODE_SESSION_ID environment variable if omitted.' };
@@ -51,8 +51,8 @@ const TOOLS = [
       properties: {
         title: { type: 'string', description: 'Short title for the thread card on the board.' },
         task: { type: 'string', description: 'What the thread should do. Be specific; the thread has this conversation as context but starts with only this instruction.' },
-        session_id: { type: 'string', description: 'This session\'s id (a UUID), taken from the "[thread plugin]" note added at session start. Falls back to the CLAUDE_CODE_SESSION_ID environment variable if omitted.' },
-        mode: { type: 'string', enum: ['read', 'write'], description: '"read" (default) forbids file edits. "write" lets the thread edit files; use it only when the user asks for that.' },
+        session_id: SESSION_PROP,
+        mode: { type: 'string', enum: MODES, description: '"read" (default) forbids file edits. "write" lets the thread edit files; use it only when the user asks for that.' },
         extra_dirs: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Absolute paths of folders outside the project that the task needs to read, for example another repository the user named. Only list folders the task actually requires.' },
       },
       required: ['title', 'task'],
@@ -106,7 +106,7 @@ const TOOLS = [
         title: { type: 'string', description: 'Card title.' },
         note: { type: 'string', description: 'Optional longer note.' },
         status: { type: 'string', enum: STATUSES, description: 'Column. Defaults to "new".' },
-        kind: { type: 'string', enum: ['task', 'idea'], description: 'Defaults to "task".' },
+        kind: { type: 'string', enum: KINDS, description: 'Defaults to "task".' },
       },
       required: ['title'],
     },
@@ -176,19 +176,12 @@ function clean(obj) {
   return out;
 }
 
-const oneLine = (s, n = 160) => {
-  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
-  return t.length > n ? t.slice(0, n - 1) + '…' : t;
-};
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 // The calling session: the session_id argument, else the environment, else unknown.
 function callerId(args) {
   const arg = optStr(args, 'session_id');
-  if (arg && UUID_RE.test(arg.trim())) return arg.trim().toLowerCase();
+  if (arg && core.UUID_RE.test(arg.trim())) return arg.trim().toLowerCase();
   const env = process.env.CLAUDE_CODE_SESSION_ID;
-  if (typeof env === 'string' && UUID_RE.test(env.trim())) return env.trim().toLowerCase();
+  if (typeof env === 'string' && core.UUID_RE.test(env.trim())) return env.trim().toLowerCase();
   return undefined;
 }
 
@@ -197,8 +190,6 @@ function needCaller(args) {
   if (!id) throw new ToolError('no session id: pass session_id from the "[thread plugin]" note at session start');
   return id;
 }
-
-const sameId = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 
 function ago(iso) {
   const ms = Date.now() - Date.parse(iso);
@@ -212,14 +203,14 @@ function ago(iso) {
 }
 
 function startedBy(state, c, caller) {
-  const parent = c.thread && c.thread.parentSessionId;
-  if (caller && sameId(caller, parent)) return 'this session';
+  const parent = c.thread.parentSessionId;
+  if (caller && core.sameSession(caller, parent)) return 'this session';
   return core.sessionLabel(state, parent);
 }
 
 function threadLine(c, state, caller) {
-  const t = c.thread || {};
-  return `${c.id} "${oneLine(c.title, 80)}" — ${t.runState || '?'}, mode ${t.mode || '?'}, ${(t.turns || []).length} turn(s), reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, session ${t.sessionId || 'not known yet'}`;
+  const t = c.thread;
+  return `${c.id} "${core.clip(c.title, 80)}" — ${t.runState}, mode ${t.mode}, ${t.turns.length} turn(s), reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, session ${t.sessionId || 'not known yet'}`;
 }
 
 // The answer to a report or end that came from a session other than the one
@@ -229,10 +220,10 @@ function confirmText(r, state, caller) {
   const verb = r.action === 'end' ? 'ended' : 'reported';
   const cmd = r.action === 'end' ? 'end' : 'report';
   const id = card.id;
-  const title = oneLine(card.title, 80);
+  const title = core.clip(card.title, 80);
   const parent = card.thread.parentSessionId;
   const parentLabel = core.sessionLabel(state, parent);
-  const seen = state.sessions && state.sessions[String(parent).toLowerCase()] && state.sessions[String(parent).toLowerCase()].lastSeenAt;
+  const seen = core.sessionsOf(state)[String(parent).toLowerCase()]?.lastSeenAt;
   const when = seen && ago(seen) ? `, last active ${ago(seen)}` : '';
   const callerLabel = core.sessionLabel(state, caller);
   const isEnd = r.action === 'end';
@@ -316,26 +307,25 @@ function watchBoard(projectDir) {
 
 const HANDLERS = {
   async thread_start(args) {
-    const sessionId = optStr(args, 'session_id') || process.env.CLAUDE_CODE_SESSION_ID;
-    if (!sessionId) throw new ToolError('no session id: pass session_id (see the "[thread plugin]" note at session start)');
-    const mode = optEnum(args, 'mode', ['read', 'write']) || 'read';
+    const sessionId = needCaller(args);
+    const mode = optEnum(args, 'mode', MODES) || 'read';
     const card = await core.startThread(core.projectDir(), {
       title: reqStr(args, 'title'),
       task: reqStr(args, 'task'),
       sessionId,
       mode,
-      dirs: args && args.extra_dirs,
+      extraDirs: args.extra_dirs,
     });
-    const extra = card.thread.dirs && card.thread.dirs.length ? `, extra folders: ${card.thread.dirs.join(', ')}` : '';
-    return `Thread ${card.id} "${oneLine(card.title, 80)}" started in the background (mode ${mode}${extra}). Results come back only through thread_report; call it with id ${card.id} when the user asks or the result is needed.`;
+    const extra = card.thread.dirs.length ? `, extra folders: ${card.thread.dirs.join(', ')}` : '';
+    return `Thread ${card.id} "${core.clip(card.title, 80)}" started in the background (mode ${mode}${extra}). Results come back only through thread_report; call it with id ${card.id} when the user asks or the result is needed.`;
   },
 
   async thread_continue(args) {
     const pd = core.projectDir();
     const caller = callerId(args);
     const card = await core.continueThread(pd, reqStr(args, 'id'), reqStr(args, 'message'), { sessionId: caller });
-    let out = `Thread ${card.id} "${oneLine(card.title, 80)}" is running another turn. Use thread_report to fetch the result.`;
-    if (caller && !sameId(caller, card.thread.parentSessionId)) {
+    let out = `Thread ${card.id} "${core.clip(card.title, 80)}" is running another turn. Use thread_report to fetch the result.`;
+    if (caller && !core.sameSession(caller, card.thread.parentSessionId)) {
       const label = core.sessionLabel(core.readState(pd), card.thread.parentSessionId);
       out += ` This thread belongs to ${label}; its "finished" notice will go to that session.`;
     }
@@ -347,22 +337,20 @@ const HANDLERS = {
     const caller = callerId(args);
     const pd = core.projectDir();
     const state = await core.reconcile(pd);
-    const threads = (state.cards || []).filter((c) => c.kind === 'thread');
     if (id) {
-      const c = threads.find((x) => x.id === id);
-      if (!c) throw new ToolError(`thread ${id} not found`);
+      const c = core.findThread(state, id);
       const t = c.thread;
-      const last = (t.turns || [])[(t.turns || []).length - 1];
+      const last = t.turns[t.turns.length - 1];
       let out = threadLine(c, state, caller);
-      if (t.runState === 'failed' && last && last.error) out += `\nLast error: ${oneLine(last.error, 300)}`;
+      if (t.runState === 'failed' && last && last.error) out += `\nLast error: ${core.clip(last.error, 300)}`;
       return out;
     }
+    const threads = state.cards.filter((c) => c.kind === 'thread');
     if (!threads.length) return 'No threads.';
     return threads.map((c) => {
-      const turns = c.thread.turns || [];
-      const last = turns[turns.length - 1];
+      const last = c.thread.turns[c.thread.turns.length - 1];
       const failed = c.thread.runState === 'failed' && last && last.error;
-      return failed ? `${threadLine(c, state, caller)} — error: ${oneLine(last.error, 200)}` : threadLine(c, state, caller);
+      return failed ? `${threadLine(c, state, caller)} — error: ${core.clip(last.error, 200)}` : threadLine(c, state, caller);
     }).join('\n');
   },
 
@@ -379,10 +367,10 @@ const HANDLERS = {
         const lines = [mine.length
           ? 'Nothing was reported. More than one finished thread from this session is waiting; ask the user which one:'
           : 'Nothing was reported. No finished, unreported thread from this session.'];
-        for (const c of mine) lines.push(`- ${c.id} "${oneLine(c.title, 80)}"`);
+        for (const c of mine) lines.push(`- ${c.id} "${core.clip(c.title, 80)}"`);
         if (others.length) {
           lines.push('', 'Finished threads from other sessions (a thread from another session must be requested by id, and the user is asked to confirm):');
-          for (const c of others) lines.push(`- ${c.id} "${oneLine(c.title, 80)}" (started by ${core.sessionLabel(state, c.thread.parentSessionId)})`);
+          for (const c of others) lines.push(`- ${c.id} "${core.clip(c.title, 80)}" (started by ${core.sessionLabel(state, c.thread.parentSessionId)})`);
         }
         return lines.join('\n');
       }
@@ -390,7 +378,7 @@ const HANDLERS = {
     }
     const r = await core.reportThread(pd, id, { sessionId: caller, confirmCode: optStr(args, 'confirm_code') });
     if (r.needsConfirm) return confirmText(r, core.readState(pd), caller);
-    const body = `Thread ${r.card.id} "${oneLine(r.card.title, 80)}" (${r.card.thread.runState}):\n\n${r.text}`;
+    const body = `Thread ${r.card.id} "${core.clip(r.card.title, 80)}" (${r.card.thread.runState}):\n\n${r.text}`;
     if (r.otherSession) {
       const label = core.sessionLabel(core.readState(pd), r.card.thread.parentSessionId);
       return `Reported into a different session than the one that started this thread (${label}).\n${body}`;
@@ -403,11 +391,11 @@ const HANDLERS = {
     const pd = core.projectDir();
     const r = await core.endThread(pd, reqStr(args, 'id'), { sessionId: caller, confirmCode: optStr(args, 'confirm_code') });
     if (r.needsConfirm) return confirmText(r, core.readState(pd), caller);
-    const card = r;
+    const { card } = r;
     const note = card.thread.lastResult == null
       ? 'It produced no result.'
       : card.thread.reported ? 'Its last result was reported.' : 'Its last result was never reported; thread_report still works on an ended thread.';
-    return `Thread ${card.id} "${oneLine(card.title, 80)}" ended. ${note}`;
+    return `Thread ${card.id} "${core.clip(card.title, 80)}" ended. ${note}`;
   },
 
   async board_add(args) {
@@ -415,10 +403,10 @@ const HANDLERS = {
       title: reqStr(args, 'title'),
       note: optStr(args, 'note'),
       status: optEnum(args, 'status', STATUSES),
-      kind: optEnum(args, 'kind', ['task', 'idea']),
+      kind: optEnum(args, 'kind', KINDS),
       source: 'claude',
     }));
-    return `Added ${card.id} [${card.kind}] "${oneLine(card.title, 80)}" in ${card.status}.`;
+    return `Added ${card.id} [${card.kind}] "${core.clip(card.title, 80)}" in ${card.status}.`;
   },
 
   async board_update(args) {
@@ -427,7 +415,7 @@ const HANDLERS = {
       note: optStr(args, 'note'),
       status: optEnum(args, 'status', STATUSES),
     }), { source: 'claude' });
-    return `Updated ${card.id} "${oneLine(card.title, 80)}" (${card.status}).`;
+    return `Updated ${card.id} "${core.clip(card.title, 80)}" (${card.status}).`;
   },
 
   async board_remove(args) {
@@ -439,8 +427,8 @@ const HANDLERS = {
   async board_list() {
     const pd = core.projectDir();
     await core.reconcile(pd);
-    const unseen = new Set(((await core.markSeen(pd)) || []).map((c) => c.id));
-    const cards = core.readState(pd).cards || [];
+    const unseen = new Set((await core.markSeen(pd)).map((c) => c.id));
+    const cards = core.readState(pd).cards;
     if (!cards.length) return 'The board is empty.';
     const lines = [];
     const known = new Set(STATUSES);
@@ -450,10 +438,10 @@ const HANDLERS = {
       if (!inCol.length) continue;
       lines.push(`${s} (${inCol.length})`);
       for (const c of inCol) {
-        const kind = c.kind === 'thread' ? `thread:${c.thread?.runState ?? '?'}` : c.kind;
+        const kind = c.kind === 'thread' ? `thread:${c.thread.runState}` : c.kind;
         const flag = unseen.has(c.id) ? ' (new from user)' : '';
-        const note = c.note ? ` — ${oneLine(c.note, 200)}` : '';
-        lines.push(`- ${c.id} [${kind}] ${oneLine(c.title, 120)}${flag}${note}`);
+        const note = c.note ? ` — ${core.clip(c.note, 200)}` : '';
+        lines.push(`- ${c.id} [${kind}] ${core.clip(c.title, 120)}${flag}${note}`);
       }
     }
     if (unseen.size) lines.push('', `${unseen.size} card(s) new from the user.`);
@@ -550,7 +538,7 @@ function processLine(line) {
   try {
     msg = JSON.parse(text);
   } catch {
-    log('malformed input line ignored:', oneLine(text, 80));
+    log('malformed input line ignored:', core.clip(text, 80));
     return;
   }
   const items = Array.isArray(msg) ? msg : [msg];

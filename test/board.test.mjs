@@ -3,28 +3,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
-import net from 'node:net';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { setupThreadEnv, cleanAmbientEnv, writeStateFile, emptyState, threadCard, runNode, waitFor, statePathFor, ROOT } from './helpers.mjs';
+import { setupThreadEnv, cleanAmbientEnv, writeStateFile, emptyState, threadCard, runNode, waitFor, statePathFor, freePort, McpClient, ROOT } from './helpers.mjs';
 import * as core from '../server/core.mjs';
 import { startBoardServer, boardToken, ensureBoard } from '../server/http.mjs';
 
 cleanAmbientEnv();
-delete process.env.THREAD_DEPTH;
-delete process.env.CLAUDE_CODE_SESSION_ID;
 delete process.env.THREAD_BOARD_PORT;
 
 const JSON_HDR = { 'content-type': 'application/json' };
 const keyOf = (dir) => crypto.createHash('sha1').update(dir).digest('hex').slice(0, 12);
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const s = net.createServer();
-    s.on('error', reject);
-    s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
-  });
-}
 
 function closeServer(server) {
   return new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); });
@@ -445,28 +434,15 @@ test('THREAD_BOARD_PORT sets the base port', async (t) => {
 // ------------------------------------------------------------ MCP
 
 test('board_open through the MCP server returns ?t= and #/<key>, and says unavailable with THREAD_NO_HTTP=1', async (t) => {
-  const { spawn } = await import('node:child_process');
-  const readline = await import('node:readline');
   const e = setupThreadEnv(t);
   const port = await freePort();
   async function openBoard(extraEnv) {
-    const child = spawn(process.execPath, [path.join(ROOT, 'server', 'mcp.mjs')], {
-      env: { ...process.env, THREAD_PROJECT_DIR: e.projectDir, ...extraEnv },
-      stdio: ['pipe', 'pipe', 'ignore'],
-    });
-    t.after(() => child.kill('SIGKILL'));
-    child.stdin.on('error', () => {});
-    const pending = new Map();
-    readline.createInterface({ input: child.stdout }).on('line', (l) => { try { const m = JSON.parse(l); pending.get(m.id)?.(m); } catch { /* ignore */ } });
-    const rpc = (id, method, params) => new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('no reply to ' + method)), 8000);
-      pending.set(id, (m) => { clearTimeout(timer); resolve(m); });
-      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-    });
-    await rpc(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } });
-    const r = await rpc(2, 'tools/call', { name: 'board_open', arguments: {} });
-    child.kill('SIGKILL');
-    return r.result.content[0].text;
+    const c = new McpClient(e, extraEnv);
+    t.after(() => c.kill());
+    await c.init();
+    const r = await c.call('board_open');
+    c.kill();
+    return r.text;
   }
   const on = await openBoard({ THREAD_NO_HTTP: '', THREAD_BOARD_PORT: String(port) });
   assert.match(on, new RegExp(`http://127\\.0\\.0\\.1:${port}/\\?t=[0-9a-f]{32}#/${keyOf(e.projectDir)}`));

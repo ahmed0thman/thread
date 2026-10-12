@@ -3,7 +3,7 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildClaudeArgs, buildPrompt, projectPaths, readStateLocked, updateState } from './core.mjs';
+import { UUID_RE, buildClaudeArgs, buildPrompt, findThread, isThread, projectPaths, readStateLocked, setRunState, tail, updateState } from './core.mjs';
 
 const [projectDir, cardId] = process.argv.slice(2);
 const bin = process.env.THREAD_CLAUDE_BIN || 'claude';
@@ -28,8 +28,6 @@ let timeoutTimer = null;
 let outStream = null;
 let errStream = null;
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 // Heartbeat: core treats the runner as alive only while this file is fresh and
 // names our pid, so a reused pid is never mistaken for a live runner.
 function startHeartbeat(logsDir) {
@@ -40,12 +38,6 @@ function startHeartbeat(logsDir) {
   beat();
   setInterval(beat, 3000);
 }
-
-const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
-const tail = (s, n = 500) => {
-  const t = oneLine(s);
-  return t.length > n ? t.slice(-n) : t;
-};
 
 function killChild() {
   if (!child || exitInfo) return;
@@ -131,7 +123,7 @@ function endStream(s) {
 async function record(outcome) {
   const apply = (state) => {
     const card = state.cards.find((c) => c.id === cardId);
-    if (!card || card.kind !== 'thread' || !card.thread) return;
+    if (!isThread(card)) return;
     const th = card.thread;
     const turn = th.turns[th.turns.length - 1];
     const ts = new Date().toISOString();
@@ -148,11 +140,8 @@ async function record(outcome) {
       th.reported = false;
     }
     th.pid = null;
-    if (!ended) {
-      th.runState = outcome.ok ? 'idle' : 'failed';
-      card.status = outcome.ok ? 'review' : 'blocked';
-    }
-    card.updatedAt = ts;
+    if (ended) card.updatedAt = ts;
+    else setRunState(card, outcome.ok ? 'idle' : 'failed');
   };
   let lastErr;
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -197,10 +186,11 @@ async function main() {
     process.stderr.write('usage: runner.mjs <projectDir> <cardId>\n');
     process.exit(2);
   }
-  const state = await readStateLocked(projectDir);
-  const card = state.cards.find((c) => c.id === cardId);
-  if (!card || card.kind !== 'thread' || !card.thread) {
-    process.stderr.write(`thread runner: no thread card ${cardId}\n`);
+  let card;
+  try {
+    card = findThread(await readStateLocked(projectDir), cardId);
+  } catch (e) {
+    process.stderr.write(`thread runner: ${e.message}\n`);
     process.exit(1);
   }
   if (card.thread.runState !== 'running') process.exit(0); // ended before it began

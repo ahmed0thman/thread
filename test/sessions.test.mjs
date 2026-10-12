@@ -11,8 +11,6 @@ import * as core from '../server/core.mjs';
 import { startBoardServer } from '../server/http.mjs';
 
 cleanAmbientEnv();
-delete process.env.THREAD_DEPTH;
-delete process.env.CLAUDE_CODE_SESSION_ID;
 
 const OTHER = '99999999-9999-4999-8999-999999999999';
 

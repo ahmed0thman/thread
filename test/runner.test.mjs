@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import {
   setupThreadEnv, waitFor, sleep, isAlive, cleanAmbientEnv, writeStateFile, emptyState, threadCard,
@@ -9,8 +11,6 @@ import {
 import * as core from '../server/core.mjs';
 
 cleanAmbientEnv();
-delete process.env.THREAD_DEPTH;
-delete process.env.CLAUDE_CODE_SESSION_ID;
 
 const TASK = 'investigate-the-zebra-crossing-bug';
 const thread = (dir, id = 'c1') => core.readState(dir).cards.find((c) => c.id === id)?.thread;
@@ -121,7 +121,7 @@ test('continueThread throws on an ended thread', async (t) => {
   const e = setupThreadEnv(t);
   await start(e);
   await untilState(e, 'idle');
-  const ended = await core.endThread(e.projectDir, 'c1');
+  const { card: ended } = await core.endThread(e.projectDir, 'c1');
   assert.equal(ended.thread.runState, 'ended');
   await assert.rejects(() => core.continueThread(e.projectDir, 'c1', 'more'), /ended/i);
 });
@@ -193,7 +193,7 @@ test('endThread on a hanging thread ends it, it stays ended, and the runner proc
   const pid = thread(e.projectDir).pid;
   assert.ok(isAlive(pid), 'runner should be alive while the CLI hangs');
 
-  const ended = await core.endThread(e.projectDir, 'c1');
+  const { card: ended } = await core.endThread(e.projectDir, 'c1');
   assert.equal(ended.thread.runState, 'ended');
   assert.equal(ended.status, 'done');
 
@@ -302,4 +302,134 @@ test('pendingAnnouncements also reports failed threads and ignores running ones'
   await waitFor(() => thread(e.projectDir, 'c2')?.pid);
   assert.deepEqual(await core.pendingAnnouncements(e.projectDir, PARENT_SESSION), []);
   await core.endThread(e.projectDir, 'c2');
+});
+
+test('a running thread whose pid now belongs to an unrelated process is failed, and endThread does not kill that process', async (t) => {
+  const e = setupThreadEnv(t);
+  const bystander = spawn('sleep', ['30'], { stdio: 'ignore' });
+  t.after(() => { try { bystander.kill('SIGKILL'); } catch { /* gone */ } });
+  const old = new Date(Date.now() - 120000).toISOString();
+  const plant = () => writeStateFile(e.dataDir, e.projectDir, emptyState(e.projectDir, [threadCard({ status: 'in_progress' }, {
+    sessionId: null, runState: 'running', pid: bystander.pid, lastResult: null,
+    turns: [{ prompt: 'p', startedAt: old, finishedAt: null, ok: null, result: null, error: null }],
+  })]));
+
+  plant();
+  const state = await core.reconcile(e.projectDir);
+  assert.equal(state.cards[0].thread.runState, 'failed');
+
+  plant();
+  const { card: ended } = await core.endThread(e.projectDir, 'c1');
+  assert.equal(ended.thread.runState, 'ended');
+  await sleep(300);
+  assert.equal(isAlive(bystander.pid), true, 'the unrelated process must survive');
+});
+
+test('the runner writes a heartbeat naming its pid, and a long turn stays running past the grace period check', async (t) => {
+  const e = setupThreadEnv(t, { FAKE_CLAUDE_MODE: 'slow', FAKE_CLAUDE_DELAY_MS: '1500' });
+  const c = await start(e);
+  const file = path.join(core.projectPaths(e.projectDir).logs, `${c.id}.alive`);
+  await waitFor(() => fs.existsSync(file));
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, c.thread.pid);
+  const mid = await core.reconcile(e.projectDir);
+  assert.equal(mid.cards[0].thread.runState, 'running');
+  await untilState(e, 'idle');
+});
+
+test('reportThread after a failed follow-up says the newest turn failed', async (t) => {
+  const e = setupThreadEnv(t);
+  const c = await start(e);
+  await untilState(e, 'idle');
+  e.setEnv('FAKE_CLAUDE_MODE', 'fail');
+  await core.continueThread(e.projectDir, c.id, 'again');
+  await untilState(e, 'failed');
+  const { text } = await core.reportThread(e.projectDir, c.id);
+  assert.match(text, /newest turn of thread c1 failed/);
+  assert.match(text, /## Happened/);
+});
+
+test('inside a side thread, continueThread and endThread are refused', async (t) => {
+  const e = setupThreadEnv(t);
+  const c = await start(e);
+  await untilState(e, 'idle');
+  e.setEnv('THREAD_DEPTH', '1');
+  await assert.rejects(core.continueThread(e.projectDir, c.id, 'more'), /side thread cannot/);
+  await assert.rejects(core.endThread(e.projectDir, c.id), /side thread cannot/);
+});
+
+test('a reported thread whose follow-up fails stays reported; one whose follow-up succeeds becomes not reported', async (t) => {
+  const e = setupThreadEnv(t);
+  const c = await start(e);
+  await untilState(e, 'idle');
+  await core.reportThread(e.projectDir, c.id);
+  assert.equal(thread(e.projectDir).reported, true);
+
+  e.setEnv('FAKE_CLAUDE_MODE', 'fail');
+  await core.continueThread(e.projectDir, c.id, 'new instruction that fails');
+  await untilState(e, 'failed');
+  assert.equal(thread(e.projectDir).reported, true, 'nothing new to report after a failed follow-up');
+
+  e.setEnv('FAKE_CLAUDE_MODE', undefined);
+  await core.continueThread(e.projectDir, c.id, 'new instruction that works');
+  await waitFor(() => thread(e.projectDir).runState === 'idle' && thread(e.projectDir).turns.length === 3);
+  assert.equal(thread(e.projectDir).reported, false, 'the new result has not been reported');
+  assert.equal(thread(e.projectDir).announced, false, 'and the parent session will be told it finished');
+});
+
+// ---- tool pre-approval and extra folders for headless threads
+
+const argsCard = (over = {}) => ({ id: 'c1', title: 't', thread: { parentSessionId: PARENT_SESSION, sessionId: null, mode: 'read', turns: [{ prompt: 'p' }], ...over } });
+function flagValues(argv, flag) {
+  const i = argv.indexOf(flag);
+  if (i < 0) return null;
+  const out = [];
+  for (let j = i + 1; j < argv.length && !argv[j].startsWith('--'); j++) out.push(argv[j]);
+  return out;
+}
+
+test('threads pre-approve web search and fetch by default, in read and write mode', (t) => {
+  setupThreadEnv(t, { THREAD_ALLOW_TOOLS: undefined });
+  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard()), '--allowedTools'), ['WebSearch', 'WebFetch']);
+  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard({ mode: 'write' })), '--allowedTools'), ['WebSearch', 'WebFetch']);
+  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard()), '--disallowedTools'), ['Edit', 'Write', 'NotebookEdit']);
+});
+
+test('THREAD_ALLOW_TOOLS replaces the list, "none" removes it, and a dash-led entry is dropped', (t) => {
+  const e = setupThreadEnv(t, { THREAD_ALLOW_TOOLS: 'none' });
+  assert.equal(core.buildClaudeArgs(argsCard()).includes('--allowedTools'), false);
+  e.setEnv('THREAD_ALLOW_TOOLS', 'WebSearch, Bash(gh repo view:*) ,--dangerously-skip-permissions');
+  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard()), '--allowedTools'), ['WebSearch', 'Bash(gh repo view:*)']);
+  e.setEnv('THREAD_ALLOW_TOOLS', '${user_config.allow}');
+  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard()), '--allowedTools'), ['WebSearch', 'WebFetch']);
+});
+
+test('extra folders are validated at start, stored, and passed as --add-dir on every turn', async (t) => {
+  const e = setupThreadEnv(t);
+  const extra = fs.mkdtempSync(path.join(os.tmpdir(), 'thread-extra-'));
+  t.after(() => fs.rmSync(extra, { recursive: true, force: true }));
+  const file = path.join(extra, 'f.txt');
+  fs.writeFileSync(file, 'x');
+  const startWith = (extraDirs) => start(e, { extraDirs });
+  await assert.rejects(startWith(['relative/path']), /absolute/);
+  await assert.rejects(startWith(['--add-dir']), /absolute/);
+  await assert.rejects(startWith([path.join(extra, 'missing')]), /not found/);
+  await assert.rejects(startWith([file]), /not a folder/);
+  await assert.rejects(startWith('not-a-list'), /list/);
+  await assert.rejects(startWith(Array.from({ length: 6 }, (_, i) => { const d = path.join(extra, `d${i}`); fs.mkdirSync(d); return d; })), /at most 5/);
+  assert.equal(core.readState(e.projectDir).cards.length, 0, 'a rejected start creates no card');
+
+  const c = await startWith([extra, extra]);
+  assert.deepEqual(c.thread.dirs, [path.resolve(extra)]);
+  await untilState(e, 'idle');
+  await core.continueThread(e.projectDir, c.id, 'again');
+  await untilState(e, 'idle');
+  const runs = e.readLog();
+  assert.equal(runs.length, 2);
+  for (const r of runs) assert.deepEqual(flagValues(r.argv, '--add-dir'), [path.resolve(extra)]);
+  assert.equal(runs[1].argv.includes('--fork-session'), false);
+});
+
+test('a thread started without extra folders passes no --add-dir', () => {
+  assert.equal(core.buildClaudeArgs(argsCard()).includes('--add-dir'), false);
+  assert.equal(core.buildClaudeArgs(argsCard({ dirs: [] })).includes('--add-dir'), false);
 });

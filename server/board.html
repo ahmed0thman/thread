@@ -51,7 +51,7 @@
   --idea: #8a5300;
   --thread: #6a3fc0;
 
-  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px;
+  --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px;
   --r1: 4px; --r2: 6px; --r3: 8px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -102,8 +102,8 @@ body {
 }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 button, input, textarea, select { font: inherit; color: inherit; }
-.num, time, .count, .tnum { font-variant-numeric: tabular-nums; }
-code, pre, .mono { font-family: var(--mono); }
+time, .count, .tnum { font-variant-numeric: tabular-nums; }
+code, pre { font-family: var(--mono); }
 
 #app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 
@@ -265,7 +265,6 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); overflow-wrap: anywhere;
 }
 .muted { color: var(--muted); }
-.warn-text { color: var(--warn); }
 
 /* ---------- board ---------- */
 .board {
@@ -320,7 +319,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 }
 .banner .banner-text { flex: 1; min-width: 0; padding-top: 4px; overflow-wrap: anywhere; }
 
-/* ---------- drawer ---------- */
+/* ---------- drawer (task, idea and new-card forms) ---------- */
 .overlay { position: fixed; inset: 0; z-index: 40; }
 .scrim { position: absolute; inset: 0; background: var(--scrim); animation: fade-in 0.15s ease-out; }
 .drawer {
@@ -329,13 +328,11 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   border-left: 1px solid var(--border-strong); box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
   animation: slide-in 0.18s ease-out;
 }
-.drawer.wide { width: min(720px, 100vw); }
 .drawer:focus { outline: none; }
 .dr-head { flex: none; padding: var(--s3) var(--s4) var(--s3); border-bottom: 1px solid var(--border); }
 .dr-head-row { display: flex; align-items: center; gap: var(--s2); min-height: 32px; }
 .dr-head-row .grow { flex: 1 1 auto; }
 .dr-title { margin: var(--s2) 0 0; font-size: 17px; line-height: 1.3; font-weight: 650; overflow-wrap: anywhere; }
-.dr-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s3); margin-top: var(--s2); font-size: 12.5px; color: var(--muted); }
 .dr-body { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: var(--s4); display: flex; flex-direction: column; gap: var(--s4); }
 .dr-foot {
   flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2);
@@ -346,7 +343,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .confirm-text { font-weight: 600; }
 
 .field { display: flex; flex-direction: column; gap: 5px; }
-.field label, .field .lbl { font-size: 12px; font-weight: 650; color: var(--muted); }
+.field label { font-size: 12px; font-weight: 650; color: var(--muted); }
 .field .err { font-size: 12px; color: var(--danger); }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
 .meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 6px var(--s4); margin: 0; font-size: 12.5px; padding-top: var(--s3); border-top: 1px solid var(--border); }
@@ -549,7 +546,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   .toolbar-note { order: 3; flex-basis: 100%; }
   .board { padding: 0 var(--s3) var(--s3); grid-template-columns: repeat(6, 264px); scroll-snap-type: x proximity; }
   .col { scroll-snap-align: start; }
-  .drawer, .drawer.wide { width: 100vw; border-left: 0; }
+  .drawer { width: 100vw; border-left: 0; }
   .row2 { grid-template-columns: 1fr; }
   .dr-head, .dr-body, .scroller, .composer, .dr-foot { padding-left: var(--s3); padding-right: var(--s3); }
   .ws-bar { padding: var(--s2) var(--s3); }
@@ -679,7 +676,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   let pollSeq = 0, appliedSeq = 0;
   let boardKey = null;
   let dragId = null, pendingRender = false, lastDragEnd = 0;
-  let panel = null;          // the open drawer, if any
+  let panel = null;          // the open drawer or thread workspace, if any
   let hashPushed = false;    // true when the open panel added a history entry
   let returnFocus = null;    // where focus goes when the panel closes
   let synced = false;
@@ -695,6 +692,21 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     return e;
   }
   function shape(cls) { const s = h('span', 'shape ' + cls); s.setAttribute('aria-hidden', 'true'); return s; }
+  // the small "task / idea / thread" marker beside a card id
+  function kindMark(kind) {
+    const km = h('span', 'kindmark');
+    km.dataset.ck = kind;
+    km.appendChild(shape(CK_SHAPE[kind] || 's-square'));
+    km.appendChild(h('span', null, kind));
+    return km;
+  }
+  // the "Claude has not seen this yet" marker
+  function unseenEl(tag) {
+    const u = h(tag, 'unseen');
+    u.appendChild(shape('s-circle'));
+    u.appendChild(h('span', null, 'Claude has not seen this yet'));
+    return u;
+  }
   function label(status) { return LABELS[status] || String(status); }
   function findCard(id) {
     if (!current) return null;
@@ -770,7 +782,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   function clearError() { elBanner.hidden = true; }
   $('banner-close').addEventListener('click', () => {
     clearError();
-    if (panel && panel.drawer) panel.drawer.focus({ preventScroll: true });
+    if (panel && panel.root) panel.root.focus({ preventScroll: true });
   });
 
   // ---------- theme ----------
@@ -824,7 +836,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     const b = h('button', 'btn' + (cls ? ' ' + cls : ''), text);
     b.type = 'button';
     b.dataset.busykey = key;
-    b.addEventListener('click', () => { if (!inflight[key] && b.dataset.off !== '1') onClick(b); });
+    b.addEventListener('click', () => { if (!inflight[key] && b.dataset.off !== '1') onClick(); });
     return b;
   }
   function setOff(b, off) { b.dataset.off = off ? '1' : '0'; b.disabled = off || !!inflight[b.dataset.busykey]; }
@@ -945,6 +957,15 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     appliedSeq = ++pollSeq;                     // older polls still in flight are ignored
     lastRaw = null;
     apply(Object.assign({}, current, { cards }));
+  }
+
+  // Remove a card from the state at once (it was just deleted on the server); older polls still in flight are ignored.
+  function dropCard(id) {
+    if (!current || !current.cards.some((c) => c.id === id)) return;
+    appliedSeq = ++pollSeq;
+    lastRaw = null;
+    current = Object.assign({}, current, { cards: current.cards.filter((c) => c.id !== id) });
+    currentKey = JSON.stringify(current);
   }
 
   function apply(data) {
@@ -1338,11 +1359,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     const top = h('div', 'card-top');
     top.appendChild(h('span', 'idchip', card.id));
     const kind = thread ? 'thread' : String(card.kind);
-    const km = h('span', 'kindmark');
-    km.dataset.ck = kind;
-    km.appendChild(shape(CK_SHAPE[kind] || 's-square'));
-    km.appendChild(h('span', null, kind));
-    top.appendChild(km);
+    top.appendChild(kindMark(kind));
     el.appendChild(top);
 
     el.appendChild(h('h3', 'card-title', card.title));
@@ -1361,12 +1378,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       const rt = reportTag(card);
       if (rt) foot.appendChild(rt);
     }
-    if (card.seenByClaude === false) {
-      const u = h('span', 'unseen');
-      u.appendChild(shape('s-circle'));
-      u.appendChild(h('span', null, 'Claude has not seen this yet'));
-      foot.appendChild(u);
-    }
+    if (card.seenByClaude === false) foot.appendChild(unseenEl('span'));
     if (foot.childNodes.length) el.appendChild(foot);
 
     const rs = thread ? reportState(card) : '';
@@ -1672,31 +1684,26 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     (target || elNewBtn).focus({ preventScroll: true });
   }
 
-  function mountDrawer(P, wide) {
+  function mountDrawer(P) {
     const scrim = h('div', 'scrim');
     scrim.addEventListener('click', requestClose);
-    const drawer = h('aside', 'drawer' + (wide ? ' wide' : ''));
+    const drawer = h('aside', 'drawer');
     drawer.setAttribute('role', 'dialog');
     drawer.setAttribute('aria-modal', 'true');
     drawer.setAttribute('aria-labelledby', 'drawer-title');
     drawer.tabIndex = -1;
-    P.drawer = drawer;
+    P.root = drawer;
     elOverlay.replaceChildren(scrim, drawer);
     elOverlay.hidden = false;
     elApp.inert = true;
   }
 
-  function headRow(P, card, createMode) {
+  function headRow(card, createMode) {
     const row = h('div', 'dr-head-row');
     if (createMode) row.appendChild(h('span', 'muted', 'Draft'));
     else {
       row.appendChild(h('span', 'idchip', card.id));
-      const kind = isThread(card) ? 'thread' : card.kind;
-      const km = h('span', 'kindmark');
-      km.dataset.ck = kind;
-      km.appendChild(shape(CK_SHAPE[kind] || 's-square'));
-      km.appendChild(h('span', null, kind));
-      row.appendChild(km);
+      row.appendChild(kindMark(card.kind));
     }
     row.appendChild(h('span', 'grow'));
     const x = plainBtn('×', 'icon ghost', requestClose);
@@ -1715,22 +1722,22 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       else buildTaskPanel(card);
     }
     if (panel) {
-      const first = panel.initialFocus ? panel.initialFocus() : panel.drawer;
-      (first || panel.drawer).focus({ preventScroll: true });
+      const first = panel.initialFocus ? panel.initialFocus() : panel.root;
+      (first || panel.root).focus({ preventScroll: true });
     }
   }
 
   function buildMissing(id) {
     const P = panel = { target: id, type: 'missing', isDirty: null };
-    mountDrawer(P, false);
+    mountDrawer(P);
     const head = h('div', 'dr-head');
-    head.appendChild(headRow(P, { id }, true));
+    head.appendChild(headRow({ id }, true));
     const t = h('h2', 'dr-title', 'Card not found');
     t.id = 'drawer-title';
     head.appendChild(t);
     const body = h('div', 'dr-body');
     body.appendChild(h('p', 'muted', 'There is no card ' + id + ' on this board. It may have been deleted.'));
-    P.drawer.append(head, body);
+    P.root.append(head, body);
     head.querySelector('.dr-head-row .muted').textContent = id;
   }
 
@@ -1739,7 +1746,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     if (!panel || panel.target === 'new') return;
     const card = findCard(panel.target);
     if (!card) {
-      if (panel.type !== 'missing') { const id = panel.target; panel.isDirty = null; if (panel.dispose) panel.dispose(); elOverlay.replaceChildren(); panel = null; buildMissing(id); panel.drawer.focus({ preventScroll: true }); }
+      if (panel.type !== 'missing') { const id = panel.target; removePanel(true); buildMissing(id); panel.root.focus({ preventScroll: true }); }
       return;
     }
     if (panel.type === 'missing') { const id = panel.target; panel = null; buildPanel(id); return; }
@@ -1767,8 +1774,8 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
   function buildTaskPanel(card) {
     const create = !card;
-    const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? panelKey(card) : '', confirmDelete: false, msg: '' };
-    mountDrawer(P, false);
+    const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? panelKey(card) : '', confirmDelete: false };
+    mountDrawer(P);
 
     P.base = create ? { title: '', note: '', status: 'new', kind: 'task' } : { title: card.title, note: card.note || '', status: card.status, kind: card.kind };
     P.baseUpdatedAt = card ? card.updatedAt : '';
@@ -1828,18 +1835,18 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     }
 
     const foot = h('div', 'dr-foot');
-    P.drawer.append(head, body, foot);
+    P.root.append(head, body, foot);
 
     P.isDirty = () => {
       if (fTitle.value !== P.base.title || fNote.value !== P.base.note || fStatus.value !== P.base.status) return true;
       return create ? fKind.value !== P.base.kind : false;
     };
-    P.initialFocus = () => (create ? fTitle : P.drawer);
+    P.initialFocus = () => (create ? fTitle : P.root);
 
     function refreshConflict() {
       conflict.hidden = !(!create && P.isDirty() && P.latestUpdatedAt && P.latestUpdatedAt !== P.baseUpdatedAt);
     }
-    ['input', 'change'].forEach((ev) => body.addEventListener(ev, () => { P.msg = ''; msgEl.textContent = ''; if (!titleErr.hidden && fTitle.value.trim()) clearTitleErr(); refreshConflict(); }));
+    ['input', 'change'].forEach((ev) => body.addEventListener(ev, () => { msgEl.textContent = ''; if (!titleErr.hidden && fTitle.value.trim()) clearTitleErr(); refreshConflict(); }));
 
     function clearTitleErr() { titleErr.hidden = true; fTitle.removeAttribute('aria-invalid'); fTitle.removeAttribute('aria-describedby'); }
     function setTitleErr(text) { titleErr.textContent = text; titleErr.hidden = false; fTitle.setAttribute('aria-invalid', 'true'); fTitle.setAttribute('aria-describedby', 'title-err'); }
@@ -1851,8 +1858,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       c.appendChild(h('span', 'grow', 'You have unsaved changes. Discard them and close?'));
       const keep = plainBtn('Keep editing', 'small', () => { warnSlot.replaceChildren(); fTitle.focus(); });
       const discard = plainBtn('Discard changes', 'small danger', () => {
-        fTitle.value = P.base.title; fNote.value = P.base.note; fStatus.value = P.base.status;
-        if (fKind) fKind.value = P.base.kind;
+        resetFields();
         warnSlot.replaceChildren();
         navigateClose();
       });
@@ -1879,7 +1885,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
             const made = await api('POST', pp(pk, 'cards'), bodyObj);
             wrote();
             applyCard(made, pk);
-            fTitle.value = P.base.title; fNote.value = P.base.note; fStatus.value = P.base.status; fKind.value = P.base.kind;
+            resetFields();
             if (panel === P && pk === selKey) {
               history.replaceState(null, '', location.pathname + location.search + hashFor(pk, made.id));
               syncFromHash();
@@ -1889,15 +1895,14 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
             if (newTitle !== P.base.title) patch.title = newTitle;
             if (fNote.value !== P.base.note) patch.note = fNote.value;
             if (fStatus.value !== P.base.status) patch.status = fStatus.value;
-            if (!Object.keys(patch).length) { P.msg = 'No changes to save.'; msgEl.textContent = P.msg; return; }
+            if (!Object.keys(patch).length) { msgEl.textContent = 'No changes to save.'; return; }
             const saved = await api('PATCH', pp(pk, 'cards/' + encodeURIComponent(card.id)), patch);
             wrote();
             P.base = { title: saved.title, note: saved.note || '', status: saved.status, kind: saved.kind };
             P.baseUpdatedAt = saved.updatedAt;
             P.latestUpdatedAt = saved.updatedAt;
             if (fTitle.value === saved.title) fTitle.value = saved.title; else if (fTitle.value.trim() === saved.title) fTitle.value = saved.title;
-            P.msg = 'Saved.';
-            msgEl.textContent = P.msg;
+            msgEl.textContent = 'Saved.';
             applyCard(saved, pk);
             refreshConflict();
           }
@@ -1906,9 +1911,12 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       poll();
     }
 
-    function cancel() {
+    function resetFields() {
       fTitle.value = P.base.title; fNote.value = P.base.note; fStatus.value = P.base.status;
       if (fKind) fKind.value = P.base.kind;
+    }
+    function cancel() {
+      resetFields();
       navigateClose();
     }
 
@@ -1948,8 +1956,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         catch (e) { showError(e.message); P.confirmDelete = false; }
       });
       if (ok && panel === P && pk === selKey) {
-        const idx = current.cards.findIndex((c) => c.id === id);
-        if (idx >= 0) { const cards = current.cards.slice(); cards.splice(idx, 1); appliedSeq = ++pollSeq; lastRaw = null; current = Object.assign({}, current, { cards }); currentKey = JSON.stringify(current); }
+        dropCard(id);
         P.isDirty = null;
         returnFocus = { el: elNewBtn };
         navigateClose();
@@ -1972,13 +1979,11 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     P.update = (c) => {
       P.latestUpdatedAt = c.updatedAt;
       title.textContent = c.title;
-      headRowWrap.replaceChildren(headRow(P, c, false));
+      headRowWrap.replaceChildren(headRow(c, false));
       seenWrap.replaceChildren();
       if (c.seenByClaude === false) {
-        const u = h('div', 'unseen');
+        const u = unseenEl('div');
         u.style.marginTop = '6px';
-        u.appendChild(shape('s-circle'));
-        u.appendChild(h('span', null, 'Claude has not seen this yet'));
         seenWrap.appendChild(u);
       }
       // follow the server only for fields the user has not touched
@@ -1997,19 +2002,19 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     };
 
     if (create) {
-      headRowWrap.appendChild(headRow(P, null, true));
+      headRowWrap.appendChild(headRow(null, true));
     } else {
       P.update(card);
     }
     renderFoot();
 
-    P.drawer.addEventListener('keydown', (e) => {
+    P.root.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); if (!P.confirmDelete) save(); }
       else if (e.key === 'Enter' && e.target === fTitle && !e.isComposing) { e.preventDefault(); save(); }
     });
   }
 
-  // ---------- thread panel ----------
+  // ---------- thread workspace ----------
 
   function copyText(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -2074,9 +2079,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     const ws = h('section', 'ws');
     ws.setAttribute('role', 'dialog');
     ws.setAttribute('aria-modal', 'true');
-    ws.setAttribute('aria-labelledby', 'drawer-title');
+    ws.setAttribute('aria-labelledby', 'ws-title');
     ws.tabIndex = -1;
-    P.drawer = ws;
+    P.root = ws;
     elOverlay.replaceChildren(ws);
     elOverlay.hidden = false;
     elApp.inert = true;
@@ -2090,7 +2095,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     };
     KINDS.forEach((k) => { delete traceHidden[k]; });
     mountWorkspace(P);
-    const ws = P.drawer;
+    const ws = P.root;
 
     // ----- top bar -----
     const bar = h('header', 'ws-bar');
@@ -2104,7 +2109,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     back.addEventListener('click', requestClose);
     const chip = h('span', 'idchip', card.id);
     const titleEl = h('h2', 'ws-title');
-    titleEl.id = 'drawer-title';
+    titleEl.id = 'ws-title';
     const meta = h('div', 'ws-meta');
     const actions = h('div', 'ws-actions');
     bar.append(back, chip, titleEl, meta, actions);
@@ -2282,10 +2287,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       const st = h('span'); st.append('Started ', timeEl(started));
       meta.appendChild(st);
       meta.appendChild(h('span', 'tnum', turns.length + (turns.length === 1 ? ' turn' : ' turns')));
-      if (c.seenByClaude === false) {
-        const u = h('span', 'unseen'); u.appendChild(shape('s-circle')); u.appendChild(h('span', null, 'Claude has not seen this yet'));
-        meta.appendChild(u);
-      }
+      if (c.seenByClaude === false) meta.appendChild(unseenEl('span'));
     }
 
     // ----- trace (right pane) -----
@@ -2659,9 +2661,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         catch (e) { showError(e.message); P.confirm = null; }
       });
       if (ok && panel === P && pk === selKey) {
-        const cards = current.cards.filter((x) => x.id !== card.id);
-        appliedSeq = ++pollSeq; lastRaw = null;
-        current = Object.assign({}, current, { cards }); currentKey = JSON.stringify(current);
+        dropCard(card.id);
         returnFocus = { el: elNewBtn };
         navigateClose();
         renderBoard(false);
@@ -2699,14 +2699,13 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     applyPanes();
     P.update(card);
     renderActions(card);
-    P.initialFocus = () => P.drawer;
   }
 
   // ---------- global keys ----------
 
   function trapList() {
     const sel = 'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [tabindex="0"]';
-    const list = Array.from(panel.drawer.querySelectorAll(sel)).filter((e) => e.tabIndex >= 0 && !e.closest('[hidden]') && e.getClientRects().length);
+    const list = Array.from(panel.root.querySelectorAll(sel)).filter((e) => e.tabIndex >= 0 && !e.closest('[hidden]') && e.getClientRects().length);
     if (!elBanner.hidden) list.push($('banner-close'));
     return list;
   }
@@ -2719,9 +2718,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         const list = trapList();
         if (!list.length) { e.preventDefault(); return; }
         const first = list[0], last = list[list.length - 1], a = document.activeElement;
-        const inside = panel.drawer.contains(a) || a === $('banner-close');
+        const inside = panel.root.contains(a) || a === $('banner-close');
         if (!inside) { e.preventDefault(); first.focus(); }
-        else if (e.shiftKey && (a === first || a === panel.drawer)) { e.preventDefault(); last.focus(); }
+        else if (e.shiftKey && (a === first || a === panel.root)) { e.preventDefault(); last.focus(); }
         else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
       }
       return;

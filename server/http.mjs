@@ -2,7 +2,7 @@
 import http from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { chmodSync, linkSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as core from './core.mjs';
 
@@ -10,18 +10,8 @@ const MAX_BODY = 64 * 1024;
 const MAX_PORT_TRIES = 20;
 const BOARD_FILE = new URL('./board.html', import.meta.url);
 const DEFAULT_PORT = 47800;
-const KEY_RE = /^[0-9a-f]{12}$/;
 const TOKEN_RE = /^[0-9a-f]{32,64}$/;
 const WRITE_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
-
-const VERSION = (() => {
-  try {
-    const v = JSON.parse(readFileSync(new URL('../.claude-plugin/plugin.json', import.meta.url), 'utf8')).version;
-    return typeof v === 'string' && v ? v : 'unknown';
-  } catch {
-    return 'unknown';
-  }
-})();
 
 function log(...a) {
   try { process.stderr.write('[thread/http] ' + a.join(' ') + '\n'); } catch { /* ignore */ }
@@ -34,10 +24,6 @@ function basePort() {
 
 function dataKey() {
   return createHash('sha1').update(resolve(core.dataDir())).digest('hex').slice(0, 12);
-}
-
-function dirExists(p) {
-  try { return statSync(p).isDirectory(); } catch { return false; }
 }
 
 function tokenOk(given, expected) {
@@ -150,7 +136,7 @@ async function handleProject(req, res, projectDir, sub) {
     return;
   }
 
-  const present = dirExists(projectDir);
+  const present = core.dirExists(projectDir);
   if (!isState && !present) {
     req.resume();
     send(res, 409, { error: `project folder not found: ${projectDir}` });
@@ -160,7 +146,7 @@ async function handleProject(req, res, projectDir, sub) {
   if (isState) {
     // A project whose folder is gone is read-only: no reconcile, no write.
     const state = present ? await core.reconcile(projectDir) : core.readState(projectDir);
-    send(res, 200, { projectDir, exists: present, statuses: core.STATUSES, cards: state.cards.map(withViews), sessions: sessionsView(state) });
+    send(res, 200, { projectDir, exists: present, cards: state.cards.map(withViews), sessions: sessionsView(state) });
     return;
   }
 
@@ -177,12 +163,6 @@ async function handleProject(req, res, projectDir, sub) {
     requireJson(req);
     const body = await readJsonBody(req);
     const args = pick(body, ['title', 'note', 'status']);
-    if (args.status !== undefined) {
-      const existing = core.readState(projectDir).cards.find((c) => c.id === cm[1]);
-      if (existing && existing.kind === 'thread' && existing.status !== args.status) {
-        throw new HttpError(400, 'thread status follows the thread');
-      }
-    }
     const card = await core.updateCard(projectDir, cm[1], args, { source: 'user' });
     send(res, 200, card);
     return;
@@ -197,8 +177,8 @@ async function handleProject(req, res, projectDir, sub) {
   requireJson(req);
   const body = await readJsonBody(req);
   const card = tm[2] === 'messages'
-    ? await core.continueThread(projectDir, tm[1], body && body.message)
-    : await core.endThread(projectDir, tm[1]);
+    ? await core.continueThread(projectDir, tm[1], body.message)
+    : (await core.endThread(projectDir, tm[1])).card;
   send(res, 200, withViews(card));
 }
 
@@ -211,7 +191,7 @@ function projectsView(homeDir) {
       key: homeKey,
       projectDir: homeDir,
       name: parts.length ? parts[parts.length - 1] : String(homeDir),
-      exists: dirExists(homeDir),
+      exists: core.dirExists(homeDir),
       cards: 0,
       threads: 0,
       running: 0,
@@ -238,14 +218,14 @@ function makeHandler(homeDir, token) {
         const html = await readFile(BOARD_FILE);
         send(res, 200, html, { 'Content-Type': 'text/html; charset=utf-8' });
       } catch (e) {
-        if (e && e.code === 'ENOENT') send(res, 503, 'board.html is not available yet');
-        else { log('board.html read failed:', e && e.message); send(res, 503, 'board.html could not be read'); }
+        log('board.html read failed:', e && e.message);
+        send(res, 503, 'board.html could not be read');
       }
       return;
     }
 
     if (method === 'GET' && path === '/api/ping') {
-      send(res, 200, { app: 'thread-board', version: VERSION, dataKey: dataKey() });
+      send(res, 200, { app: 'thread-board', version: core.VERSION, dataKey: dataKey() });
       return;
     }
 
@@ -272,7 +252,7 @@ function makeHandler(homeDir, token) {
     if (pm) {
       const key = pm[1];
       const sub = pm[2] || '';
-      if (!KEY_RE.test(key)) {
+      if (!core.KEY_RE.test(key)) {
         req.resume();
         send(res, 404, { error: 'unknown project' });
         return;
@@ -318,8 +298,7 @@ function withViews(card) {
 // Every known session plus every parent session named on a thread card.
 function sessionsView(state) {
   const out = {};
-  const known = state.sessions && typeof state.sessions === 'object' && !Array.isArray(state.sessions) ? state.sessions : {};
-  for (const [id, rec] of Object.entries(known)) {
+  for (const [id, rec] of Object.entries(core.sessionsOf(state))) {
     out[id] = { name: (rec && rec.name) || '', label: core.sessionLabel(state, id), lastSeenAt: (rec && rec.lastSeenAt) || null };
   }
   for (const c of state.cards) {
@@ -347,7 +326,7 @@ function listenOnce(server, port) {
   });
 }
 
-export async function startBoardServer(projectDir, { port, token, exact } = {}) {
+export async function startBoardServer(projectDir, { port = 0, token } = {}) {
   const handle = makeHandler(projectDir, token);
   const server = http.createServer((req, res) => {
     handle(req, res).catch((e) => {
@@ -362,22 +341,11 @@ export async function startBoardServer(projectDir, { port, token, exact } = {}) 
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
 
-  const base = port === undefined || port === null ? basePort() : port;
-  const tries = base === 0 || exact ? 1 : MAX_PORT_TRIES;
-  let lastErr;
-  for (let i = 0; i < tries; i++) {
-    try {
-      await listenOnce(server, base === 0 ? 0 : base + i);
-      lastErr = null;
-      break;
-    } catch (e) {
-      lastErr = e;
-      if (!e || e.code !== 'EADDRINUSE') break;
-    }
-  }
-  if (lastErr) {
+  try {
+    await listenOnce(server, port);
+  } catch (e) {
     try { server.close(); } catch { /* ignore */ }
-    throw lastErr;
+    throw e;
   }
   server.on('error', (e) => log('server error:', e && e.message));
   const actual = server.address().port;
@@ -465,7 +433,7 @@ export async function ensureBoard(projectDir, { port } = {}) {
     const p = base === 0 ? 0 : base + i;
     if (p > 65535) break;
     try {
-      const b = await startBoardServer(projectDir, { port: p, token, exact: true });
+      const b = await startBoardServer(projectDir, { port: p, token });
       return { url: b.url, owned: true, server: b.server };
     } catch (e) {
       lastErr = e;

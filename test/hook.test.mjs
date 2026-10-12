@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { setupThreadEnv, runNode, cleanAmbientEnv, writeStateFile, emptyState, threadCard, HOOK_PATH, PARENT_SESSION } from './helpers.mjs';
 import * as core from '../server/core.mjs';
 
 cleanAmbientEnv();
-delete process.env.THREAD_DEPTH;
-delete process.env.CLAUDE_CODE_SESSION_ID;
 
 function hook(e, event, input, extraEnv = {}) {
   const env = { ...process.env, CLAUDE_PROJECT_DIR: e.projectDir, THREAD_DATA_DIR: e.dataDir, ...extraEnv };
@@ -134,4 +135,23 @@ test('THREAD_DEPTH=1 gives no output and exit code 0', async (t) => {
     assert.equal(r.stdout.trim(), '', event);
   }
   assert.equal(core.readState(e.projectDir).cards[0].thread.announced, false);
+});
+
+test('a core module that fails to load still gives the SessionStart note, and silence on UserPromptSubmit', async (t) => {
+  const e = setupThreadEnv(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'thread-hook-alone-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const lone = path.join(dir, 'scripts', 'hook.mjs');
+  fs.mkdirSync(path.dirname(lone));
+  fs.copyFileSync(HOOK_PATH, lone); // no ../server/core.mjs beside this copy
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: e.projectDir, THREAD_DATA_DIR: e.dataDir };
+  const run = (event) => runNode([lone, event], { env, cwd: e.projectDir, input: JSON.stringify({ session_id: PARENT_SESSION, cwd: e.projectDir, hook_event_name: event }) });
+
+  const start = await run('SessionStart');
+  assert.equal(start.code, 0);
+  assert.ok(JSON.parse(start.stdout).hookSpecificOutput.additionalContext.includes(PARENT_SESSION));
+
+  const prompt = await run('UserPromptSubmit');
+  assert.equal(prompt.code, 0);
+  assert.equal(prompt.stdout, '');
 });
