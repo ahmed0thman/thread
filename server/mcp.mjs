@@ -210,7 +210,7 @@ function startedBy(state, c, caller) {
 
 function threadLine(c, state, caller) {
   const t = c.thread;
-  return `${c.id} "${core.clip(c.title, 80)}" — ${t.runState}, mode ${t.mode}, ${t.turns.length} turn(s), reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, session ${t.sessionId || 'not known yet'}`;
+  return `${c.id} "${core.clip(c.title, 80)}" — ${t.runState}, mode ${t.mode}, ${t.turns.length} turn(s), reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, session ${t.sessionId || 'not known yet'}${t.reportRequestedAt ? ', report requested' : ''}`;
 }
 
 // The answer to a report or end that came from a session other than the one

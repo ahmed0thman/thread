@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Hook entry point for the thread plugin. Any failure exits 0 with no output.
 
-const MAX_CONTEXT = 600;
+const MAX_CONTEXT = 600; // the notices; report requests are kept whole
+const MAX_TOTAL = 1500;
 
 function readStdin(ms) {
   return new Promise((resolve) => {
@@ -69,14 +70,15 @@ async function main() {
 
   if (event === 'UserPromptSubmit') {
     if (!core || !projectDir) return;
-    const { reconcile, pendingAnnouncements, readState } = core;
+    const { reconcile, pendingAnnouncements, pendingReportRequests, readState } = core;
 
     await reconcile(projectDir);
     const announced = await pendingAnnouncements(projectDir, sessionId);
+    const requested = await pendingReportRequests(projectDir, sessionId);
     const state = readState(projectDir);
     const unseen = state.cards.filter((c) => c.seenByClaude === false);
 
-    if (!announced.length && !unseen.length) return;
+    if (!announced.length && !unseen.length && !requested.length) return;
 
     const lines = [];
     for (const c of announced) {
@@ -89,8 +91,12 @@ async function main() {
     if (unseen.length) {
       lines.push(`${unseen.length} new board card${unseen.length === 1 ? '' : 's'} from the user — call board_list when the current task allows`);
     }
-    let text = lines.join('\n');
-    if (text.length > MAX_CONTEXT) text = text.slice(0, MAX_CONTEXT - 1) + '…';
+    let notices = lines.join('\n');
+    if (notices.length > MAX_CONTEXT) notices = notices.slice(0, MAX_CONTEXT - 1) + '…';
+    // The user asked for these by clicking, so they come first and are not cut by the notices' cap.
+    const asks = requested.map((c) => `The user clicked "Report to main session" on the board for thread ${c.id} "${core.clip(c.title, 50)}". Call thread_report with id "${c.id}" now and give them the digest.`);
+    let text = [...asks, notices].filter(Boolean).join('\n');
+    if (text.length > MAX_TOTAL) text = text.slice(0, MAX_TOTAL - 1) + '…';
     await emit('UserPromptSubmit', text);
   }
 }

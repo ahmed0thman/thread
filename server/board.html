@@ -256,7 +256,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .tag .shape { width: 9px; height: 9px; color: inherit; }
 .tag.attn { color: var(--warn); background: var(--warn-bg); box-shadow: inset 0 0 0 1px var(--warn); }
 .tag.quiet { color: var(--muted); font-weight: 500; padding-left: 0; }
+.tag.queued { color: var(--accent); background: var(--accent-bg); box-shadow: inset 0 0 0 1px var(--accent); }
 .ws-rep .btn { min-width: 150px; }
+.ws-rep .btn.narrow { min-width: 0; }
 .ws-rep { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); }
 .kindmark { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .kindmark .shape { width: 9px; height: 9px; }
@@ -341,6 +343,13 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .dr-foot .grow { flex: 1 1 auto; }
 .foot-note { font-size: 12px; color: var(--muted); }
 .confirm-text { font-weight: 600; }
+.start-step { flex: 1 1 100%; display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.start-step p { margin: 0; }
+.start-mode { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.start-mode legend { padding: 0 0 5px; font-size: 12px; font-weight: 650; color: var(--muted); }
+.radio { display: flex; align-items: center; gap: var(--s2); cursor: pointer; }
+.radio input { margin: 0; accent-color: var(--accent); }
+.start-btns { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
 
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field label { font-size: 12px; font-weight: 650; color: var(--muted); }
@@ -377,10 +386,12 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 }
 .ws-meta { flex: 0 1 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--s3); font-size: 12.5px; color: var(--muted); }
 .ws-from { max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-queued { flex: 1 1 100%; order: 5; margin: 0; font-size: 12.5px; color: var(--muted); }
 .ws-actions { flex: none; margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s2); max-width: 100%; }
 .chev { display: inline-block; width: 7px; height: 7px; border: solid currentColor; border-width: 0 2px 2px 0; flex: none; }
 .chev.l { transform: rotate(135deg); margin-left: 3px; }
 .chev.r { transform: rotate(-45deg); margin-right: 3px; }
+.chev.d { transform: rotate(45deg); margin-top: -3px; }
 
 .ws-main { flex: 1 1 0; min-height: 0; display: flex; }
 .ws-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
@@ -504,6 +515,33 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .typing .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--run); animation: blink 1.2s infinite; }
 .typing .dots i:nth-child(2) { animation-delay: 0.2s; }
 .typing .dots i:nth-child(3) { animation-delay: 0.4s; }
+
+/* activity: the work a turn did, between the prompt and the reply */
+.act { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin: 2px 0 6px; }
+.act-toggle {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px 0 8px;
+  background: none; border: 1px solid var(--border); border-radius: var(--r2); cursor: pointer;
+  color: var(--muted); font-size: 12.5px; font-weight: 600;
+}
+.act-toggle:hover { background: var(--surface-2); color: var(--text); }
+.act-toggle .chev { width: 6px; height: 6px; }
+.act-list { list-style: none; margin: 0; padding: 0 0 0 var(--s3); border-left: 2px solid var(--border-strong); }
+.act-row { display: grid; grid-template-columns: 8px max-content minmax(0, 1fr) 12px; align-items: center; column-gap: var(--s2); padding: 3px 0; font-size: 12.5px; }
+.act-row[data-state="run"] { --k: var(--run); }
+.act-row[data-state="ok"] { --k: var(--muted); }
+.act-row[data-state="fail"] { --k: var(--fail); }
+.act-row .act-kind { width: 6px; height: 6px; color: var(--muted); opacity: 0.7; }
+.act-verb { font-weight: 600; white-space: nowrap; }
+.act-row[data-state="fail"] .act-verb { color: var(--fail); }
+.act-sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--mono); color: var(--muted); }
+.act-state { justify-self: center; }
+.act-err {
+  grid-column: 2 / -1; margin-top: 3px; padding: 3px 8px; font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--fail-bg); border-left: 3px solid var(--fail); border-radius: var(--r1);
+  display: -webkit-box; -webkit-line-clamp: 4; line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+}
+.act-text { padding: 3px 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.act-row.nested, .act-text.nested { margin-left: var(--s4); }
 
 .composer { flex: none; border-top: 1px solid var(--border); padding: var(--s3) var(--s4); background: var(--surface); display: flex; flex-direction: column; gap: var(--s2); }
 .composer textarea { min-height: 52px; max-height: 40vh; }
@@ -1382,7 +1420,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     if (foot.childNodes.length) el.appendChild(foot);
 
     const rs = thread ? reportState(card) : '';
-    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (rs === 'not' ? ', not reported' : rs === 'yes' ? ', reported' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
+    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
 
     el.addEventListener('click', () => {
       if (Date.now() - lastDragEnd < 200) return;
@@ -1406,21 +1444,34 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     return el;
   }
 
-  // 'not' = a successful result the main session has not pulled, 'yes' = the newest result was pulled, '' = no result yet
+  // 'not' = a successful result the main session has not pulled, 'queued' = the same, with a report requested here,
+  // 'yes' = the newest result was pulled, '' = no result yet
   function reportState(card) {
     const t = card.thread;
     if (!t || t.lastResult === null || t.lastResult === undefined) return '';
-    return t.reported ? 'yes' : 'not';
+    if (t.reported) return 'yes';
+    return t.reportRequestedAt ? 'queued' : 'not';
   }
+  const REPORT_TAG = {
+    not: ['attn', 's-diamond', 'Not reported', 'The main session has not pulled this thread’s result yet'],
+    queued: ['queued', 's-dring', 'Report queued', 'The main session will pull this result with your next message'],
+    yes: ['quiet', 's-ring', 'Reported', 'The main session has pulled this thread’s newest result'],
+  };
   function reportTag(card) {
-    const st = reportState(card);
-    if (!st) return null;
-    const tag = h('span', 'tag ' + (st === 'not' ? 'attn' : 'quiet'));
-    tag.appendChild(shape(st === 'not' ? 's-diamond' : 's-ring'));
-    tag.appendChild(h('span', null, st === 'not' ? 'Not reported' : 'Reported'));
-    tag.title = st === 'not' ? 'The main session has not pulled this thread’s result yet' : 'The main session has pulled this thread’s newest result';
+    const spec = REPORT_TAG[reportState(card)];
+    if (!spec) return null;
+    const tag = h('span', 'tag ' + spec[0]);
+    tag.appendChild(shape(spec[1]));
+    tag.appendChild(h('span', null, spec[2]));
+    tag.title = spec[3];
     return tag;
   }
+  // a web page cannot write into a Claude session, so a request waits for the main session's next message
+  function queuedSentence(card) {
+    const p = card.thread.parentSessionId;
+    return 'Queued: it will be delivered with your next message in ' + (p ? sessionLabel(p) : 'the main session') + '.';
+  }
+  function stepsText(n) { return n + (n === 1 ? ' step' : ' steps'); }
 
   function runPill(state) {
     const p = h('span', 'pill');
@@ -1750,6 +1801,8 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       return;
     }
     if (panel.type === 'missing') { const id = panel.target; panel = null; buildPanel(id); return; }
+    // a task that just became a thread (started here or elsewhere) opens as the workspace under the same address
+    if (panel.type === 'task' && isThread(card)) { const id = panel.target; removePanel(true); buildPanel(id); return; }
     const key = panelKey(card);
     if (key === panel.cardKey) return;
     panel.cardKey = key;
@@ -1774,7 +1827,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
   function buildTaskPanel(card) {
     const create = !card;
-    const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? panelKey(card) : '', confirmDelete: false };
+    const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? panelKey(card) : '', confirmDelete: false, starting: false };
     mountDrawer(P);
 
     P.base = create ? { title: '', note: '', status: 'new', kind: 'task' } : { title: card.title, note: card.note || '', status: card.status, kind: card.kind };
@@ -1846,7 +1899,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     function refreshConflict() {
       conflict.hidden = !(!create && P.isDirty() && P.latestUpdatedAt && P.latestUpdatedAt !== P.baseUpdatedAt);
     }
-    ['input', 'change'].forEach((ev) => body.addEventListener(ev, () => { msgEl.textContent = ''; if (!titleErr.hidden && fTitle.value.trim()) clearTitleErr(); refreshConflict(); }));
+    ['input', 'change'].forEach((ev) => body.addEventListener(ev, () => { msgEl.textContent = ''; if (!titleErr.hidden && fTitle.value.trim()) clearTitleErr(); refreshConflict(); syncStart(); }));
 
     function clearTitleErr() { titleErr.hidden = true; fTitle.removeAttribute('aria-invalid'); fTitle.removeAttribute('aria-describedby'); }
     function setTitleErr(text) { titleErr.textContent = text; titleErr.hidden = false; fTitle.setAttribute('aria-invalid', 'true'); fTitle.setAttribute('aria-describedby', 'title-err'); }
@@ -1920,8 +1973,62 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       navigateClose();
     }
 
+    // The Start as thread button, or its Start button once the step is open: both wait for saved fields.
+    let startBtn = null, goBtn = null, whyEl = null;
+    function syncStart() {
+      const why = isRO() ? READONLY_WHY : P.isDirty() ? 'Save or discard your changes first' : '';
+      if (startBtn) { startBtn.disabled = !!why; startBtn.title = why; }
+      if (goBtn) { setOff(goBtn, !!why); whyEl.textContent = why; }
+    }
+    // known sessions of this project, most recently active first
+    function startSessions() {
+      const all = (current && current.sessions) || {};
+      return Object.keys(all).map((id) => [id, all[id] || {}]).sort((a, b) => String(b[1].lastSeenAt || '').localeCompare(String(a[1].lastSeenAt || '')));
+    }
+
     function renderFoot(focusFirst) {
       foot.replaceChildren();
+      startBtn = goBtn = whyEl = null;
+      if (P.starting) {
+        const step = h('div', 'start-step');
+        step.appendChild(h('p', null, 'This card becomes a thread: a background copy of the session you choose, working on this card’s title and note.'));
+        const list = startSessions();
+        const cancel = plainBtn('Cancel', null, () => { P.starting = false; renderFoot(); startBtn.focus(); });
+        if (!list.length) {
+          step.appendChild(h('p', 'muted', 'No Claude session has been seen in this project yet. Open the project in Claude Code and send one message, then try again.'));
+          step.appendChild(h('div', 'start-btns')).appendChild(cancel);
+          if (focusFirst) cancel.focus();
+        } else {
+          const sel = h('select', 'input');
+          list.forEach(([id, info]) => {
+            const o = h('option', null, (info.label || sessionLabel(id)) + (info.lastSeenAt ? ' · last active ' + rel(info.lastSeenAt) : ''));
+            o.value = id;
+            sel.appendChild(o);
+          });
+          step.appendChild(field('Session to copy', sel, 'f-start-session'));
+          const modes = h('fieldset', 'start-mode');
+          modes.appendChild(h('legend', null, 'Mode'));
+          const radios = [['read', 'Read-only'], ['write', 'Can edit files']].map(([value, text]) => {
+            const r = h('input');
+            r.type = 'radio'; r.name = 'start-mode'; r.value = value; r.checked = value === 'read';
+            const l = h('label', 'radio');
+            l.append(r, h('span', null, text));
+            modes.appendChild(l);
+            return r;
+          });
+          modes.appendChild(h('p', 'foot-note', 'Edits the same files as your main session.'));
+          step.appendChild(modes);
+          goBtn = actionBtn('Start', 'primary', 'start:' + selKey + ':' + card.id, () => doStart(sel.value, radios.find((r) => r.checked).value));
+          whyEl = h('span', 'foot-note');
+          whyEl.setAttribute('role', 'status');
+          step.appendChild(h('div', 'start-btns')).append(goBtn, cancel, whyEl);
+          if (focusFirst) sel.focus();
+        }
+        foot.appendChild(step);
+        syncBusy();
+        syncStart();
+        return;
+      }
       if (P.confirmDelete) {
         foot.appendChild(h('span', 'confirm-text', 'Delete ' + card.id + '? This cannot be undone.'));
         foot.appendChild(h('span', 'grow'));
@@ -1940,11 +2047,25 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       foot.append(saveBtn, plainBtn('Cancel', null, cancel), msgEl);
       foot.appendChild(h('span', 'grow'));
       if (!create) {
+        startBtn = plainBtn('Start as thread', null, () => { P.starting = true; renderFoot(true); });
+        foot.appendChild(startBtn);
         const del = plainBtn('Delete', 'danger', () => { P.confirmDelete = true; renderFoot(true); });
         if (ro) { del.disabled = true; del.title = READONLY_WHY; }
         foot.appendChild(del);
+        syncStart();
       }
       syncBusy();
+    }
+
+    // The server turns the card into a thread under the same id; updatePanel then swaps this drawer for the workspace.
+    async function doStart(sessionId, mode) {
+      clearError();
+      const pk = selKey;
+      await runAction('start:' + pk + ':' + card.id, async () => {
+        try { const started = await api('POST', pp(pk, 'cards/' + encodeURIComponent(card.id) + '/start'), { sessionId, mode }); wrote(); applyCard(started, pk); }
+        catch (e) { showError(e.message); }
+      });
+      poll();
     }
 
     async function doDelete(id) {
@@ -1972,7 +2093,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       roShown = ro;
       roNote.hidden = !ro;
       [fTitle, fNote, fStatus, fKind].forEach((f) => { if (f) { f.disabled = ro; f.title = ro ? READONLY_WHY : ''; } });
-      if (ro) P.confirmDelete = false;
+      if (ro) P.confirmDelete = P.starting = false;
       renderFoot();
     }
 
@@ -2009,7 +2130,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     renderFoot();
 
     P.root.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); if (!P.confirmDelete) save(); }
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); if (!P.confirmDelete && !P.starting) save(); }
       else if (e.key === 'Enter' && e.target === fTitle && !e.isComposing) { e.preventDefault(); save(); }
     });
   }
@@ -2063,6 +2184,8 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
   const VIEWS = [['conversation', 'Conversation'], ['about', 'About'], ['trace', 'Trace']];
   const traceHidden = {};   // kinds switched off in the Trace filters, kept across polls
+  const actCache = {};      // events of finished turns, by project, card, turn and start time: fetched once per page session
+  const TOOL_VERB = { Read: 'Read', Bash: 'Ran', Grep: 'Searched', Glob: 'Searched', WebFetch: 'Fetched', WebSearch: 'Searched the web', Edit: 'Edited', Write: 'Edited', Task: 'Delegated' };
   const WS_KEY = 'thread-board-panes';
   const wsCollapsed = (function () {
     try {
@@ -2092,6 +2215,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       target: card.id, type: 'thread', cardKey: panelKey(card), isDirty: null, view: 'conversation',
       confirm: null, keys: {}, scrollSaved: { about: 0, conversation: 0, trace: 0 }, convAtBottom: true, scrollers: {},
       narrow: false, flash: null,
+      live: null, actOpen: {}, actState: {}, actBusy: false, actTimer: null,   // activity: see "activity" below
     };
     KINDS.forEach((k) => { delete traceHidden[k]; });
     mountWorkspace(P);
@@ -2112,7 +2236,10 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     titleEl.id = 'ws-title';
     const meta = h('div', 'ws-meta');
     const actions = h('div', 'ws-actions');
-    bar.append(back, chip, titleEl, meta, actions);
+    const queuedNote = h('p', 'ws-queued');
+    queuedNote.setAttribute('role', 'status');
+    queuedNote.hidden = true;
+    bar.append(back, chip, titleEl, meta, actions, queuedNote);
 
     // ----- view tabs (single-pane layout only) -----
     const tabs = h('div', 'tabs ws-tabs');
@@ -2241,6 +2368,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     if (mq) { if (mq.addEventListener) mq.addEventListener('change', onMq); else mq.addListener(onMq); }
     P.dispose = () => {
       clearTimeout(P.flashTimer);
+      clearTimeout(P.actTimer);
       if (mq) { if (mq.removeEventListener) mq.removeEventListener('change', onMq); else mq.removeListener(onMq); }
     };
 
@@ -2275,19 +2403,42 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       if (rt) {
         const wrap = h('span', 'ws-rep');
         wrap.appendChild(rt);
-        if (reportState(c) === 'not') {
+        const rs = reportState(c);
+        if (rs !== 'yes') {
           const cb = copyBtn('/thread:report ' + c.id, 'report command', 'Copy report command');
           cb.dataset.fid = 'c-report-bar';
           wrap.appendChild(cb);
+          const queued = rs === 'queued';
+          const rb = actionBtn(queued ? 'Cancel' : 'Report to main session', queued ? 'small narrow' : 'small', 'report:' + selKey + ':' + c.id, () => setReportRequest(!queued));
+          rb.dataset.fid = 'c-report-req';
+          if (queued) rb.setAttribute('aria-label', 'Cancel the queued report');
+          if (isRO()) { setOff(rb, true); rb.title = READONLY_WHY; }
+          wrap.appendChild(rb);
         }
         meta.appendChild(wrap);
       }
+      queuedNote.hidden = reportState(c) !== 'queued';
+      queuedNote.textContent = queuedNote.hidden ? '' : queuedSentence(c);
       const turns = turnsOf(c);
       const started = turns.length ? turns[0].startedAt : c.createdAt;
       const st = h('span'); st.append('Started ', timeEl(started));
       meta.appendChild(st);
       meta.appendChild(h('span', 'tnum', turns.length + (turns.length === 1 ? ' turn' : ' turns')));
       if (c.seenByClaude === false) meta.appendChild(unseenEl('span'));
+      syncBusy();
+    }
+    // Ask for the report to be delivered with the main session's next message, or take the request back.
+    async function setReportRequest(on) {
+      clearError();
+      const pk = selKey;
+      await runAction('report:' + pk + ':' + card.id, async () => {
+        try { applyCard(await api(on ? 'POST' : 'DELETE', pp(pk, 'threads/' + encodeURIComponent(card.id) + '/report-request'), {}), pk); wrote(); }
+        catch (e) { showError(e.message); }
+      });
+      // the clicked button was replaced (and disabled while busy), so focus would fall to the page
+      const next = meta.querySelector('[data-fid="c-report-req"]');
+      if (panel === P && next && (!document.activeElement || document.activeElement === document.body)) next.focus({ preventScroll: true });
+      poll();
     }
 
     // ----- trace (right pane) -----
@@ -2352,7 +2503,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
             rail.appendChild(stepEl('error', x.t.error || 'The turn failed without an error message.', null, x.i, 'e' + x.i));
           } else if (x.state === 'running') {
             const li = stepEl('working', '', null, x.i, 'w' + x.i);
-            li.querySelector('.step-text').append('working… ', elapsedEl(x.t.startedAt));
+            li.querySelector('.step-text').append('working… ', elapsedEl(x.t.startedAt), h('span', 'live-steps', liveSteps()));
             rail.appendChild(li);
           } else if (x.state === 'pending') {
             rail.appendChild(stepEl('working', 'No result was recorded for this turn.', null, x.i, 'w' + x.i));
@@ -2414,6 +2565,8 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
           bm.appendChild(h('span', 'tnum', 'turn ' + (i + 1)));
           if (t.finishedAt && t.startedAt) bm.appendChild(h('span', 'tnum', 'took ' + fmtMs(new Date(t.finishedAt) - new Date(t.startedAt))));
           b.appendChild(bm);
+          const act = buildAct(c, i);
+          if (act) b.appendChild(act);
           if (st === 'running') {
             const ty = h('div', 'typing');
             ty.setAttribute('role', 'status');
@@ -2450,6 +2603,137 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         });
         return wrap;
       });
+    }
+
+    // ----- activity: what a turn did, between the prompt and the reply -----
+    // A tool row starts in progress; its result (matched by id) updates the same row.
+    function toolRow(e, result) {
+      const state = !result ? 'run' : result.ok === false ? 'fail' : 'ok';
+      const li = h('li', 'act-row');
+      li.dataset.state = state;
+      const verb = h('span', 'act-verb', TOOL_VERB[e.name] || e.name);
+      if (TOOL_VERB[e.name]) verb.title = e.name;
+      const sum = h('span', 'act-sum', e.summary || '');
+      sum.title = e.summary || '';
+      const mark = shape(state === 'run' ? 's-pulse' : state === 'ok' ? 's-check' : 's-cross');
+      mark.classList.add('act-state');
+      const kind = shape('s-circle');
+      kind.classList.add('act-kind');
+      li.append(kind, verb, sum, mark, h('span', 'sr-only', state === 'run' ? ', in progress' : state === 'ok' ? ', done' : ', failed'));
+      if (state === 'fail') {
+        const err = h('div', 'act-err', result.preview || 'It failed without a message.');
+        err.title = result.preview || '';
+        li.appendChild(err);
+      }
+      return li;
+    }
+    function actList(events, note) {
+      const ul = h('ul', 'act-list');
+      const results = {};
+      events.forEach((e) => { if (e.kind === 'tool_result') results[e.id] = e; });
+      events.forEach((e) => {
+        let li = null;
+        if (e.kind === 'tool') li = toolRow(e, results[e.id]);
+        else if (e.kind === 'text' && e.text && e.text.trim()) { li = h('li', 'act-text', e.text); }
+        else if (e.kind === 'truncated') li = h('li', 'act-text', 'More happened than is shown here.');
+        if (!li) return;
+        if (e.nested) li.classList.add('nested');
+        ul.appendChild(li);
+      });
+      if (note) ul.appendChild(h('li', 'act-text', note));
+      return ul;
+    }
+    const UNAVAILABLE = 'Activity is unavailable right now';
+    const actKey = (c, i) => selKey + ':' + c.id + ':' + (i + 1) + ':' + turnsOf(c)[i].startedAt;
+    function runningTurn(c) { return turnsOf(c).findIndex((tt, i) => turnState(c, i) === 'running'); }
+    function liveSteps() {
+      const n = P.live ? P.live.events.filter((e) => e.kind === 'tool').length : 0;
+      return n ? ' · ' + stepsText(n) + ' so far' : '';
+    }
+
+    // The block above a turn's reply: the live list while it runs, else a disclosure line. null when there is nothing to show.
+    function buildAct(c, i) {
+      const t = turnsOf(c)[i];
+      const wrap = h('div', 'act');
+      wrap.dataset.act = String(i);
+      if (turnState(c, i) === 'running') {
+        const d = P.live && P.live.i === i ? P.live : null;
+        if (!d || !(d.events.length || d.failed)) return null;
+        wrap.appendChild(actList(d.events, d.failed ? UNAVAILABLE : ''));
+        return wrap;
+      }
+      if (!(t.steps > 0)) return null;
+      const open = !!P.actOpen[i];
+      const toggle = h('button', 'act-toggle');
+      toggle.type = 'button';
+      toggle.dataset.fid = 'a-' + i;
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      toggle.append(chev(open ? 'd' : 'r'), h('span', 'tnum', stepsText(t.steps) + (t.finishedAt && t.startedAt ? ' · ' + fmtMs(new Date(t.finishedAt) - new Date(t.startedAt)) : '')));
+      toggle.addEventListener('click', () => toggleAct(i));
+      wrap.appendChild(toggle);
+      if (open) {
+        const key = actKey(c, i);
+        const events = actCache[key];
+        if (events) wrap.appendChild(actList(events, events.length ? '' : 'No activity was recorded for this turn.'));
+        else wrap.appendChild(actList([], P.actState[key] === 'failed' ? UNAVAILABLE : 'Loading…'));
+      }
+      return wrap;
+    }
+    // Swap one turn's activity block in place; the rest of the conversation, its scroll position and its focus stay put.
+    function refreshAct(i) {
+      const c = findCard(P.target);
+      const old = scConvo.querySelector('.act[data-act="' + i + '"]');
+      const fresh = c && isThread(c) ? buildAct(c, i) : null;
+      const host = scConvo.querySelector('.turn[data-turn="' + i + '"] .msg.bot .msg-meta');
+      if (!host || (!old && !fresh)) return;
+      const hadFocus = !!old && old.contains(document.activeElement);
+      const top = scConvo.scrollTop;
+      if (old && fresh) old.replaceWith(fresh);
+      else if (old) old.remove();
+      else host.after(fresh);
+      // swapping the node would otherwise let the browser re-anchor the scroll position
+      scConvo.scrollTop = c && turnState(c, i) === 'running' && P.convAtBottom ? scConvo.scrollHeight : top;
+      if (hadFocus && fresh) { const f = fresh.querySelector('[data-fid]'); if (f) f.focus({ preventScroll: true }); }
+    }
+    function toggleAct(i) {
+      P.actOpen[i] = !P.actOpen[i];
+      const c = findCard(P.target);
+      if (P.actOpen[i] && c) loadAct(c, i);
+      refreshAct(i);
+    }
+    // A finished turn's events never change, so they are fetched once and kept.
+    async function loadAct(c, i) {
+      const key = actKey(c, i);
+      if (actCache[key] || P.actState[key] === 'loading') return;
+      P.actState[key] = 'loading';
+      try { actCache[key] = (await api('GET', pp(selKey, 'threads/' + encodeURIComponent(c.id) + '/activity?turn=' + (i + 1)))).events || []; delete P.actState[key]; }
+      catch (e) { P.actState[key] = 'failed'; }
+      if (panel === P) refreshAct(i);
+    }
+
+    // While a turn runs, fetch its activity every POLL_MS; the next request starts only after the last one ended.
+    async function pollActivity() {
+      P.actTimer = null;
+      const c = findCard(P.target);
+      const i = panel === P && c && isThread(c) ? runningTurn(c) : -1;
+      if (i < 0) { P.live = null; return; }
+      P.actBusy = true;
+      let data = null;
+      try { data = await api('GET', pp(selKey, 'threads/' + encodeURIComponent(P.target) + '/activity?turn=' + (i + 1))); }
+      catch (e) { /* shown as one muted line in the list; the next tick tries again */ }
+      P.actBusy = false;
+      if (panel !== P) return;
+      const kept = P.live && P.live.i === i ? P.live.events : [];
+      P.live = data && Array.isArray(data.events) ? { i, events: data.events, failed: false } : { i, events: kept, failed: true };
+      refreshAct(i);
+      const el = scTrace.querySelector('.live-steps');
+      if (el) el.textContent = liveSteps();
+      P.actTimer = setTimeout(pollActivity, POLL_MS);
+    }
+    function syncActivity(c) {
+      const i = runningTurn(c);
+      if (P.live && P.live.i !== i) P.live = null;
+      if (i >= 0 && !P.actTimer && !P.actBusy) pollActivity();
     }
 
     // ----- composer (pinned under the conversation) -----
@@ -2595,7 +2879,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         if (t.reported) {
           note.appendChild(h('span', 'grow', 'This result has been reported to the main session.'));
         } else {
-          const sp = h('span', 'grow', 'Not reported yet. Run this command in the main session to bring the result into its context.');
+          const sp = h('span', 'grow', t.reportRequestedAt
+            ? queuedSentence(c) + ' To bring it in right away, run this command in the main session.'
+            : 'Not reported yet. Run this command in the main session to bring the result into its context.');
           note.classList.add('warn');
           note.appendChild(sp);
           const cmd = mkRow('Report command', '/thread:report ' + c.id, 'report command', 'c-report');
@@ -2676,8 +2962,8 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       const ro = isRO();
       const sess = sessionInfo(t.parentSessionId);
       const k = {
-        head: JSON.stringify([c.title, t.runState, t.mode, turns.length, turns[0] && turns[0].startedAt, c.seenByClaude, reportState(c), sess && sess.label]),
-        about: JSON.stringify([t.sessionId, t.parentSessionId, turns, t.reported, sess]),
+        head: JSON.stringify([c.title, t.runState, t.mode, turns.length, turns[0] && turns[0].startedAt, c.seenByClaude, reportState(c), sess && sess.label, ro]),
+        about: JSON.stringify([t.sessionId, t.parentSessionId, turns, reportState(c), sess]),
         trace: JSON.stringify([turns, t.runState]),
         convo: JSON.stringify([turns, t.runState]),
         composer: t.runState + '|' + t.sessionId + '|' + ro,
@@ -2687,6 +2973,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       if (k.about !== P.keys.about) { renderAbout(c); P.keys.about = k.about; }
       if (k.trace !== P.keys.trace) { renderTrace(c); P.keys.trace = k.trace; }
       if (k.convo !== P.keys.convo) { renderConvo(c); P.keys.convo = k.convo; }
+      syncActivity(c);
       if (k.composer !== P.keys.composer) { renderComposer(c); P.keys.composer = k.composer; }
       if (k.foot !== P.keys.foot) {
         P.keys.foot = k.foot;

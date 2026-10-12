@@ -55,7 +55,8 @@ test('first turn argv, stdin prompt, depth and cwd match the contract (read mode
   assert.ok(ri >= 0 && argv[ri + 1] === PARENT_SESSION, `--resume <parent id> in ${argv}`);
   assert.ok(argv.includes('--fork-session'));
   const oi = argv.indexOf('--output-format');
-  assert.ok(oi >= 0 && argv[oi + 1] === 'json');
+  assert.ok(oi >= 0 && argv[oi + 1] === 'stream-json');
+  assert.ok(argv.includes('--verbose'), '--verbose is required with stream-json in print mode');
   const di = argv.indexOf('--disallowedTools');
   assert.ok(di >= 0 && argv.slice(di + 1, di + 4).join(' ') === 'Edit Write NotebookEdit', `disallowedTools in ${argv}`);
   assert.ok(prompt.includes(TASK), 'prompt on stdin has the task');

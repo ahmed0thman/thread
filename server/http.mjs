@@ -121,15 +121,20 @@ function pick(body, keys) {
   return out;
 }
 
+const THREAD_ROUTES = new Set(['POST messages', 'POST end', 'POST report-request', 'DELETE report-request', 'GET activity']);
+
 // One route table for every project. `sub` is the path below the project
-// ("/state", "/cards", "/cards/c1", "/threads/c1/messages").
-async function handleProject(req, res, projectDir, sub) {
+// ("/state", "/cards", "/cards/c1", "/threads/c1/messages"); `query` is the URL's search params.
+async function handleProject(req, res, projectDir, sub, query) {
   const method = req.method;
   const isState = method === 'GET' && sub === '/state';
   const isCardCreate = method === 'POST' && sub === '/cards';
   const cm = /^\/cards\/([A-Za-z0-9_-]{1,64})$/.exec(sub);
-  const tm = /^\/threads\/([A-Za-z0-9_-]{1,64})\/(messages|end)$/.exec(sub);
-  const known = isState || isCardCreate || (cm && (method === 'PATCH' || method === 'DELETE')) || (tm && method === 'POST');
+  const sm = /^\/cards\/([A-Za-z0-9_-]{1,64})\/start$/.exec(sub);
+  const tm = /^\/threads\/([A-Za-z0-9_-]{1,64})\/(messages|end|activity|report-request)$/.exec(sub);
+  const threadRoute = tm ? `${method} ${tm[2]}` : '';
+  const isActivity = threadRoute === 'GET activity';
+  const known = isState || isCardCreate || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
   if (!known) {
     req.resume();
     send(res, 404, { error: 'not found' });
@@ -137,7 +142,7 @@ async function handleProject(req, res, projectDir, sub) {
   }
 
   const present = core.dirExists(projectDir);
-  if (!isState && !present) {
+  if (!isState && !isActivity && !present) {
     req.resume();
     send(res, 409, { error: `project folder not found: ${projectDir}` });
     return;
@@ -174,11 +179,35 @@ async function handleProject(req, res, projectDir, sub) {
     return;
   }
 
+  if (isActivity) {
+    const card = core.readState(projectDir).cards.find((c) => c.id === tm[1]);
+    if (!core.isThread(card)) throw new HttpError(404, `thread not found: ${tm[1]}`);
+    const turn = Number(query.get('turn'));
+    if (!Number.isInteger(turn) || turn < 1 || turn > card.thread.turns.length) throw new HttpError(404, `thread ${tm[1]} has no turn ${query.get('turn')}`);
+    const running = card.thread.runState === 'running' && turn === card.thread.turns.length;
+    send(res, 200, { turn, running, events: core.readActivity(projectDir, card.id, turn) });
+    return;
+  }
+
+  if (threadRoute === 'DELETE report-request') {
+    req.resume();
+    send(res, 200, withViews(await core.cancelReportRequest(projectDir, tm[1])));
+    return;
+  }
+
   requireJson(req);
   const body = await readJsonBody(req);
-  const card = tm[2] === 'messages'
-    ? await core.continueThread(projectDir, tm[1], body.message)
-    : (await core.endThread(projectDir, tm[1])).card;
+  let card;
+  if (sm) {
+    const { sessionId, mode } = pick(body, ['sessionId', 'mode']);
+    card = await core.startThreadFromCard(projectDir, sm[1], { sessionId, mode, extraDirs: body.extraDirs });
+  } else if (tm[2] === 'messages') {
+    card = await core.continueThread(projectDir, tm[1], body.message);
+  } else if (tm[2] === 'end') {
+    card = (await core.endThread(projectDir, tm[1])).card;
+  } else {
+    card = await core.requestReport(projectDir, tm[1]);
+  }
   send(res, 200, withViews(card));
 }
 
@@ -269,12 +298,12 @@ function makeHandler(homeDir, token) {
         send(res, 404, { error: 'unknown project' });
         return;
       }
-      await handleProject(req, res, dir, sub);
+      await handleProject(req, res, dir, sub, url.searchParams);
       return;
     }
 
     if (path === '/api/state' || path === '/api/cards' || path.startsWith('/api/cards/') || path.startsWith('/api/threads/')) {
-      await handleProject(req, res, homeDir, path.slice('/api'.length));
+      await handleProject(req, res, homeDir, path.slice('/api'.length), url.searchParams);
       return;
     }
 

@@ -3,7 +3,7 @@
 // are re-exported here. Zero dependencies, node: built-ins only.
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { rm } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,7 @@ export const KINDS = ['task', 'idea'];
 export const MODES = ['read', 'write'];
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const KEY_RE = /^[0-9a-f]{12}$/;
+const CARD_ID_RE = /^c[0-9]+$/;
 export const VERSION = (() => {
   try {
     const v = JSON.parse(readFileSync(new URL('../.claude-plugin/plugin.json', import.meta.url), 'utf8')).version;
@@ -238,7 +239,7 @@ export async function updateCard(projectDirArg, id, { title, note, status } = {}
 }
 
 export async function removeCard(projectDirArg, id) {
-  return updateState(projectDirArg, (state) => {
+  await updateState(projectDirArg, (state) => {
     const card = findCard(state, id);
     if (isThread(card) && card.thread.runState === 'running' && isAlive(card.thread.pid)) {
       throw new Error(`thread ${id} is still running; end it before removing the card`);
@@ -246,6 +247,15 @@ export async function removeCard(projectDirArg, id) {
     state.cards = state.cards.filter((c) => c.id !== id);
     return true;
   });
+  // Logs and activity files would otherwise outlive the card. Best effort. The dot
+  // keeps c1 from matching the files of c10.
+  const { logs } = projectPaths(projectDirArg);
+  try {
+    for (const name of await readdir(logs)) {
+      if (name.startsWith(`${id}.`)) await rm(join(logs, name), { force: true });
+    }
+  } catch { /* no logs folder, or a file that cannot be removed */ }
+  return true;
 }
 
 export async function markSeen(projectDirArg) {
@@ -359,7 +369,29 @@ export function buildClaudeArgs(card) {
     ? ['-p', '--resume', t.sessionId]
     : ['-p', '--resume', t.parentSessionId, '--fork-session'];
   // The prompt goes in on stdin, so the variadic flags at the end cannot swallow it.
-  return [...base, '--output-format', 'json', ...modeArgs, ...allowArgs, ...dirArgs];
+  return [...base, '--output-format', 'stream-json', '--verbose', ...modeArgs, ...allowArgs, ...dirArgs];
+}
+
+// One turn's activity file. Shared by the runner (writes) and readActivity (reads).
+export function activityPath(projectDirArg, cardId, turnNumber) {
+  if (!CARD_ID_RE.test(String(cardId))) throw new Error(`invalid card id: ${cardId}`);
+  if (!Number.isInteger(turnNumber) || turnNumber < 1) throw new Error(`invalid turn number: ${turnNumber}`);
+  return join(projectPaths(projectDirArg).logs, `${cardId}.t${turnNumber}.activity.jsonl`);
+}
+
+// What a turn did, from its activity file. A line that does not parse (the
+// runner may be mid-write) is skipped.
+export function readActivity(projectDirArg, cardId, turnNumber) {
+  let text;
+  try { text = readFileSync(activityPath(projectDirArg, cardId, turnNumber), 'utf8'); } catch (e) {
+    if (e && e.code === 'ENOENT') return [];
+    throw e;
+  }
+  const events = [];
+  for (const line of text.split('\n')) {
+    try { events.push(JSON.parse(line)); } catch { /* partial or empty line */ }
+  }
+  return events;
 }
 
 export function buildPrompt(card) {
@@ -443,17 +475,40 @@ function launchRunner(projectDirArg, card) {
   child.unref();
 }
 
-export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs } = {}) {
-  refuseInsideThread('start');
+// The checks both ways of starting a thread share; returns the extra folders.
+function launchOptions(sessionId, mode, extraDirs) {
   if (typeof sessionId !== 'string' || !UUID_RE.test(sessionId)) {
     throw new Error('session_id must be a UUID (the main session id)');
   }
+  if (!MODES.includes(mode)) throw new Error(`invalid mode "${mode}" (use read or write)`);
+  return normalizeDirs(extraDirs);
+}
+
+// Gives `card` its thread and launches the first turn. Called inside updateState.
+function beginThread(projectDirArg, card, { sessionId, mode, dirs, prompt }) {
+  card.thread = {
+    parentSessionId: sessionId.toLowerCase(),
+    sessionId: null,
+    mode,
+    dirs,
+    runState: 'running',
+    pid: null,
+    turns: [{ prompt, startedAt: now(), finishedAt: null, ok: null, result: null, error: null }],
+    lastResult: null,
+    reported: false,
+    announced: false,
+  };
+  setRunState(card, 'running');
+  launchRunner(projectDirArg, card);
+}
+
+export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs } = {}) {
+  refuseInsideThread('start');
   const t = typeof title === 'string' ? title.trim() : '';
   const k = typeof task === 'string' ? task.trim() : '';
+  const dirs = launchOptions(sessionId, mode, extraDirs);
   if (!t) throw new Error('title must not be empty');
   if (!k) throw new Error('task must not be empty');
-  if (!MODES.includes(mode)) throw new Error(`invalid mode "${mode}" (use read or write)`);
-  const dirs = normalizeDirs(extraDirs);
   return updateState(projectDirArg, (state) => {
     state.seq += 1;
     const ts = now();
@@ -467,21 +522,23 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
       seenByClaude: true,
       createdAt: ts,
       updatedAt: ts,
-      thread: {
-        parentSessionId: sessionId.toLowerCase(),
-        sessionId: null,
-        mode,
-        dirs,
-        runState: 'running',
-        pid: null,
-        turns: [{ prompt: k, startedAt: ts, finishedAt: null, ok: null, result: null, error: null }],
-        lastResult: null,
-        reported: false,
-        announced: false,
-      },
     };
     state.cards.push(card);
-    launchRunner(projectDirArg, card);
+    beginThread(projectDirArg, card, { sessionId, mode, dirs, prompt: k });
+    return card;
+  });
+}
+
+// Turns a task or idea card into a thread in place: same id, title, note and source.
+export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mode = 'read', extraDirs } = {}) {
+  refuseInsideThread('start');
+  const dirs = launchOptions(sessionId, mode, extraDirs);
+  return updateState(projectDirArg, (state) => {
+    const card = findCard(state, cardId);
+    if (card.kind === 'thread') throw new Error(`card ${cardId} is already a thread`);
+    const note = typeof card.note === 'string' ? card.note.trim() : '';
+    card.kind = 'thread';
+    beginThread(projectDirArg, card, { sessionId, mode, dirs, prompt: note ? `${card.title}\n\n${note}` : card.title });
     return card;
   });
 }
@@ -550,6 +607,7 @@ export async function reportThread(projectDirArg, id, { sessionId, confirmCode }
       th.reports.push({ sessionId: String(sessionId).toLowerCase(), at: now() });
     } else {
       th.reported = true;
+      delete th.reportRequestedAt;
     }
     const last = th.turns[th.turns.length - 1];
     const digest = stripMap(th.lastResult);
@@ -581,6 +639,7 @@ export async function endThread(projectDirArg, id, { sessionId, confirmCode } = 
       else closeOpenTurn(c, 'ended by user');
     }
     th.pid = null;
+    delete th.reportRequestedAt;
     setRunState(c, 'ended');
     return { card: c };
   });
@@ -588,6 +647,34 @@ export async function endThread(projectDirArg, id, { sessionId, confirmCode } = 
     try { process.kill(pidToKill, 'SIGTERM'); } catch { /* already gone */ }
   }
   return result;
+}
+
+// The board cannot write into a session, so "Report to main session" only stores
+// a request; the hook tells the parent session on its next prompt.
+export async function requestReport(projectDirArg, id) {
+  return updateState(projectDirArg, (state) => {
+    const card = findThread(state, id);
+    if (card.thread.lastResult == null) throw new Error(`thread ${id} has nothing to report yet`);
+    if (card.thread.reported) throw new Error(`thread ${id} is already reported`);
+    card.thread.reportRequestedAt = now();
+    return card;
+  });
+}
+
+export async function cancelReportRequest(projectDirArg, id) {
+  return updateState(projectDirArg, (state) => {
+    const card = findThread(state, id);
+    delete card.thread.reportRequestedAt;
+    return card;
+  });
+}
+
+// Read-only: the request stays until the report is made, so the hook repeats it on each prompt.
+export async function pendingReportRequests(projectDirArg, sessionId) {
+  return readState(projectDirArg).cards.filter((c) => {
+    const th = isThread(c) && c.thread;
+    return th && th.reportRequestedAt && th.lastResult != null && !th.reported && sameSession(th.parentSessionId, sessionId);
+  });
 }
 
 // Finished threads with a result nobody has pulled yet, split by whether the

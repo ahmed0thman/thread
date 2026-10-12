@@ -157,7 +157,7 @@ A thread can read the project. To let it read somewhere else, name the folder in
 
 ### 7. Talking to a thread from the board
 
-Open the board with `/thread:board` and click a thread card. The thread opens full-window: its conversation in the centre with a message box, its ids, digest and decisions on the left, and a step-by-step trace on the right. Type a follow-up there and the thread runs another turn. This is the way to read or continue a thread without putting anything into the main session.
+Open the board with `/thread:board` and click a thread card. The thread opens full-window: its conversation in the centre with a message box, its ids, digest and decisions on the left, and a step-by-step trace on the right. Type a follow-up there and the thread runs another turn. While a turn runs, the conversation shows what the thread is doing as it happens: its messages and each tool it uses. This is the way to read or continue a thread without putting anything into the main session.
 
 ### 8. Several sessions in one project
 
@@ -186,10 +186,10 @@ Thread states map to board columns: running is **In progress**, finished is **Re
 - **One board for every project.** Each project has a tab, with a dot when one of its threads is running. A project whose folder was deleted is shown read-only and can be forgotten, which removes its saved cards and logs.
 - **Cards** show their id, kind and title. Thread cards also show their state, the number of turns, the session that started them, and a **Not reported** tag when they hold a result the main session has not pulled.
 - **Toolbar:** search by id, title or note; show threads only; filter by the session that started them; add a card. A button in the header switches between light and dark.
-- **Task and idea cards** open in a side panel where you edit the title, note and status. Drag a card to another column to move it.
+- **Task and idea cards** open in a side panel where you edit the title, note and status. Drag a card to another column to move it. **Start as thread** turns the card into a thread, forked from the session you choose, with the title and note as its task.
 - **Thread cards** open full-window:
   - **Centre:** the conversation, and a box to send a follow-up.
-  - **Left:** the thread's session id, the session that started it, a `claude --resume <id>` command that opens the thread as a normal conversation in a terminal, the latest digest, and every decision across turns. The report command has a copy button.
+  - **Left:** the thread's session id, the session that started it, a `claude --resume <id>` command that opens the thread as a normal conversation in a terminal, the latest digest, and every decision across turns. The report command has a copy button. **Report to main session** queues the report: it is delivered with your next message in the session that started the thread, and repeated until that session makes it.
   - **Right:** the trace, a timeline of what the thread did, labelled Did, Found, Decided, Changed and Open, with file references. Clicking a step scrolls the conversation to that turn.
 - **Keys:** `/` focuses search, `n` adds a card, `Esc` closes a panel.
 
