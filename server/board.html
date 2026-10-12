@@ -117,10 +117,41 @@ code, pre, .mono { font-family: var(--mono); }
 .conn[data-state="offline"] { color: var(--danger); font-weight: 600; }
 .conn[data-state="offline"] .shape { color: var(--danger); }
 
+/* ---------- project tabs ---------- */
+.ptabs-wrap { flex: none; min-width: 0; padding: 0 var(--s4); border-bottom: 1px solid var(--border); margin-bottom: var(--s3); }
+.ptabs { position: relative; display: flex; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; overscroll-behavior-x: contain; }
+.ptab {
+  position: relative; flex: none; display: inline-flex; align-items: center; gap: var(--s2); max-width: 280px; min-height: 38px;
+  padding: 0 var(--s3); background: none; border: 0; border-radius: var(--r2) var(--r2) 0 0; cursor: pointer;
+  color: var(--muted); font-weight: 600; white-space: nowrap;
+}
+.ptab:hover { color: var(--text); background: var(--surface-2); }
+.ptab:focus-visible { outline-offset: -2px; }
+.ptab[aria-selected="true"] { color: var(--text); background: var(--surface); }
+.ptab[aria-selected="true"]::after { content: ""; position: absolute; left: var(--s2); right: var(--s2); bottom: 0; height: 3px; border-radius: 2px 2px 0 0; background: var(--accent); }
+.pt-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ptab[data-missing] .pt-name, .ptab[data-missing] .count { opacity: 0.7; }
+.ptab[data-missing] .pt-name { font-style: italic; }
+.pt-miss { flex: none; font-size: 11.5px; font-weight: 600; color: var(--warn); background: var(--warn-bg); border-radius: var(--r1); padding: 0 6px; line-height: 18px; }
+.ptab .shape { width: 8px; height: 8px; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.notice { margin: 0 var(--s4) var(--s3); flex: none; }
+.notice .confirm-text { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.notice code { font-size: 12.5px; overflow-wrap: anywhere; }
+
+.gate { position: fixed; inset: 0; z-index: 80; display: flex; align-items: center; justify-content: center; padding: var(--s4); background: var(--bg); overflow-y: auto; }
+.gate-card { width: min(460px, 100%); padding: var(--s5); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r3); }
+.gate-card h1 { margin: 0 0 var(--s3); font-size: 18px; line-height: 1.3; }
+.gate-card p { margin: 0 0 var(--s3); }
+.gate-card code { font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
+.gate-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); margin-top: var(--s4); }
+
 .toolbar {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s2);
   padding: 0 var(--s4) var(--s3);
 }
+.sel { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; color: var(--muted); }
+.sel select.input { width: auto; max-width: min(260px, 56vw); text-overflow: ellipsis; font-weight: 400; color: var(--text); }
 .search { position: relative; flex: 1 1 220px; max-width: 360px; min-width: 0; }
 .search input { width: 100%; padding-right: 30px; }
 .search .kbd {
@@ -213,6 +244,12 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   display: inline-block; font: 600 12px/18px var(--mono); padding: 0 6px; border-radius: var(--r1);
   background: var(--surface-2); color: var(--text); border: 1px solid var(--border); white-space: nowrap;
 }
+.tag { display: inline-flex; align-items: center; gap: 6px; padding: 1px 7px 1px 6px; border-radius: var(--r1); font-size: 12px; font-weight: 600; line-height: 18px; white-space: nowrap; }
+.tag .shape { width: 9px; height: 9px; color: inherit; }
+.tag.attn { color: var(--warn); background: var(--warn-bg); box-shadow: inset 0 0 0 1px var(--warn); }
+.tag.quiet { color: var(--muted); font-weight: 500; padding-left: 0; }
+.ws-rep .btn { min-width: 150px; }
+.ws-rep { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); }
 .kindmark { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .kindmark .shape { width: 9px; height: 9px; }
 .refchip {
@@ -261,6 +298,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .card-note { margin: 0; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-from { margin: 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); font-size: 12px; color: var(--muted); }
 .unseen { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--warn); }
 .unseen .shape { color: var(--warn); width: 7px; height: 7px; }
@@ -317,21 +355,76 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .callout.danger .callout-title { font-weight: 650; color: var(--danger); margin-bottom: 2px; }
 .callout.danger .callout-body { overflow-wrap: anywhere; white-space: pre-wrap; font-family: var(--mono); font-size: 12px; }
 
-/* thread header blocks */
-.ids { margin: 0; border-bottom: 1px solid var(--border); }
-.ids > summary {
-  list-style: none; cursor: pointer; padding: 6px var(--s4); font-size: 12px; font-weight: 650;
-  color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: var(--s2);
+/* ---------- thread workspace (full view) ---------- */
+.ws {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text); animation: fade-in 0.15s ease-out;
 }
-.ids > summary::-webkit-details-marker { display: none; }
-.ids > summary::before { content: ""; width: 6px; height: 6px; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(-45deg); transition: transform 0.12s; }
-.ids[open] > summary::before { transform: rotate(45deg); }
-.ids-peek { text-transform: none; letter-spacing: 0; font-weight: 400; font-family: var(--mono); font-size: 12px; margin-left: var(--s2); }
-.ids[open] .ids-peek { display: none; }
-.ids-body { display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; align-items: center; gap: 6px var(--s3); padding: 0 var(--s4) var(--s3); }
-.ids-body .k { font-size: 12px; color: var(--muted); }
-.ids-body .v { font: 12px var(--mono); overflow-wrap: anywhere; user-select: all; }
-.ids-note { grid-column: 1 / -1; margin: 0; font-size: 12.5px; color: var(--muted); }
+.ws:focus { outline: none; }
+.ws-bar {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3);
+  padding: var(--s2) var(--s4); background: var(--surface); border-bottom: 1px solid var(--border-strong);
+}
+.ws-bar .back, .ws-bar .idchip { flex: none; }
+.ws-title {
+  flex: 1 1 220px; min-width: 0; margin: 0; font-size: 16px; line-height: 1.3; font-weight: 650; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.ws-meta { flex: 0 1 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--s3); font-size: 12.5px; color: var(--muted); }
+.ws-from { max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-actions { flex: none; margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s2); max-width: 100%; }
+.chev { display: inline-block; width: 7px; height: 7px; border: solid currentColor; border-width: 0 2px 2px 0; flex: none; }
+.chev.l { transform: rotate(135deg); margin-left: 3px; }
+.chev.r { transform: rotate(-45deg); margin-right: 3px; }
+
+.ws-main { flex: 1 1 0; min-height: 0; display: flex; }
+.ws-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
+.ws-left { flex: none; width: clamp(260px, 22vw, 340px); border-right: 1px solid var(--border-strong); }
+.ws-right { flex: none; width: clamp(320px, 27vw, 420px); border-left: 1px solid var(--border-strong); }
+.ws-center { flex: 1 1 0; background: var(--bg); }
+.ws-pane.collapsed { width: 40px; }
+.pane-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--s2);
+  min-height: 40px; padding: 0 var(--s2) 0 var(--s4); border-bottom: 1px solid var(--border);
+}
+.pane-head h3 { margin: 0; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.pane-rail {
+  flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: var(--s3);
+  padding: var(--s3) 0; background: var(--surface); border: 0; border-radius: 0; cursor: pointer; color: var(--muted);
+}
+.pane-rail:hover { background: var(--surface-2); color: var(--text); }
+.pane-rail:focus-visible { outline-offset: -3px; }
+.pane-rail .rail-label { writing-mode: vertical-rl; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; }
+.ws-pane:not(.collapsed) > .pane-rail { display: none; }
+.ws-pane.collapsed > :not(.pane-rail) { display: none; }
+
+.ws-center .scroller { padding: var(--s5) var(--s4); }
+.convo { max-width: 740px; margin: 0 auto; gap: var(--s5); }
+.turn { display: flex; flex-direction: column; gap: var(--s3); border-radius: var(--r3); transition: box-shadow 0.25s, background-color 0.25s; }
+.turn.flash { background: var(--surface-2); box-shadow: 0 0 0 6px var(--surface-2), 0 0 0 8px var(--accent); }
+.ws-center .md, .ws-center .bubble { font-size: 14px; line-height: 1.5; }
+.ws-center .composer { padding: var(--s3) var(--s4); }
+.composer-in { width: 100%; max-width: 740px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--s2); }
+
+.ws-tabs { background: var(--surface); }
+.ws-tabs .tab { flex: 1 1 0; text-align: center; }
+.ws[data-narrow] .ws-main { display: block; position: relative; }
+.ws[data-narrow] .ws-pane { position: absolute; inset: 0; width: auto; border: 0; }
+.ws[data-narrow] .ws-pane:not([data-on]) { display: none; }
+.ws[data-narrow] .pane-head, .ws[data-narrow] .pane-rail { display: none; }
+.ws[data-narrow] .ws-center .scroller { padding: var(--s4) var(--s3); }
+.ws[data-narrow] .ws-center .composer { padding: var(--s3); }
+
+/* about pane */
+.ab-ids { display: flex; flex-direction: column; gap: var(--s3); }
+.ab-row .k { display: block; margin-bottom: 2px; font-size: 12px; color: var(--muted); }
+.ab-row .line { display: flex; align-items: flex-start; gap: var(--s2); }
+.ab-row .v { flex: 1 1 auto; min-width: 0; padding-top: 4px; font: 12px/1.5 var(--mono); overflow-wrap: anywhere; user-select: all; }
+.ab-row .v.muted { font-family: var(--sans); user-select: auto; }
+.ab-who { padding-top: 4px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ab-seen { margin-top: 2px; font-size: 12px; color: var(--muted); }
+.ab-note { margin: 0; font-size: 12.5px; color: var(--muted); }
+.scroller > .dg-h:first-child { margin-top: 0; }
 
 .tabs { flex: none; display: flex; gap: 2px; padding: 0 var(--s3); border-bottom: 1px solid var(--border); }
 .tab {
@@ -342,8 +435,6 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .tab[aria-selected="true"] { color: var(--text); }
 .tab[aria-selected="true"]::after { content: ""; position: absolute; left: var(--s2); right: var(--s2); bottom: -1px; height: 2px; background: var(--accent); }
 .tab:focus-visible { outline-offset: -2px; }
-.tabpanels { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
-.tabpanel { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
 .scroller { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: var(--s4); }
 .scroller:focus-visible { outline-offset: -3px; }
 
@@ -357,7 +448,13 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .fchip[aria-pressed="false"] .shape { opacity: 0.6; }
 .fchip .n { font-weight: 700; }
 .turn-block + .turn-block { margin-top: var(--s5); }
-.turn-head { display: flex; align-items: baseline; gap: var(--s2); margin: 0 0 var(--s2); font-size: 12.5px; font-weight: 650; }
+.turn-head { margin: 0 0 var(--s2); font-size: 12.5px; font-weight: 650; }
+.turn-link {
+  display: flex; align-items: baseline; gap: var(--s2); width: calc(100% + 12px); margin: 0 -6px; padding: 3px 6px;
+  background: none; border: 0; border-radius: var(--r2); cursor: pointer; text-align: left; font: inherit; font-weight: 650; color: inherit;
+}
+.turn-link:hover, .step-link:hover { background: var(--surface-2); }
+.turn-link:focus-visible, .step-link:focus-visible { outline-offset: -2px; }
 .turn-head .tnum { color: var(--muted); font-weight: 600; flex: none; }
 .turn-head .tp { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .turn-head .when { margin-left: auto; flex: none; font-weight: 400; color: var(--muted); font-size: 12px; }
@@ -373,7 +470,11 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 @media (prefers-color-scheme: dark) { .node.err { color: #1a0a09; } .node.err .shape { color: #1a0a09; } }
 .step-top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); min-height: 20px; }
 .klabel { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--k); }
-.step-text { margin-top: 1px; overflow-wrap: anywhere; }
+.step-text { display: block; margin-top: 1px; overflow-wrap: anywhere; }
+.step-link {
+  display: block; width: calc(100% + 6px); margin-left: -6px; padding: 0 6px 2px; text-align: left;
+  background: none; border: 0; border-radius: var(--r2); cursor: pointer; font: inherit; color: inherit;
+}
 .step-text code, .md code { font-size: 0.92em; background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
 .step.err .step-text { font: 12.5px var(--mono); white-space: pre-wrap; color: var(--text); }
 .step .elapsed { font-variant-numeric: tabular-nums; color: var(--muted); }
@@ -432,6 +533,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
 @media (max-width: 760px) {
   .top { padding: var(--s3) var(--s3) var(--s2); }
+  .ptabs-wrap { padding: 0 var(--s3); }
+  .notice { margin: 0 var(--s3) var(--s3); }
+  .sel select.input { max-width: 42vw; }
   .toolbar { padding: 0 var(--s3) var(--s3); }
   .search { flex-basis: 100%; max-width: none; }
   .toolbar-note { order: 3; flex-basis: 100%; }
@@ -439,10 +543,13 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   .col { scroll-snap-align: start; }
   .drawer, .drawer.wide { width: 100vw; border-left: 0; }
   .row2 { grid-template-columns: 1fr; }
-  .ids-body { grid-template-columns: minmax(0, 1fr) auto; }
-  .ids-body .k { grid-column: 1 / -1; margin-bottom: -4px; }
   .dr-head, .dr-body, .scroller, .composer, .dr-foot { padding-left: var(--s3); padding-right: var(--s3); }
-  .ids > summary, .ids-body { padding-left: var(--s3); padding-right: var(--s3); }
+  .ws-bar { padding: var(--s2) var(--s3); }
+  .ws-bar .idchip { order: 1; }
+  .ws-actions { order: 2; }
+  .ws-title { order: 3; flex-basis: 100%; }
+  .ws-meta { order: 4; flex-basis: 100%; }
+  .ws-bar kbd.hint { display: none; }
   .decisions li { grid-template-columns: 1fr; gap: 2px; }
   .decisions .tn { justify-self: start; padding: 0 8px; }
 }
@@ -460,16 +567,33 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     <span class="dir" id="dir"><span class="dir-head" id="dir-head"></span><span class="dir-tail" id="dir-tail"></span></span>
     <span class="conn" id="conn" role="status" data-state="connecting"><span class="shape s-ring"></span><span id="conn-text">Connecting</span></span>
   </header>
+  <nav class="ptabs-wrap" id="ptabs-wrap" aria-label="Projects" hidden>
+    <div class="ptabs" id="ptabs" role="tablist" aria-label="Projects"></div>
+  </nav>
   <div class="toolbar" role="search">
     <div class="search">
       <input class="input" id="search" type="search" placeholder="Search id, title or note" aria-label="Search cards by id, title or note" autocomplete="off" spellcheck="false">
       <span class="kbd" aria-hidden="true">/</span>
     </div>
     <button type="button" class="btn" id="threads-only" aria-pressed="false">Threads only</button>
+    <label class="sel" id="session-wrap" hidden><span>Session</span><select class="input" id="session-filter" aria-label="Filter threads by the session that started them"></select></label>
     <span class="toolbar-note" id="filter-note" aria-live="polite"></span>
     <button type="button" class="btn primary" id="new-btn" aria-keyshortcuts="n">New card <kbd class="hint" aria-hidden="true">N</kbd></button>
   </div>
+  <div class="callout warn notice" id="notice" role="status" hidden></div>
   <main class="board" id="board" aria-label="Board columns"></main>
+</div>
+
+<div class="gate" id="gate" role="alert" hidden>
+  <div class="gate-card">
+    <h1>The board needs its access link</h1>
+    <p>This page does not have a valid access token, so the board server turned it away. Nothing is wrong with your cards.</p>
+    <p>In Claude Code, run <code>/thread:board</code> and open the link it prints.</p>
+    <div class="gate-row">
+      <button type="button" class="btn primary" id="gate-retry">Retry</button>
+      <span class="foot-note" id="gate-msg" role="status"></span>
+    </div>
+  </div>
 </div>
 
 <div class="banner" id="banner" role="alert" hidden>
@@ -500,11 +624,45 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   const RUN_SHAPE = { running: 's-pulse', idle: 's-check', failed: 's-cross', ended: 's-square' };
   const CK_SHAPE = { task: 's-square', idea: 's-diamond', thread: 's-ring' };
   const POLL_MS = 2000;
+  const PROJECTS_MS = 5000;
+  const TOKEN_KEY = 'thread-board-token';
+  const READONLY_WHY = 'This project’s folder was not found, so its cards are read-only.';
 
   const $ = (id) => document.getElementById(id);
   const elApp = $('app'), elBoard = $('board'), elSearch = $('search'), elThreadsOnly = $('threads-only');
   const elNote = $('filter-note'), elNewBtn = $('new-btn'), elOverlay = $('overlay');
   const elBanner = $('banner'), elBannerText = $('banner-text');
+  const elTabsWrap = $('ptabs-wrap'), elTabs = $('ptabs'), elNotice = $('notice');
+  const elSession = $('session-filter'), elSessionWrap = $('session-wrap');
+  const elGate = $('gate'), elGateRetry = $('gate-retry'), elGateMsg = $('gate-msg');
+
+  // ---------- access token ----------
+  let token = '';
+  let halted = false;        // true while the access-link page is showing: no polling at all
+  function readStoredToken() {
+    try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+  }
+  (function initToken() {
+    let fromUrl = '';
+    try { fromUrl = new URLSearchParams(location.search).get('t') || ''; } catch (e) { fromUrl = ''; }
+    if (!fromUrl) { token = readStoredToken(); return; }
+    token = fromUrl;
+    try { sessionStorage.setItem(TOKEN_KEY, fromUrl); } catch (e) { /* storage unavailable: keep it in the variable */ }
+    try {
+      const sp = new URLSearchParams(location.search);
+      sp.delete('t');
+      const qs = sp.toString();
+      history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+    } catch (e) { /* leave the address bar as it is */ }
+  })();
+
+  // ---------- projects ----------
+  let projects = null;       // [{ key, projectDir, name, exists, cards, threads, running, lastActivity }] in stable tab order
+  let homeKey = '';
+  let selKey = '';           // the selected project
+  let projectsAt = 0;
+  let projectsBusy = false;
+  const filterMemo = {};     // per project: { q, threadsOnly, session }
 
   let current = null;        // newest state from the server
   let currentKey = '';
@@ -596,6 +754,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   // ---------- errors, connection, busy buttons ----------
 
   function showError(message) {
+    if (halted) return;                          // the access-link page is showing instead
     elBannerText.textContent = String(message || 'Something went wrong.');
     elBanner.hidden = false;
   }
@@ -647,45 +806,108 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
   // ---------- network ----------
 
-  async function api(method, path, body) {
-    const opts = { method, headers: { 'Content-Type': 'application/json' }, cache: 'no-store' };
-    if (method !== 'GET') opts.body = JSON.stringify(body || {});
-    let res;
-    try { res = await fetch(path, opts); }
+  function authError() { const e = new Error('The board needs its access link.'); e.auth = true; return e; }
+
+  // One place that talks to the server: always sends the token, turns 401 into the access-link page.
+  async function request(method, path, body, timeoutMs) {
+    if (!token) { haltForAuth(); throw authError(); }
+    const opts = { method, headers: { 'X-Thread-Token': token }, cache: 'no-store' };
+    if (method !== 'GET') { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body || {}); }
+    if (timeoutMs && typeof AbortSignal !== 'undefined' && AbortSignal.timeout) opts.signal = AbortSignal.timeout(timeoutMs);
+    let res, text;
+    try { res = await fetch(path, opts); text = await res.text(); }
     catch (e) { throw new Error('Could not reach the board server.'); }
-    let data = null;
-    try { data = await res.json(); } catch (e) { data = null; }
+    if (res.status === 401) { haltForAuth(); throw authError(); }
+    return { res, text };
+  }
+  function parseJson(text) { try { return JSON.parse(text); } catch (e) { return null; } }
+  async function api(method, path, body) {
+    const { res, text } = await request(method, path, body);
+    const data = parseJson(text);
     if (!res.ok) throw new Error((data && data.error) ? data.error : 'Request failed (status ' + res.status + ')');
     return data;
   }
+  function pp(key, rest) { return '/api/p/' + encodeURIComponent(key) + '/' + rest; }
+
+  // ----- access-link page -----
+  let loopTimer = null;
+  function haltForAuth() {
+    if (halted) return;
+    halted = true;
+    clearTimeout(loopTimer); loopTimer = null;
+    if (panel) { if (panel.dispose) panel.dispose(); panel = null; }
+    elOverlay.replaceChildren();
+    elOverlay.hidden = true;
+    elApp.inert = false;
+    elBanner.hidden = true;
+    elApp.hidden = true;
+    elGate.hidden = false;
+    elGateRetry.focus({ preventScroll: true });
+  }
+  function resumeAfterAuth() {
+    halted = false;
+    elGate.hidden = true;
+    elApp.hidden = false;
+    elGateMsg.textContent = '';
+    if (selKey) { const k = selKey; selKey = ''; selectProject(k); }
+    else syncFromHash();
+    loopTimer = setTimeout(tick, POLL_MS);
+  }
+  elGateRetry.addEventListener('click', async () => {
+    if (elGateRetry.classList.contains('busy')) return;
+    elGateRetry.classList.add('busy'); elGateRetry.disabled = true;
+    elGateMsg.textContent = '';
+    token = readStoredToken();
+    try {
+      if (!token) elGateMsg.textContent = 'No access link is stored in this tab. Open the link that /thread:board prints.';
+      else { applyProjects(await loadProjects()); resumeAfterAuth(); }
+    } catch (e) {
+      elGateMsg.textContent = e.auth ? 'That access link is not valid (any more). Run /thread:board again and open the new link.' : e.message;
+    } finally {
+      elGateRetry.classList.remove('busy'); elGateRetry.disabled = false;
+    }
+  });
+
+  // ----- loops -----
+  async function tick() {
+    loopTimer = null;
+    if (halted) return;
+    await poll();
+    if (halted) return;
+    if (!projects || Date.now() - projectsAt >= PROJECTS_MS) await refreshProjects();
+    if (halted) return;
+    loopTimer = setTimeout(tick, POLL_MS);
+  }
 
   async function poll() {
+    if (halted || !selKey) return;
+    const key = selKey;
     const seq = ++pollSeq;
-    let text;
-    try {
-      const opts = { cache: 'no-store' };
-      if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) opts.signal = AbortSignal.timeout(5000);
-      const res = await fetch('/api/state', opts);
-      if (!res.ok) throw new Error('status ' + res.status);
-      text = await res.text();
-    } catch (e) {
-      if (seq > appliedSeq) setOnline(false);
+    let res, text;
+    try { ({ res, text } = await request('GET', pp(key, 'state'), null, 5000)); }
+    catch (e) {
+      if (!e.auth && key === selKey && seq > appliedSeq) setOnline(false);
+      return;
+    }
+    if (key !== selKey) return;                 // the user moved to another project meanwhile
+    if (!res.ok) {
+      if (res.status === 404) refreshProjects(); // the project vanished: the list will move us on
+      else if (seq > appliedSeq) setOnline(false);
       return;
     }
     if (seq < appliedSeq) return;
     appliedSeq = seq;
     setOnline(true);
     if (text === lastRaw) return;               // nothing changed: no DOM work
-    let data;
-    try { data = JSON.parse(text); } catch (e) { return; }
+    const data = parseJson(text);
     if (!data || !Array.isArray(data.cards)) return;
     lastRaw = text;
     try { apply(data); } catch (e) { console.error(e); }
   }
 
   // Use a card the server just returned without waiting for the next poll.
-  function applyCard(card) {
-    if (!current || !card) return;
+  function applyCard(card, key) {
+    if (!current || !card || (key !== undefined && key !== selKey)) return;
     const cards = current.cards.slice();
     const i = cards.findIndex((c) => c.id === card.id);
     if (i >= 0) cards[i] = card; else cards.push(card);
@@ -698,10 +920,267 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     current = data;
     currentKey = JSON.stringify(data);
     setDir(data.projectDir ? String(data.projectDir) : '');
+    updateToolbar();
+    renderNotice();
     renderBoard(false);
     if (!synced) { synced = true; syncFromHash(); }
     else updatePanel();
   }
+
+  // ---------- projects and tabs ----------
+
+  function projectByKey(key) {
+    if (!projects || !key) return null;
+    for (const p of projects) if (p.key === key) return p;
+    return null;
+  }
+  function isRO() {
+    if (current && typeof current.exists === 'boolean') return !current.exists;
+    const p = projectByKey(selKey);
+    return !!(p && p.exists === false);
+  }
+  function parentName(dir) {
+    const parts = String(dir || '').split(/[\\/]+/).filter(Boolean);
+    return parts.length >= 2 ? parts[parts.length - 2] : '';
+  }
+
+  async function loadProjects() {
+    const { res, text } = await request('GET', '/api/projects', null, 5000);
+    const data = parseJson(text);
+    if (!res.ok || !data || !Array.isArray(data.projects)) throw new Error((data && data.error) ? data.error : 'Request failed (status ' + res.status + ')');
+    return data;
+  }
+  let projectsAgain = false;
+  async function refreshProjects() {
+    if (halted) return;
+    if (projectsBusy) { projectsAgain = true; return; }
+    projectsBusy = true;
+    try { applyProjects(await loadProjects()); }
+    catch (e) { /* 401 shows the access-link page; a network failure is shown by the state poll */ }
+    finally {
+      projectsBusy = false;
+      projectsAt = Date.now();
+      if (projectsAgain) { projectsAgain = false; refreshProjects(); }
+    }
+  }
+  // a write went through: counts and activity in the tabs have changed
+  function wrote() { refreshProjects(); }
+
+  function applyProjects(data) {
+    const incoming = data.projects.filter((p) => p && typeof p.key === 'string');
+    const byKey = {};
+    incoming.forEach((p) => { byKey[p.key] = p; });
+    // keep the tabs where they are; the server sorts by activity, which would shuffle them under the pointer
+    const order = [];
+    if (projects) projects.forEach((p) => { if (byKey[p.key]) order.push(p.key); });
+    incoming.forEach((p) => { if (!order.includes(p.key)) order.push(p.key); });
+    const first = projects === null;
+    projects = order.map((k) => byKey[k]);
+    homeKey = (typeof data.home === 'string' && byKey[data.home]) ? data.home : (projects.length ? projects[0].key : '');
+    maybeRenderTabs();
+    if (first) { syncFromHash(); return; }
+    if (selKey && !byKey[selKey]) {
+      history.replaceState(null, '', location.pathname + location.search + hashFor(homeKey, ''));
+      syncFromHash();
+      return;
+    }
+    updateToolbar();
+    renderNotice();
+  }
+
+  let tabsSig = '';
+  function tabSig() {
+    return JSON.stringify([selKey, (projects || []).map((p) => [p.key, p.name, p.projectDir, p.exists, p.cards, p.running])]);
+  }
+  function maybeRenderTabs() { if (tabSig() !== tabsSig) renderTabs(false); }
+  function renderTabs(reveal) {
+    tabsSig = tabSig();
+    const list = projects || [];
+    elTabsWrap.hidden = !list.length;
+    const a = document.activeElement;
+    const focusKey = (a && a.classList && a.classList.contains('ptab') && elTabs.contains(a)) ? a.dataset.key : null;
+    const scroll = elTabs.scrollLeft;
+    const nameCount = {};
+    list.forEach((p) => { nameCount[p.name] = (nameCount[p.name] || 0) + 1; });
+    const frag = document.createDocumentFragment();
+    let selBtn = null, focusBtn = null;
+    list.forEach((p) => {
+      const missing = p.exists === false;
+      const sel = p.key === selKey;
+      const b = h('button', 'ptab');
+      b.type = 'button';
+      b.id = 'ptab-' + p.key;
+      b.dataset.key = p.key;
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-selected', sel ? 'true' : 'false');
+      b.tabIndex = sel ? 0 : -1;
+      if (missing) b.dataset.missing = '1';
+      b.title = p.projectDir + (missing ? ' (folder missing)' : '');
+      const parent = nameCount[p.name] > 1 ? parentName(p.projectDir) : '';
+      b.appendChild(h('span', 'pt-name', p.name + (parent ? ' (' + parent + ')' : '')));
+      const n = h('span', 'count tnum', String(p.cards));
+      n.setAttribute('aria-hidden', 'true');
+      b.appendChild(n);
+      b.appendChild(h('span', 'sr-only', ', ' + p.cards + (p.cards === 1 ? ' card' : ' cards')));
+      if (p.running > 0) {
+        const d = shape('s-pulse');
+        d.dataset.run = 'running';
+        b.appendChild(d);
+        b.appendChild(h('span', 'sr-only', ', ' + p.running + ' running'));
+      }
+      if (missing) b.appendChild(h('span', 'pt-miss', 'folder missing'));
+      frag.appendChild(b);
+      if (sel) selBtn = b;
+      if (p.key === focusKey) focusBtn = b;
+    });
+    elTabs.replaceChildren(frag);
+    elTabs.scrollLeft = scroll;
+    if (reveal && selBtn) {
+      const l = selBtn.offsetLeft, w = selBtn.offsetWidth;
+      if (l < elTabs.scrollLeft) elTabs.scrollLeft = Math.max(0, l - 8);
+      else if (l + w > elTabs.scrollLeft + elTabs.clientWidth) elTabs.scrollLeft = l + w - elTabs.clientWidth + 8;
+    }
+    if (reveal && focusKey && selBtn) focusBtn = selBtn;   // the selection moved (Back/Forward): focus follows it
+    if (focusBtn) focusBtn.focus({ preventScroll: true });
+  }
+
+  function goProject(key) {
+    if (!key || key === selKey) return;
+    location.hash = hashFor(key, '');
+    syncFromHash();                              // do not wait for the hashchange event: focus stays on the tab
+  }
+  elTabs.addEventListener('click', (e) => {
+    const t = e.target.closest ? e.target.closest('.ptab') : null;
+    if (t) goProject(t.dataset.key);
+  });
+  elTabs.addEventListener('keydown', (e) => {
+    const t = e.target.closest ? e.target.closest('.ptab') : null;
+    if (!t || !projects || e.altKey || e.ctrlKey || e.metaKey) return;
+    const i = projects.findIndex((p) => p.key === t.dataset.key);
+    let n = -1;
+    if (e.key === 'ArrowRight') n = (i + 1) % projects.length;
+    else if (e.key === 'ArrowLeft') n = (i + projects.length - 1) % projects.length;
+    else if (e.key === 'Home') n = 0;
+    else if (e.key === 'End') n = projects.length - 1;
+    if (n < 0) return;
+    e.preventDefault();
+    goProject(projects[n].key);
+    const nb = elTabs.querySelector('.ptab[data-key="' + cssEscape(projects[n].key) + '"]');
+    if (nb) { nb.focus({ preventScroll: true }); nb.scrollIntoView({ inline: 'nearest', block: 'nearest' }); }
+  });
+
+  // Switch to a project: forget the old state, show the new tab, fetch the new board.
+  function selectProject(key) {
+    saveFilters();
+    selKey = key;
+    current = null; currentKey = ''; lastRaw = null; boardKey = null; synced = false; pendingRender = false;
+    loadFilters();
+    const p = projectByKey(key);
+    setDir(p ? p.projectDir : '');
+    renderTabs(true);
+    elBoard.replaceChildren();
+    elNote.replaceChildren();
+    updateSessionOptions();
+    updateToolbar();
+    renderNotice();
+    poll();
+  }
+
+  function saveFilters() {
+    if (!selKey) return;
+    filterMemo[selKey] = { q: elSearch.value, threadsOnly: elThreadsOnly.getAttribute('aria-pressed') === 'true', session: sessionSel };
+  }
+  function loadFilters() {
+    const m = filterMemo[selKey] || { q: '', threadsOnly: false, session: '' };
+    elSearch.value = m.q;
+    elThreadsOnly.setAttribute('aria-pressed', m.threadsOnly ? 'true' : 'false');
+    sessionSel = m.session;
+  }
+
+  // The toolbar's New card button follows the selected project's state.
+  function updateToolbar() {
+    const ro = !!selKey && isRO();
+    elNewBtn.setAttribute('aria-disabled', ro ? 'true' : 'false');
+    elNewBtn.title = ro ? READONLY_WHY : '';
+  }
+
+  // The bar above the columns for a project whose folder is gone.
+  let noticeSig = '';
+  let forgetAsk = '';          // project key whose forget confirm step is showing
+  function renderNotice() {
+    const ro = !!selKey && isRO();
+    if (!ro) { noticeSig = ''; forgetAsk = ''; elNotice.hidden = true; elNotice.replaceChildren(); return; }
+    const p = projectByKey(selKey);
+    const dir = (current && current.projectDir) || (p && p.projectDir) || '';
+    const key = selKey;
+    const sig = key + '|' + dir + '|' + (forgetAsk === key);
+    if (sig === noticeSig) return;
+    noticeSig = sig;
+    const hadFocus = elNotice.contains(document.activeElement);
+    elNotice.replaceChildren();
+    elNotice.hidden = false;
+    if (forgetAsk === key) {
+      elNotice.appendChild(h('span', 'confirm-text', 'Forget this project? Its stored cards are removed from the board and this cannot be undone.'));
+      const keep = plainBtn('Keep it', 'small', () => { forgetAsk = ''; renderNotice(); });
+      elNotice.append(keep, actionBtn('Forget project', 'small danger solid', 'forget:' + key, () => forgetProject(key)));
+      if (hadFocus) keep.focus();
+    } else {
+      const grow = h('span', 'grow');
+      grow.append('This project’s folder was not found at ');
+      grow.appendChild(h('code', null, dir));
+      grow.append('. Its cards are shown read-only.');
+      elNotice.appendChild(grow);
+      const ask = plainBtn('Forget this project', 'small', () => { forgetAsk = key; renderNotice(); });
+      elNotice.appendChild(ask);
+      if (hadFocus) ask.focus();
+    }
+    syncBusy();
+  }
+  async function forgetProject(key) {
+    clearError();
+    let ok = false;
+    await runAction('forget:' + key, async () => {
+      try { await api('DELETE', '/api/p/' + encodeURIComponent(key), {}); ok = true; }
+      catch (e) { showError(e.message); forgetAsk = ''; noticeSig = ''; }
+    });
+    if (ok) {
+      forgetAsk = '';
+      delete filterMemo[key];
+      await refreshProjects();
+      if (selKey === key) {
+        history.replaceState(null, '', location.pathname + location.search + hashFor(homeKey, ''));
+        syncFromHash();
+      }
+    } else if (selKey === key) renderNotice();
+  }
+
+  // ---------- parent sessions ----------
+  let sessionSel = '';       // selected parent session id in the Session filter ('' = all)
+  function sessionInfo(id) {
+    return (current && current.sessions && id && current.sessions[id] && typeof current.sessions[id] === 'object') ? current.sessions[id] : null;
+  }
+  function sessionLabel(id) {
+    const s = sessionInfo(id);
+    if (s && s.label) return String(s.label);
+    return id ? 'session ' + String(id).slice(0, 8) : '';
+  }
+  let sessSig = '';
+  function updateSessionOptions() {
+    const map = {};
+    if (current) current.cards.forEach((c) => { if (isThread(c) && c.thread.parentSessionId) map[c.thread.parentSessionId] = sessionLabel(c.thread.parentSessionId); });
+    if (sessionSel && !map[sessionSel] && current) sessionSel = '';
+    const ids = Object.keys(map).sort((a, b) => map[a].localeCompare(map[b]));
+    const sig = JSON.stringify([ids.map((i) => [i, map[i]]), sessionSel]);
+    if (sig === sessSig) return;
+    sessSig = sig;
+    elSessionWrap.hidden = !ids.length;
+    const frag = document.createDocumentFragment();
+    const all = h('option', null, 'All sessions'); all.value = ''; frag.appendChild(all);
+    ids.forEach((i) => { const o = h('option', null, map[i]); o.value = i; o.title = map[i]; frag.appendChild(o); });
+    elSession.replaceChildren(frag);
+    elSession.value = sessionSel;
+  }
+  elSession.addEventListener('change', () => { sessionSel = elSession.value; renderBoard(false); });
 
   let dirShown = null;
   function setDir(dir) {
@@ -716,9 +1195,10 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   // ---------- board ----------
 
   function filterState() {
-    return { q: elSearch.value.trim().toLowerCase(), threadsOnly: elThreadsOnly.getAttribute('aria-pressed') === 'true' };
+    return { q: elSearch.value.trim().toLowerCase(), threadsOnly: elThreadsOnly.getAttribute('aria-pressed') === 'true', session: sessionSel };
   }
   function matches(c, f) {
+    if (f.session && !(isThread(c) && c.thread.parentSessionId === f.session)) return false;
     if (f.threadsOnly && !isThread(c)) return false;
     if (!f.q) return true;
     return (c.id + ' ' + c.title + ' ' + (c.note || '')).toLowerCase().includes(f.q);
@@ -727,8 +1207,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   function renderBoard(force) {
     if (!current) return;
     if (dragId !== null) { pendingRender = true; return; }
+    updateSessionOptions();
     const f = filterState();
-    const key = currentKey + '|' + f.q + '|' + f.threadsOnly;
+    const key = currentKey + '|' + f.q + '|' + f.threadsOnly + '|' + f.session;
     if (!force && key === boardKey) return;
     boardKey = key;
     pendingRender = false;
@@ -739,14 +1220,14 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     const a = document.activeElement;
     const focusId = (a && a.classList && a.classList.contains('card') && elBoard.contains(a)) ? a.dataset.id : null;
 
-    const filtering = !!(f.q || f.threadsOnly);
+    const filtering = !!(f.q || f.threadsOnly || f.session);
     const shown = current.cards.filter((c) => matches(c, f));
     const byStatus = {};
     STATUSES.forEach((s) => { byStatus[s] = []; });
     shown.forEach((c) => { if (byStatus[c.status]) byStatus[c.status].push(c); });
 
     const frag = document.createDocumentFragment();
-    STATUSES.forEach((s) => frag.appendChild(buildColumn(s, byStatus[s], filtering)));
+    STATUSES.forEach((s) => frag.appendChild(buildColumn(s, byStatus[s], filtering, f.session)));
     elBoard.replaceChildren(frag);
     elBoard.scrollLeft = scrollLeft;
     elBoard.querySelectorAll('.col').forEach((c) => {
@@ -764,14 +1245,17 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     } else if (filtering) {
       const total = current.cards.length;
       if (!shown.length) {
-        const what = f.q ? 'No cards match “' + elSearch.value.trim() + '”' + (f.threadsOnly ? ' among threads.' : '.') : 'No threads on the board yet.';
+        let what;
+        if (f.session) what = f.q ? 'No threads from ' + sessionLabel(f.session) + ' match “' + elSearch.value.trim() + '”.' : 'No threads from ' + sessionLabel(f.session) + ' on this board. Tasks and ideas are hidden while a session is selected.';
+        else what = f.q ? 'No cards match “' + elSearch.value.trim() + '”' + (f.threadsOnly ? ' among threads.' : '.') : 'No threads on the board yet.';
         elNote.appendChild(h('span', null, what));
       } else {
-        elNote.appendChild(h('span', 'tnum', 'Showing ' + shown.length + ' of ' + total + ' cards.'));
+        elNote.appendChild(h('span', 'tnum', 'Showing ' + shown.length + ' of ' + total + ' cards.' + (f.session ? ' Tasks and ideas are hidden while a session is selected.' : '')));
       }
       const clear = plainBtn('Clear filters', 'small', () => {
         elSearch.value = '';
         elThreadsOnly.setAttribute('aria-pressed', 'false');
+        sessionSel = '';
         renderBoard(true);
         elSearch.focus();
       });
@@ -779,7 +1263,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     }
   }
 
-  function buildColumn(status, cards, filtering) {
+  function buildColumn(status, cards, filtering, session) {
     const col = h('section', 'col');
     col.dataset.status = status;
     col.setAttribute('aria-label', label(status) + ', ' + cards.length + (cards.length === 1 ? ' card' : ' cards'));
@@ -790,7 +1274,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     col.appendChild(head);
 
     const body = h('div', 'col-body');
-    if (!cards.length) body.appendChild(h('div', 'col-empty', filtering ? 'No matching cards in this column.' : EMPTY[status]));
+    if (!cards.length) body.appendChild(h('div', 'col-empty', session ? 'No threads from this session here.' : filtering ? 'No matching cards in this column.' : EMPTY[status]));
     cards.forEach((c) => body.appendChild(buildCard(c)));
     col.appendChild(body);
 
@@ -832,13 +1316,19 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
     el.appendChild(h('h3', 'card-title', card.title));
     if (card.note) el.appendChild(h('p', 'card-note', card.note));
+    if (thread && t.parentSessionId) {
+      const from = h('p', 'card-from', 'from ' + sessionLabel(t.parentSessionId));
+      from.title = sessionLabel(t.parentSessionId);
+      el.appendChild(from);
+    }
 
     const foot = h('div', 'card-foot');
     if (thread) {
       foot.appendChild(runPill(t.runState));
       const n = turnsOf(card).length;
       foot.appendChild(h('span', 'tnum', n + (n === 1 ? ' turn' : ' turns')));
-      if (t.runState !== 'running' && hasResult(card) && !t.reported) foot.appendChild(h('span', 'warn-text', 'not reported'));
+      const rt = reportTag(card);
+      if (rt) foot.appendChild(rt);
     }
     if (card.seenByClaude === false) {
       const u = h('span', 'unseen');
@@ -848,7 +1338,8 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     }
     if (foot.childNodes.length) el.appendChild(foot);
 
-    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
+    const rs = thread ? reportState(card) : '';
+    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (rs === 'not' ? ', not reported' : rs === 'yes' ? ', reported' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
 
     el.addEventListener('click', () => {
       if (Date.now() - lastDragEnd < 200) return;
@@ -859,7 +1350,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCard(card.id, el); }
     });
 
-    if (!thread) {
+    if (!thread && !isRO()) {
       el.draggable = true;
       el.addEventListener('dragstart', (e) => {
         dragId = card.id;
@@ -872,7 +1363,21 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     return el;
   }
 
-  function hasResult(card) { return turnsOf(card).some((x) => x.ok === true && typeof x.result === 'string'); }
+  // 'not' = a successful result the main session has not pulled, 'yes' = the newest result was pulled, '' = no result yet
+  function reportState(card) {
+    const t = card.thread;
+    if (!t || t.lastResult === null || t.lastResult === undefined) return '';
+    return t.reported ? 'yes' : 'not';
+  }
+  function reportTag(card) {
+    const st = reportState(card);
+    if (!st) return null;
+    const tag = h('span', 'tag ' + (st === 'not' ? 'attn' : 'quiet'));
+    tag.appendChild(shape(st === 'not' ? 's-diamond' : 's-ring'));
+    tag.appendChild(h('span', null, st === 'not' ? 'Not reported' : 'Reported'));
+    tag.title = st === 'not' ? 'The main session has not pulled this thread’s result yet' : 'The main session has pulled this thread’s newest result';
+    return tag;
+  }
 
   function runPill(state) {
     const p = h('span', 'pill');
@@ -894,10 +1399,11 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
   async function moveCard(id, status) {
     const card = findCard(id);
-    if (!card || isThread(card) || card.status === status) return;
+    if (!card || isThread(card) || card.status === status || isRO()) return;
+    const key = selKey;
     clearError();
-    await runAction('move:' + id, async () => {
-      try { applyCard(await api('PATCH', '/api/cards/' + encodeURIComponent(id), { status })); }
+    await runAction('move:' + key + ':' + id, async () => {
+      try { applyCard(await api('PATCH', pp(key, 'cards/' + encodeURIComponent(id)), { status }), key); wrote(); }
       catch (e) { showError(e.message); }
     });
     poll();
@@ -908,7 +1414,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     elThreadsOnly.setAttribute('aria-pressed', elThreadsOnly.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
     renderBoard(false);
   });
-  elNewBtn.addEventListener('click', () => openNew());
+  elNewBtn.addEventListener('click', () => { if (elNewBtn.getAttribute('aria-disabled') === 'true') return; openNew(); });
   elSearch.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && elSearch.value) { e.stopPropagation(); elSearch.value = ''; renderBoard(false); }
   });
@@ -1045,31 +1551,59 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
   // ---------- panel plumbing ----------
 
+  function decode(s) { try { return decodeURIComponent(s); } catch (e) { return s; } }
+  // '#/<project>' or '#/<project>/<card>'; the old '#<card>' form has no project part
   function parseHash() {
     const raw = (location.hash || '').replace(/^#/, '');
-    try { return decodeURIComponent(raw); } catch (e) { return raw; }
+    if (raw.startsWith('/')) {
+      const rest = raw.slice(1);
+      const cut = rest.indexOf('/');
+      return { key: decode(cut < 0 ? rest : rest.slice(0, cut)), target: cut < 0 ? '' : decode(rest.slice(cut + 1)) };
+    }
+    return { key: '', target: decode(raw) };
   }
+  function hashFor(key, target) { return '#/' + encodeURIComponent(key) + (target ? '/' + encodeURIComponent(target) : ''); }
 
   function openCard(id, fromEl) {
     returnFocus = fromEl ? { id } : null;
     navigateOpen(id);
   }
-  function openNew() { returnFocus = { el: elNewBtn }; navigateOpen('new'); }
+  function openNew() { if (halted || isRO()) return; returnFocus = { el: elNewBtn }; navigateOpen('new'); }
   function navigateOpen(target) {
     if (panel) return;
     hashPushed = true;
-    location.hash = target;
+    location.hash = hashFor(selKey, target);
   }
 
   window.addEventListener('hashchange', syncFromHash);
 
   function syncFromHash() {
-    if (!current) return;
-    const target = parseHash();
+    if (halted || !projects) return;
+    const hs = parseHash();
+    // no project in the hash: stay on the selected one (home at first); an unknown project: home
+    const wanted = hs.key ? (projectByKey(hs.key) ? hs.key : homeKey) : (selKey || homeKey);
+    if (!wanted) { elBoard.replaceChildren(); return; }
+    if (wanted !== selKey) {
+      if (panel && panel.isDirty && panel.isDirty()) {
+        // leaving with unsaved edits: put the hash back and ask first
+        history.pushState(null, '', hashFor(selKey, panel.target));
+        panel.showDiscard();
+        return;
+      }
+      if (panel) removePanel(false);
+      selectProject(wanted);
+    }
+    if (hs.key !== wanted) history.replaceState(null, '', location.pathname + location.search + hashFor(wanted, hs.target));
+    if (!current) return;                        // the board is still loading; apply() comes back here
+    const target = hs.target;
+    if (target === 'new' && isRO()) {
+      history.replaceState(null, '', location.pathname + location.search + hashFor(selKey, ''));
+      if (panel) removePanel(false);
+      return;
+    }
     if (panel && panel.target === target) { updatePanel(); return; }
     if (panel && panel.isDirty && panel.isDirty()) {
-      // leaving with unsaved edits: put the hash back and ask first
-      history.pushState(null, '', '#' + encodeURIComponent(panel.target));
+      history.pushState(null, '', hashFor(selKey, panel.target));
       panel.showDiscard();
       return;
     }
@@ -1085,13 +1619,14 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   function navigateClose() {
     if (hashPushed) { hashPushed = false; history.back(); }
     else {
-      history.replaceState(null, '', location.pathname + location.search);
+      history.replaceState(null, '', location.pathname + location.search + hashFor(selKey, ''));
       syncFromHash();
     }
   }
 
   function removePanel(swapping) {
     if (!panel) return;
+    if (panel.dispose) panel.dispose();
     panel = null;
     elOverlay.replaceChildren();
     if (swapping) return;      // another panel is about to replace this one
@@ -1168,15 +1703,16 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     head.querySelector('.dr-head-row .muted').textContent = id;
   }
 
+  function panelKey(card) { return JSON.stringify([card, isRO(), isThread(card) ? sessionInfo(card.thread.parentSessionId) : null]); }
   function updatePanel() {
     if (!panel || panel.target === 'new') return;
     const card = findCard(panel.target);
     if (!card) {
-      if (panel.type !== 'missing') { const id = panel.target; panel.isDirty = null; elOverlay.replaceChildren(); panel = null; buildMissing(id); panel.drawer.focus({ preventScroll: true }); }
+      if (panel.type !== 'missing') { const id = panel.target; panel.isDirty = null; if (panel.dispose) panel.dispose(); elOverlay.replaceChildren(); panel = null; buildMissing(id); panel.drawer.focus({ preventScroll: true }); }
       return;
     }
     if (panel.type === 'missing') { const id = panel.target; panel = null; buildPanel(id); return; }
-    const key = JSON.stringify(card);
+    const key = panelKey(card);
     if (key === panel.cardKey) return;
     panel.cardKey = key;
     panel.update(card);
@@ -1200,7 +1736,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
   function buildTaskPanel(card) {
     const create = !card;
-    const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? JSON.stringify(card) : '', confirmDelete: false, msg: '' };
+    const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? panelKey(card) : '', confirmDelete: false, msg: '' };
     mountDrawer(P, false);
 
     P.base = create ? { title: '', note: '', status: 'new', kind: 'task' } : { title: card.title, note: card.note || '', status: card.status, kind: card.kind };
@@ -1220,7 +1756,10 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     const conflict = h('div', 'callout warn');
     conflict.hidden = true;
     conflict.appendChild(h('span', 'grow', 'This card was changed on the board while you were editing. Saving will overwrite those changes.'));
-    body.append(warnSlot, conflict);
+    const roNote = h('div', 'callout warn', READONLY_WHY);
+    roNote.setAttribute('role', 'status');
+    roNote.hidden = true;
+    body.append(warnSlot, roNote, conflict);
 
     const fTitle = h('input', 'input');
     fTitle.type = 'text';
@@ -1298,17 +1837,20 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       const newTitle = fTitle.value.trim();
       if (!newTitle) { setTitleErr('A title is required.'); fTitle.focus(); return; }
       clearError();
-      const key = create ? 'create' : 'save:' + card.id;
+      if (isRO()) return;
+      const pk = selKey;
+      const key = create ? 'create:' + pk : 'save:' + pk + ':' + card.id;
       await runAction(key, async () => {
         try {
           if (create) {
             const bodyObj = { title: newTitle, status: fStatus.value, kind: fKind.value };
             if (fNote.value.trim()) bodyObj.note = fNote.value.trim();
-            const made = await api('POST', '/api/cards', bodyObj);
-            applyCard(made);
+            const made = await api('POST', pp(pk, 'cards'), bodyObj);
+            wrote();
+            applyCard(made, pk);
             fTitle.value = P.base.title; fNote.value = P.base.note; fStatus.value = P.base.status; fKind.value = P.base.kind;
-            if (panel === P) {
-              history.replaceState(null, '', '#' + encodeURIComponent(made.id));
+            if (panel === P && pk === selKey) {
+              history.replaceState(null, '', location.pathname + location.search + hashFor(pk, made.id));
               syncFromHash();
             }
           } else {
@@ -1317,14 +1859,15 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
             if (fNote.value !== P.base.note) patch.note = fNote.value;
             if (fStatus.value !== P.base.status) patch.status = fStatus.value;
             if (!Object.keys(patch).length) { P.msg = 'No changes to save.'; msgEl.textContent = P.msg; return; }
-            const saved = await api('PATCH', '/api/cards/' + encodeURIComponent(card.id), patch);
+            const saved = await api('PATCH', pp(pk, 'cards/' + encodeURIComponent(card.id)), patch);
+            wrote();
             P.base = { title: saved.title, note: saved.note || '', status: saved.status, kind: saved.kind };
             P.baseUpdatedAt = saved.updatedAt;
             P.latestUpdatedAt = saved.updatedAt;
             if (fTitle.value === saved.title) fTitle.value = saved.title; else if (fTitle.value.trim() === saved.title) fTitle.value = saved.title;
             P.msg = 'Saved.';
             msgEl.textContent = P.msg;
-            applyCard(saved);
+            applyCard(saved, pk);
             refreshConflict();
           }
         } catch (e) { showError(e.message); }
@@ -1343,20 +1886,23 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       if (P.confirmDelete) {
         foot.appendChild(h('span', 'confirm-text', 'Delete ' + card.id + '? This cannot be undone.'));
         foot.appendChild(h('span', 'grow'));
-        const del = actionBtn('Delete card', 'danger solid', 'delete:' + card.id, () => doDelete(card.id));
+        const del = actionBtn('Delete card', 'danger solid', 'delete:' + selKey + ':' + card.id, () => doDelete(card.id));
         const keep = plainBtn('Keep it', null, () => { P.confirmDelete = false; renderFoot(true); });
         foot.append(keep, del);
         if (focusFirst) keep.focus();
         syncBusy();
         return;
       }
-      const saveBtn = actionBtn(create ? 'Create card' : 'Save', 'primary', create ? 'create' : 'save:' + card.id, save);
+      const ro = isRO();
+      const saveBtn = actionBtn(create ? 'Create card' : 'Save', 'primary', create ? 'create:' + selKey : 'save:' + selKey + ':' + card.id, save);
       if (focusFirst) setTimeout(() => saveBtn.focus(), 0);
-      saveBtn.title = 'Save (Ctrl or Cmd + Enter)';
+      saveBtn.title = ro ? READONLY_WHY : 'Save (Ctrl or Cmd + Enter)';
+      if (ro) setOff(saveBtn, true);
       foot.append(saveBtn, plainBtn('Cancel', null, cancel), msgEl);
       foot.appendChild(h('span', 'grow'));
       if (!create) {
         const del = plainBtn('Delete', 'danger', () => { P.confirmDelete = true; renderFoot(true); });
+        if (ro) { del.disabled = true; del.title = READONLY_WHY; }
         foot.appendChild(del);
       }
       syncBusy();
@@ -1365,11 +1911,12 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     async function doDelete(id) {
       clearError();
       let ok = false;
-      await runAction('delete:' + id, async () => {
-        try { await api('DELETE', '/api/cards/' + encodeURIComponent(id), {}); ok = true; }
+      const pk = selKey;
+      await runAction('delete:' + pk + ':' + id, async () => {
+        try { await api('DELETE', pp(pk, 'cards/' + encodeURIComponent(id)), {}); ok = true; wrote(); }
         catch (e) { showError(e.message); P.confirmDelete = false; }
       });
-      if (ok && panel === P) {
+      if (ok && panel === P && pk === selKey) {
         const idx = current.cards.findIndex((c) => c.id === id);
         if (idx >= 0) { const cards = current.cards.slice(); cards.splice(idx, 1); appliedSeq = ++pollSeq; lastRaw = null; current = Object.assign({}, current, { cards }); currentKey = JSON.stringify(current); }
         P.isDirty = null;
@@ -1378,6 +1925,17 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         renderBoard(false);
       } else if (panel === P) renderFoot();
       poll();
+    }
+
+    let roShown = null;
+    function applyRO() {
+      const ro = isRO();
+      if (ro === roShown) return;
+      roShown = ro;
+      roNote.hidden = !ro;
+      [fTitle, fNote, fStatus, fKind].forEach((f) => { if (f) { f.disabled = ro; f.title = ro ? READONLY_WHY : ''; } });
+      if (ro) P.confirmDelete = false;
+      renderFoot();
     }
 
     P.update = (c) => {
@@ -1404,6 +1962,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       metaCreated.replaceChildren(timeEl(c.createdAt));
       metaUpdated.replaceChildren(timeEl(c.updatedAt));
       refreshConflict();
+      applyRO();
     };
 
     if (create) {
@@ -1439,21 +1998,23 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       return ok;
     } catch (e) { return false; }
   }
-  function copyBtn(text, what) {
-    const b = plainBtn('Copy', 'small');
-    b.setAttribute('aria-label', 'Copy ' + what);
+  function copyBtn(text, what, labelText) {
+    const idle = labelText || 'Copy';
+    const b = plainBtn(idle, 'small');
+    b.setAttribute('aria-label', labelText ? labelText : 'Copy ' + what);
     b.addEventListener('click', async () => {
       const ok = await copyText(text);
       b.textContent = ok ? 'Copied' : 'Copy failed';
       if (!ok) showError('Could not copy to the clipboard. Select the text and copy it by hand.');
       clearTimeout(b._t);
-      b._t = setTimeout(() => { b.textContent = 'Copy'; }, 1600);
+      b._t = setTimeout(() => { b.textContent = idle; }, 1600);
     });
     return b;
   }
 
   function sendBlock(card) {
     const t = card.thread;
+    if (isRO()) return READONLY_WHY;
     if (t.runState === 'ended') return 'This thread has ended, so it cannot take new messages.';
     if (t.runState === 'running') return 'A turn is still running. You can send a message when it finishes.';
     if (!t.sessionId) {
@@ -1464,86 +2025,140 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     return '';
   }
 
-  const TABS = [['trace', 'Trace'], ['conversation', 'Conversation'], ['digest', 'Digest']];
+  const VIEWS = [['conversation', 'Conversation'], ['about', 'About'], ['trace', 'Trace']];
   const traceHidden = {};   // kinds switched off in the Trace filters, kept across polls
+  const WS_KEY = 'thread-board-panes';
+  const wsCollapsed = (function () {
+    try {
+      const v = JSON.parse(sessionStorage.getItem(WS_KEY) || '{}');
+      return { left: !!(v && v.left), right: !!(v && v.right) };
+    } catch (e) { return { left: false, right: false }; }
+  })();
+  function saveCollapsed() { try { sessionStorage.setItem(WS_KEY, JSON.stringify(wsCollapsed)); } catch (e) { /* storage unavailable: keep the in-page value */ } }
+  function chev(dir) { const c = h('span', 'chev ' + dir); c.setAttribute('aria-hidden', 'true'); return c; }
+  function reducedMotion() { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+
+  // the full-view workspace for a thread card
+  function mountWorkspace(P) {
+    const ws = h('section', 'ws');
+    ws.setAttribute('role', 'dialog');
+    ws.setAttribute('aria-modal', 'true');
+    ws.setAttribute('aria-labelledby', 'drawer-title');
+    ws.tabIndex = -1;
+    P.drawer = ws;
+    elOverlay.replaceChildren(ws);
+    elOverlay.hidden = false;
+    elApp.inert = true;
+  }
 
   function buildThreadPanel(card) {
     const P = panel = {
-      target: card.id, type: 'thread', cardKey: JSON.stringify(card), isDirty: null, tab: 'trace',
-      confirm: null, keys: {}, scrollSaved: { trace: 0, conversation: 0, digest: 0 }, convAtBottom: true, scrollers: {},
+      target: card.id, type: 'thread', cardKey: panelKey(card), isDirty: null, view: 'conversation',
+      confirm: null, keys: {}, scrollSaved: { about: 0, conversation: 0, trace: 0 }, convAtBottom: true, scrollers: {},
+      narrow: false, flash: null,
     };
     KINDS.forEach((k) => { delete traceHidden[k]; });
-    mountDrawer(P, true);
+    mountWorkspace(P);
+    const ws = P.drawer;
 
-    const head = h('div', 'dr-head');
-    const ids = h('details', 'ids');
-    ids.open = window.innerHeight >= 900;   // short windows start collapsed to leave room for the thread
-    const tabs = h('div', 'tabs');
+    // ----- top bar -----
+    const bar = h('header', 'ws-bar');
+    const back = h('button', 'btn back');
+    back.type = 'button';
+    back.title = 'Back to the board (Esc)';
+    back.setAttribute('aria-keyshortcuts', 'Escape');
+    back.append(chev('l'), h('span', null, 'Back to board'));
+    const kb = h('kbd', 'hint', 'Esc'); kb.setAttribute('aria-hidden', 'true');
+    back.appendChild(kb);
+    back.addEventListener('click', requestClose);
+    const chip = h('span', 'idchip', card.id);
+    const titleEl = h('h2', 'ws-title');
+    titleEl.id = 'drawer-title';
+    const meta = h('div', 'ws-meta');
+    const actions = h('div', 'ws-actions');
+    bar.append(back, chip, titleEl, meta, actions);
+
+    // ----- view tabs (single-pane layout only) -----
+    const tabs = h('div', 'tabs ws-tabs');
     tabs.setAttribute('role', 'tablist');
     tabs.setAttribute('aria-label', 'Thread views');
-    const panels = h('div', 'tabpanels');
-    const foot = h('div', 'dr-foot');
-    P.drawer.append(head, ids, tabs, panels, foot);
-
-    // tabs
-    const tabBtns = {}, tabPanels = {};
-    TABS.forEach(([id, text]) => {
+    tabs.hidden = true;
+    const tabBtns = {};
+    VIEWS.forEach(([id, text]) => {
       const b = h('button', 'tab', text);
       b.type = 'button';
       b.id = 'tab-' + id;
       b.setAttribute('role', 'tab');
-      b.setAttribute('aria-controls', 'tp-' + id);
-      b.addEventListener('click', () => selectTab(id));
+      b.setAttribute('aria-controls', 'pane-' + id);
+      b.addEventListener('click', () => selectView(id));
       b.addEventListener('keydown', (e) => {
-        const i = TABS.findIndex((x) => x[0] === P.tab);
+        const i = VIEWS.findIndex((x) => x[0] === P.view);
         let n = -1;
-        if (e.key === 'ArrowRight') n = (i + 1) % TABS.length;
-        else if (e.key === 'ArrowLeft') n = (i + TABS.length - 1) % TABS.length;
+        if (e.key === 'ArrowRight') n = (i + 1) % VIEWS.length;
+        else if (e.key === 'ArrowLeft') n = (i + VIEWS.length - 1) % VIEWS.length;
         else if (e.key === 'Home') n = 0;
-        else if (e.key === 'End') n = TABS.length - 1;
+        else if (e.key === 'End') n = VIEWS.length - 1;
         if (n < 0) return;
         e.preventDefault();
-        selectTab(TABS[n][0]);
-        tabBtns[TABS[n][0]].focus();
+        selectView(VIEWS[n][0]);
+        tabBtns[VIEWS[n][0]].focus();
       });
       tabs.appendChild(b);
       tabBtns[id] = b;
-      const p = h('div', 'tabpanel');
-      p.id = 'tp-' + id;
-      p.setAttribute('role', 'tabpanel');
-      p.setAttribute('aria-labelledby', 'tab-' + id);
-      panels.appendChild(p);
-      tabPanels[id] = p;
     });
-    const scTrace = h('div', 'scroller'); scTrace.tabIndex = 0; scTrace.setAttribute('aria-label', 'Trace');
-    const scConvo = h('div', 'scroller'); scConvo.tabIndex = 0; scConvo.setAttribute('aria-label', 'Conversation');
-    const scDigest = h('div', 'scroller'); scDigest.tabIndex = 0; scDigest.setAttribute('aria-label', 'Digest');
+
+    // ----- panes -----
+    const main = h('div', 'ws-main');
+    const paneL = h('section', 'ws-pane ws-left'); paneL.id = 'pane-about';
+    const paneC = h('section', 'ws-pane ws-center'); paneC.id = 'pane-conversation';
+    const paneR = h('section', 'ws-pane ws-right'); paneR.id = 'pane-trace';
+    const panes = { about: paneL, conversation: paneC, trace: paneR };
+    const paneName = { about: 'About this thread', conversation: 'Conversation', trace: 'Trace' };
+    const scrollerOf = (name) => { const s = h('div', 'scroller'); s.tabIndex = 0; s.setAttribute('aria-label', name); return s; };
+    const scAbout = scrollerOf('About this thread'), scConvo = scrollerOf('Conversation'), scTrace = scrollerOf('Trace');
+    P.scrollers = { about: scAbout, conversation: scConvo, trace: scTrace };
+
+    const sideCtl = {};
+    function sidePane(side, pane, title, scroller) {
+      const head = h('div', 'pane-head');
+      head.appendChild(h('h3', null, title));
+      const collapse = plainBtn('', 'icon ghost small');
+      collapse.appendChild(chev(side === 'left' ? 'l' : 'r'));
+      collapse.setAttribute('aria-label', 'Hide ' + title + ' pane');
+      collapse.title = 'Hide ' + title;
+      collapse.setAttribute('aria-expanded', 'true');
+      collapse.style.width = '28px';
+      const rail = h('button', 'pane-rail');
+      rail.type = 'button';
+      rail.appendChild(chev(side === 'left' ? 'r' : 'l'));
+      rail.appendChild(h('span', 'rail-label', title));
+      rail.setAttribute('aria-label', 'Show ' + title + ' pane');
+      rail.title = 'Show ' + title;
+      rail.setAttribute('aria-expanded', 'false');
+      head.appendChild(collapse);
+      collapse.addEventListener('click', () => setCollapsed(side, true));
+      rail.addEventListener('click', () => setCollapsed(side, false));
+      pane.append(head, scroller, rail);
+      sideCtl[side] = { collapse, rail };
+    }
+    sidePane('left', paneL, 'About', scAbout);
+    sidePane('right', paneR, 'Trace', scTrace);
     const composer = h('div', 'composer');
-    tabPanels.trace.appendChild(scTrace);
-    tabPanels.conversation.append(scConvo, composer);
-    tabPanels.digest.appendChild(scDigest);
-    P.scrollers = { trace: scTrace, conversation: scConvo, digest: scDigest };
+    paneC.append(scConvo, composer);
+    main.append(paneL, paneC, paneR);
+    ws.append(bar, tabs, main);
+
     Object.keys(P.scrollers).forEach((k) => {
       P.scrollers[k].addEventListener('scroll', () => {
-        if (P.tab !== k || !P.scrollers[k].clientHeight) return;
         const s = P.scrollers[k];
+        if (!s.clientHeight) return;      // hidden panes report 0 and must not overwrite the saved position
         P.scrollSaved[k] = s.scrollTop;
         if (k === 'conversation') P.convAtBottom = s.scrollHeight - s.scrollTop - s.clientHeight < 80;
       });
     });
-
-    function selectTab(id) {
-      P.tab = id;
-      TABS.forEach(([t]) => {
-        const on = t === id;
-        tabBtns[t].setAttribute('aria-selected', on ? 'true' : 'false');
-        tabBtns[t].tabIndex = on ? 0 : -1;
-        tabPanels[t].hidden = !on;
-      });
-      restoreScroll(id);
-    }
     function restoreScroll(id) {
       const s = P.scrollers[id];
+      if (!s.clientHeight) return;
       if (id === 'conversation' && P.convAtBottom) s.scrollTop = s.scrollHeight;
       else s.scrollTop = P.scrollSaved[id];
     }
@@ -1553,62 +2168,102 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       const a = document.activeElement;
       const fid = (a && s.contains(a) && a.dataset) ? a.dataset.fid : null;
       s.replaceChildren(...[].concat(build()));
-      if (P.tab === id) restoreScroll(id);
+      restoreScroll(id);
       if (fid) { const t = s.querySelector('[data-fid="' + fid + '"]'); if (t) t.focus({ preventScroll: true }); }
     }
 
-    // ----- header and ids -----
+    // wide: three panes with collapsible sides. narrow: one pane at a time, chosen by the tabs.
+    function applyPanes() {
+      const narrow = P.narrow;
+      ws.toggleAttribute('data-narrow', narrow);
+      tabs.hidden = !narrow;
+      VIEWS.forEach(([id]) => {
+        const p = panes[id], on = id === P.view;
+        p.toggleAttribute('data-on', on);
+        if (narrow) {
+          p.setAttribute('role', 'tabpanel'); p.setAttribute('aria-labelledby', 'tab-' + id); p.removeAttribute('aria-label');
+        } else {
+          p.setAttribute('role', 'region'); p.setAttribute('aria-label', paneName[id]); p.removeAttribute('aria-labelledby');
+        }
+        tabBtns[id].setAttribute('aria-selected', on ? 'true' : 'false');
+        tabBtns[id].tabIndex = on ? 0 : -1;
+      });
+      paneL.classList.toggle('collapsed', !narrow && wsCollapsed.left);
+      paneR.classList.toggle('collapsed', !narrow && wsCollapsed.right);
+      VIEWS.forEach(([id]) => restoreScroll(id));
+    }
+    function selectView(id) { P.view = id; applyPanes(); }
+    function setCollapsed(side, on) {
+      wsCollapsed[side] = on;
+      saveCollapsed();
+      applyPanes();
+      (on ? sideCtl[side].rail : sideCtl[side].collapse).focus({ preventScroll: true });
+    }
+    const mq = window.matchMedia ? window.matchMedia('(max-width: 999px)') : null;
+    P.narrow = !!(mq && mq.matches);
+    const onMq = () => { P.narrow = mq.matches; applyPanes(); };
+    if (mq) { if (mq.addEventListener) mq.addEventListener('change', onMq); else mq.addListener(onMq); }
+    P.dispose = () => {
+      clearTimeout(P.flashTimer);
+      if (mq) { if (mq.removeEventListener) mq.removeEventListener('change', onMq); else mq.removeListener(onMq); }
+    };
+
+    // bring a turn of the conversation into view and flash it
+    function jumpToTurn(i) {
+      if (P.narrow && P.view !== 'conversation') selectView('conversation');
+      const el = scConvo.querySelector('.turn[data-turn="' + i + '"]');
+      if (!el) return;
+      const top = scConvo.scrollTop + el.getBoundingClientRect().top - scConvo.getBoundingClientRect().top - 16;
+      scConvo.scrollTo({ top: Math.max(0, top), behavior: reducedMotion() ? 'auto' : 'smooth' });
+      P.flash = { i, until: Date.now() + 1800 };
+      scConvo.querySelectorAll('.turn.flash').forEach((x) => x.classList.remove('flash'));
+      el.classList.add('flash');
+      clearTimeout(P.flashTimer);
+      P.flashTimer = setTimeout(() => { P.flash = null; scConvo.querySelectorAll('.turn.flash').forEach((x) => x.classList.remove('flash')); }, 1800);
+    }
+
+    // ----- bar -----
     function renderHead(c) {
       const t = c.thread;
-      const wasOpen = ids.open;
-      head.replaceChildren();
-      head.appendChild(headRow(P, c, false));
-      const title = h('h2', 'dr-title', c.title);
-      title.id = 'drawer-title';
-      head.appendChild(title);
-      const sub = h('div', 'dr-sub');
-      sub.appendChild(runPill(t.runState));
-      sub.appendChild(h('span', null, t.mode === 'write' ? 'Can edit files' : 'Read-only'));
+      titleEl.textContent = c.title;
+      titleEl.title = c.title;
+      meta.replaceChildren();
+      meta.appendChild(runPill(t.runState));
+      meta.appendChild(h('span', null, t.mode === 'write' ? 'Can edit files' : 'Read-only'));
+      if (t.parentSessionId) {
+        const from = h('span', 'ws-from', 'from ' + sessionLabel(t.parentSessionId));
+        from.title = sessionLabel(t.parentSessionId);
+        meta.appendChild(from);
+      }
+      const rt = reportTag(c);
+      if (rt) {
+        const wrap = h('span', 'ws-rep');
+        wrap.appendChild(rt);
+        if (reportState(c) === 'not') {
+          const cb = copyBtn('/thread:report ' + c.id, 'report command', 'Copy report command');
+          cb.dataset.fid = 'c-report-bar';
+          wrap.appendChild(cb);
+        }
+        meta.appendChild(wrap);
+      }
       const turns = turnsOf(c);
       const started = turns.length ? turns[0].startedAt : c.createdAt;
       const st = h('span'); st.append('Started ', timeEl(started));
-      sub.appendChild(st);
-      sub.appendChild(h('span', 'tnum', turns.length + (turns.length === 1 ? ' turn' : ' turns')));
+      meta.appendChild(st);
+      meta.appendChild(h('span', 'tnum', turns.length + (turns.length === 1 ? ' turn' : ' turns')));
       if (c.seenByClaude === false) {
         const u = h('span', 'unseen'); u.appendChild(shape('s-circle')); u.appendChild(h('span', null, 'Claude has not seen this yet'));
-        sub.appendChild(u);
+        meta.appendChild(u);
       }
-      head.appendChild(sub);
-
-      ids.replaceChildren();
-      ids.open = wasOpen;
-      const sum = h('summary', null, 'IDs');
-      const peek = h('span', 'ids-peek', t.sessionId ? 'session ' + t.sessionId.slice(0, 8) + '\u2026 \u00b7 copy ids and resume command' : 'session id not known yet');
-      sum.appendChild(peek);
-      ids.appendChild(sum);
-      const body = h('div', 'ids-body');
-      const row = (k, v, what) => {
-        body.appendChild(h('span', 'k', k));
-        if (v) { body.appendChild(h('span', 'v', v)); body.appendChild(copyBtn(v, what)); }
-        else { body.appendChild(h('span', 'muted', 'Not known yet')); body.appendChild(h('span')); }
-      };
-      row('Session id', t.sessionId, 'session id');
-      row('Parent session id', t.parentSessionId, 'parent session id');
-      if (t.sessionId) {
-        row('Resume', 'claude --resume ' + t.sessionId, 'resume command');
-        body.appendChild(h('p', 'ids-note', 'Run this in a terminal to open this thread as a normal conversation.'));
-      }
-      ids.appendChild(body);
     }
 
-    // ----- trace -----
+    // ----- trace (right pane) -----
     function renderTrace(c) {
       const turns = turnsOf(c);
       const all = turns.map((t, i) => ({ t, i, state: turnState(c, i), steps: stepsOf(t) }));
       const counts = {};
       KINDS.forEach((k) => { counts[k] = 0; });
       all.forEach((x) => x.steps.forEach((s) => { counts[s.kind]++; }));
-      const total = KINDS.reduce((n, k) => n + counts[k], 0);
 
       rebuild('trace', () => {
         const out = [];
@@ -1643,27 +2298,31 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         all.forEach((x) => {
           const block = h('section', 'turn-block');
           const th = h('h3', 'turn-head');
-          th.appendChild(h('span', 'tnum', 'Turn ' + (x.i + 1) + ' ·'));
+          const tl = h('button', 'turn-link');
+          tl.type = 'button';
+          tl.dataset.fid = 't-' + x.i;
+          tl.title = 'Show turn ' + (x.i + 1) + ' in the conversation';
+          tl.addEventListener('click', () => jumpToTurn(x.i));
+          tl.appendChild(h('span', 'tnum', 'Turn ' + (x.i + 1) + ' ·'));
           const tp = h('span', 'tp', firstLine(x.t.prompt) || '(no prompt)');
-          tp.title = x.t.prompt || '';
-          th.appendChild(tp);
+          tl.appendChild(tp);
           const when = h('span', 'when'); when.appendChild(timeEl(x.t.startedAt));
-          th.appendChild(when);
+          tl.appendChild(when);
+          th.appendChild(tl);
           block.appendChild(th);
 
           const rail = h('ol', 'rail');
-          const shown = x.steps.filter((s) => !traceHidden[s.kind]);
-          shown.forEach((s) => rail.appendChild(stepEl(s.kind, s.text, s.ref)));
+          x.steps.forEach((s, si) => {
+            if (!traceHidden[s.kind]) rail.appendChild(stepEl(s.kind, s.text, s.ref, x.i, 's' + x.i + '-' + si));
+          });
           if (x.state === 'failed') {
-            const li = stepEl('error', x.t.error || 'The turn failed without an error message.');
-            rail.appendChild(li);
+            rail.appendChild(stepEl('error', x.t.error || 'The turn failed without an error message.', null, x.i, 'e' + x.i));
           } else if (x.state === 'running') {
-            const li = stepEl('working', '');
-            const txt = li.querySelector('.step-text');
-            txt.append('working… ', elapsedEl(x.t.startedAt));
+            const li = stepEl('working', '', null, x.i, 'w' + x.i);
+            li.querySelector('.step-text').append('working… ', elapsedEl(x.t.startedAt));
             rail.appendChild(li);
           } else if (x.state === 'pending') {
-            rail.appendChild(stepEl('working', 'No result was recorded for this turn.'));
+            rail.appendChild(stepEl('working', 'No result was recorded for this turn.', null, x.i, 'w' + x.i));
           }
           if (!rail.childNodes.length) {
             const msg = x.steps.length ? 'All steps in this turn are hidden by the filters.' : 'This turn reported no steps.';
@@ -1674,25 +2333,30 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         return out;
       });
     }
-    function stepEl(kind, text, ref) {
+    // a step is a button that jumps to its turn in the conversation
+    function stepEl(kind, text, ref, turnIdx, fid) {
       const li = h('li', 'step' + (kind === 'error' ? ' err' : ''));
       li.dataset.kind = kind;
       const node = h('span', 'node' + (kind === 'error' ? ' err' : ''));
       node.appendChild(shape(kind === 'error' ? 's-cross' : kind === 'working' ? 's-pulse' : KIND_SHAPE[kind]));
       li.appendChild(node);
-      const body = h('div', 'step-body');
-      const top = h('div', 'step-top');
+      const body = h('button', 'step-link');
+      body.type = 'button';
+      body.dataset.fid = fid;
+      body.title = 'Show turn ' + (turnIdx + 1) + ' in the conversation';
+      body.addEventListener('click', () => jumpToTurn(turnIdx));
+      const top = h('span', 'step-top');
       top.appendChild(h('span', 'klabel', kind === 'error' ? 'Failed' : kind === 'working' ? 'Working' : KIND_LABEL[kind]));
       if (ref) top.appendChild(h('span', 'refchip', ref));
       body.appendChild(top);
-      const tx = h('div', 'step-text');
+      const tx = h('span', 'step-text');
       if (text) { if (kind === 'error') tx.textContent = text; else inline(tx, text); }
       body.appendChild(tx);
       li.appendChild(body);
       return li;
     }
 
-    // ----- conversation -----
+    // ----- conversation (centre pane) -----
     function renderConvo(c) {
       const turns = turnsOf(c);
       rebuild('conversation', () => {
@@ -1700,13 +2364,16 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         if (!turns.length) wrap.appendChild(h('div', 'empty-state', 'No messages yet.'));
         turns.forEach((t, i) => {
           const st = turnState(c, i);
+          const tn = h('div', 'turn');
+          tn.dataset.turn = String(i);
+          if (P.flash && P.flash.i === i && Date.now() < P.flash.until) tn.classList.add('flash');
           const u = h('div', 'msg user');
           const um = h('div', 'msg-meta');
           um.appendChild(h('strong', null, i === 0 ? 'You · task' : 'You'));
           um.appendChild(timeEl(t.startedAt));
           u.appendChild(um);
           u.appendChild(h('div', 'bubble', t.prompt || ''));
-          wrap.appendChild(u);
+          tn.appendChild(u);
 
           const b = h('div', 'msg bot');
           const bm = h('div', 'msg-meta');
@@ -1745,28 +2412,31 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
           } else {
             b.appendChild(h('div', 'typing', 'No result was recorded for this turn.'));
           }
-          wrap.appendChild(b);
+          tn.appendChild(b);
+          wrap.appendChild(tn);
         });
         return wrap;
       });
     }
 
-    // ----- composer -----
+    // ----- composer (pinned under the conversation) -----
     const ta = h('textarea', 'input');
     ta.rows = 2;
     ta.id = 'composer-input';
     ta.setAttribute('aria-label', 'Message to this thread');
     ta.setAttribute('aria-describedby', 'composer-reason');
     ta.placeholder = 'Message the thread…';
-    ta.value = drafts[card.id] || '';
-    ta.addEventListener('input', () => { drafts[card.id] = ta.value; updateSendOff(); });
+    ta.value = drafts[selKey + ':' + card.id] || '';
+    ta.addEventListener('input', () => { drafts[selKey + ':' + card.id] = ta.value; updateSendOff(); });
     const reasonEl = h('div', 'reason');
     reasonEl.id = 'composer-reason';
-    const sendBtn = actionBtn('Send', 'primary', 'send:' + card.id, () => send());
-    const hint = h('span', 'foot-note', 'Ctrl or Cmd + Enter to send');
+    const sendBtn = actionBtn('Send', 'primary', 'send:' + selKey + ':' + card.id, () => send());
+    const hint = h('span', 'foot-note', 'Ctrl or Cmd + Enter to send. A follow-up sees this thread\u2019s own history, not what the main session did after the thread started.');
     const crow = h('div', 'composer-row');
     crow.append(reasonEl, sendBtn);
-    composer.append(ta, crow);
+    const composerIn = h('div', 'composer-in');
+    composerIn.append(ta, crow);
+    composer.appendChild(composerIn);
     function updateSendOff() { setOff(sendBtn, ta.disabled || !ta.value.trim()); }
     function renderComposer(c) {
       const why = sendBlock(c);
@@ -1779,13 +2449,16 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     async function send() {
       const text = ta.value.trim();
       if (!text) return;
+      if (isRO()) return;
       clearError();
-      await runAction('send:' + card.id, async () => {
+      const pk = selKey;
+      await runAction('send:' + pk + ':' + card.id, async () => {
         try {
-          const updated = await api('POST', '/api/threads/' + encodeURIComponent(card.id) + '/messages', { message: text });
-          if (ta.value.trim() === text) { ta.value = ''; drafts[card.id] = ''; }
+          const updated = await api('POST', pp(pk, 'threads/' + encodeURIComponent(card.id) + '/messages'), { message: text });
+          if (ta.value.trim() === text) { ta.value = ''; drafts[pk + ':' + card.id] = ''; }
           P.convAtBottom = true;
-          applyCard(updated);
+          applyCard(updated, pk);
+          wrote();
         } catch (e) { showError(e.message); }
       });
       poll();
@@ -1794,13 +2467,51 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); if (!sendBtn.disabled) send(); }
     });
 
-    // ----- digest -----
-    function renderDigest(c) {
+    // ----- about (left pane): ids, then the digest -----
+    function renderAbout(c) {
+      const t = c.thread;
       const turns = turnsOf(c);
       let newest = -1;
-      turns.forEach((t, i) => { if (t.ok === true && typeof t.result === 'string') newest = i; });
-      rebuild('digest', () => {
+      turns.forEach((tt, i) => { if (tt.ok === true && typeof tt.result === 'string') newest = i; });
+      rebuild('about', () => {
         const out = [];
+        out.push(h('h3', 'dg-h', 'Session'));
+        const ids = h('div', 'ab-ids');
+        const mkRow = (k, v, what, fid, lead) => {
+          const r = h('div', 'ab-row');
+          r.appendChild(h('span', 'k', k));
+          if (lead) r.appendChild(lead);
+          const line = h('div', 'line');
+          if (v) {
+            line.appendChild(h('span', 'v', v));
+            const cb = copyBtn(v, what);
+            cb.dataset.fid = fid;
+            line.appendChild(cb);
+          } else line.appendChild(h('span', 'v muted', 'Not known yet'));
+          r.appendChild(line);
+          return r;
+        };
+        const row = (k, v, what, fid, lead) => { ids.appendChild(mkRow(k, v, what, fid, lead)); };
+        row('Session id', t.sessionId, 'session id', 'c-session');
+        {
+          let lead = null, seen = null;
+          if (t.parentSessionId) {
+            lead = h('div', 'ab-who', sessionLabel(t.parentSessionId));
+            lead.title = sessionLabel(t.parentSessionId);
+            const si = sessionInfo(t.parentSessionId);
+            if (si && si.lastSeenAt) { seen = h('div', 'ab-seen'); seen.append('last active ', timeEl(si.lastSeenAt)); }
+          }
+          const r = mkRow('Started by', t.parentSessionId, 'parent session id', 'c-parent', lead);
+          if (seen) r.appendChild(seen);
+          ids.appendChild(r);
+        }
+        if (t.sessionId) {
+          row('Resume', 'claude --resume ' + t.sessionId, 'resume command', 'c-resume');
+          ids.appendChild(h('p', 'ab-note', 'Run this in a terminal to open this thread as a normal conversation.'));
+        }
+        out.push(ids);
+
+        out.push(h('h3', 'dg-h', 'Digest'));
         if (newest < 0) {
           const e = h('div', 'empty-state');
           e.appendChild(h('strong', null, 'No digest yet'));
@@ -1808,11 +2519,11 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
           out.push(e);
           return out;
         }
-        const t = turns[newest];
-        const v = viewOf(t);
+        const tn = turns[newest];
+        const v = viewOf(tn);
         const top = h('div', 'dg-top');
         top.appendChild(h('strong', null, 'Turn ' + (newest + 1) + (newest === turns.length - 1 ? ' (newest)' : ' (newest successful)')));
-        top.appendChild(timeEl(t.finishedAt || t.startedAt));
+        top.appendChild(timeEl(tn.finishedAt || tn.startedAt));
         out.push(top);
         const grid = h('div', 'dg-grid');
         SECTIONS.forEach(([key, name, kind]) => {
@@ -1848,78 +2559,82 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         }
 
         const note = h('div', 'callout report-note');
-        if (c.thread.reported) {
+        if (t.reported) {
           note.appendChild(h('span', 'grow', 'This result has been reported to the main session.'));
         } else {
-          const sp = h('span', 'grow');
-          sp.append('Not reported yet. Run ');
-          sp.appendChild(h('code', null, '/thread:report ' + c.id));
-          sp.append(' in the main session to bring this into its context.');
+          const sp = h('span', 'grow', 'Not reported yet. Run this command in the main session to bring the result into its context.');
           note.classList.add('warn');
           note.appendChild(sp);
+          const cmd = mkRow('Report command', '/thread:report ' + c.id, 'report command', 'c-report');
+          cmd.style.flex = '1 1 100%';
+          note.appendChild(cmd);
         }
         out.push(note);
         return out;
       });
     }
 
-    // ----- footer -----
-    function renderFoot(c, focusFirst) {
+    // ----- bar actions: End thread and Delete, with their confirm steps -----
+    function renderActions(c, focusFirst) {
       const t = c.thread;
-      foot.replaceChildren();
+      actions.replaceChildren();
       const running = t.runState === 'running';
       if (P.confirm === 'end') {
-        foot.appendChild(h('span', 'confirm-text', 'End this thread? It stops taking messages and the card moves to Done.'));
-        foot.appendChild(h('span', 'grow'));
-        const keep = plainBtn('Keep it open', null, () => { P.confirm = null; renderFoot(findCard(P.target) || c, true); });
-        foot.append(keep, actionBtn('End thread', 'danger solid', 'end:' + c.id, doEnd));
+        actions.appendChild(h('span', 'confirm-text', 'End this thread? It stops taking messages and the card moves to Done.'));
+        const keep = plainBtn('Keep it open', null, () => { P.confirm = null; renderActions(findCard(P.target) || c, true); });
+        actions.append(keep, actionBtn('End thread', 'danger solid', 'end:' + selKey + ':' + c.id, doEnd));
         if (focusFirst) keep.focus();
       } else if (P.confirm === 'delete') {
-        foot.appendChild(h('span', 'confirm-text', 'Delete ' + c.id + ' and its history? This cannot be undone.'));
-        foot.appendChild(h('span', 'grow'));
-        const keep = plainBtn('Keep it', null, () => { P.confirm = null; renderFoot(findCard(P.target) || c, true); });
-        foot.append(keep, actionBtn('Delete card', 'danger solid', 'delete:' + c.id, doDelete));
+        actions.appendChild(h('span', 'confirm-text', 'Delete ' + c.id + ' and its history? This cannot be undone.'));
+        const keep = plainBtn('Keep it', null, () => { P.confirm = null; renderActions(findCard(P.target) || c, true); });
+        actions.append(keep, actionBtn('Delete card', 'danger solid', 'delete:' + selKey + ':' + c.id, doDelete));
         if (focusFirst) keep.focus();
       } else {
+        const ro = isRO();
+        if (running && !ro) actions.appendChild(h('span', 'foot-note', 'Delete is unavailable while a turn is running.'));
         if (t.runState !== 'ended') {
-          const end = plainBtn('End thread', null, () => { P.confirm = 'end'; renderFoot(findCard(P.target) || c, true); });
-          foot.appendChild(end);
+          const endBtn = plainBtn('End thread', null, () => { P.confirm = 'end'; renderActions(findCard(P.target) || c, true); });
+          if (ro) { endBtn.disabled = true; endBtn.title = READONLY_WHY; }
+          actions.appendChild(endBtn);
         }
-        foot.appendChild(h('span', 'grow'));
-        const del = plainBtn('Delete', 'danger', () => { if (running) return; P.confirm = 'delete'; renderFoot(findCard(P.target) || c, true); });
-        if (running) {
+        const del = plainBtn('Delete', 'danger', () => { if (running) return; P.confirm = 'delete'; renderActions(findCard(P.target) || c, true); });
+        if (ro) {
+          del.disabled = true;
+          del.title = READONLY_WHY;
+        } else if (running) {
           del.disabled = true;
           del.title = 'A turn is running. End the thread or wait for it to finish before deleting.';
-          foot.appendChild(h('span', 'foot-note', 'Delete is unavailable while a turn is running.'));
         }
-        foot.appendChild(del);
+        actions.appendChild(del);
       }
       syncBusy();
     }
     async function doEnd() {
       clearError();
-      await runAction('end:' + card.id, async () => {
-        try { const updated = await api('POST', '/api/threads/' + encodeURIComponent(card.id) + '/end', {}); P.confirm = null; applyCard(updated); }
+      const pk = selKey;
+      await runAction('end:' + pk + ':' + card.id, async () => {
+        try { const updated = await api('POST', pp(pk, 'threads/' + encodeURIComponent(card.id) + '/end'), {}); P.confirm = null; applyCard(updated, pk); wrote(); }
         catch (e) { showError(e.message); P.confirm = null; }
       });
-      if (panel === P) renderFoot(findCard(P.target) || card);
+      if (panel === P) renderActions(findCard(P.target) || card);
       poll();
     }
     async function doDelete() {
       clearError();
       let ok = false;
-      await runAction('delete:' + card.id, async () => {
-        try { await api('DELETE', '/api/cards/' + encodeURIComponent(card.id), {}); ok = true; }
+      const pk = selKey;
+      await runAction('delete:' + pk + ':' + card.id, async () => {
+        try { await api('DELETE', pp(pk, 'cards/' + encodeURIComponent(card.id)), {}); ok = true; wrote(); }
         catch (e) { showError(e.message); P.confirm = null; }
       });
-      if (ok && panel === P) {
+      if (ok && panel === P && pk === selKey) {
         const cards = current.cards.filter((x) => x.id !== card.id);
         appliedSeq = ++pollSeq; lastRaw = null;
         current = Object.assign({}, current, { cards }); currentKey = JSON.stringify(current);
         returnFocus = { el: elNewBtn };
         navigateClose();
         renderBoard(false);
-      } else if (panel === P) renderFoot(findCard(P.target) || card);
+      } else if (panel === P) renderActions(findCard(P.target) || card);
       poll();
     }
 
@@ -1927,30 +2642,32 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     P.update = (c) => {
       if (!isThread(c)) return;
       const t = c.thread, turns = turnsOf(c);
+      const ro = isRO();
+      const sess = sessionInfo(t.parentSessionId);
       const k = {
-        head: JSON.stringify([c.title, t.runState, t.mode, t.sessionId, t.parentSessionId, turns.length, turns[0] && turns[0].startedAt, c.seenByClaude]),
+        head: JSON.stringify([c.title, t.runState, t.mode, turns.length, turns[0] && turns[0].startedAt, c.seenByClaude, reportState(c), sess && sess.label]),
+        about: JSON.stringify([t.sessionId, t.parentSessionId, turns, t.reported, sess]),
         trace: JSON.stringify([turns, t.runState]),
         convo: JSON.stringify([turns, t.runState]),
-        digest: JSON.stringify([turns, t.reported]),
-        composer: t.runState + '|' + t.sessionId,
-        foot: t.runState,
+        composer: t.runState + '|' + t.sessionId + '|' + ro,
+        foot: t.runState + '|' + ro,
       };
       if (k.head !== P.keys.head) { renderHead(c); P.keys.head = k.head; }
+      if (k.about !== P.keys.about) { renderAbout(c); P.keys.about = k.about; }
       if (k.trace !== P.keys.trace) { renderTrace(c); P.keys.trace = k.trace; }
       if (k.convo !== P.keys.convo) { renderConvo(c); P.keys.convo = k.convo; }
-      if (k.digest !== P.keys.digest) { renderDigest(c); P.keys.digest = k.digest; }
       if (k.composer !== P.keys.composer) { renderComposer(c); P.keys.composer = k.composer; }
       if (k.foot !== P.keys.foot) {
         P.keys.foot = k.foot;
         if (t.runState === 'ended' && P.confirm === 'end') P.confirm = null;
         if (t.runState === 'running' && P.confirm === 'delete') P.confirm = null;
-        renderFoot(c);
+        renderActions(c);
       }
     };
 
-    selectTab('trace');
+    applyPanes();
     P.update(card);
-    renderFoot(card);
+    renderActions(card);
     P.initialFocus = () => P.drawer;
   }
 
@@ -1964,7 +2681,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   }
 
   document.addEventListener('keydown', (e) => {
-    if (e.defaultPrevented || e.isComposing) return;
+    if (e.defaultPrevented || e.isComposing || halted) return;
     if (panel) {
       if (e.key === 'Escape') { e.preventDefault(); requestClose(); return; }
       if (e.key === 'Tab') {
@@ -1986,9 +2703,12 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
   // ---------- start ----------
 
-  (async function loop() {
-    await poll();
-    setTimeout(loop, POLL_MS);
+  (async function start() {
+    if (!token) { haltForAuth(); return; }
+    try { applyProjects(await loadProjects()); }
+    catch (e) { if (e.auth) return; setOnline(false); }
+    projectsAt = Date.now();
+    if (!halted) loopTimer = setTimeout(tick, POLL_MS);
   })();
 })();
 </script>

@@ -4,6 +4,15 @@ import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import { setupThreadEnv, waitFor, cleanAmbientEnv, MCP_PATH, PARENT_SESSION } from './helpers.mjs';
 import * as core from '../server/core.mjs';
+import net from 'node:net';
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.on('error', reject);
+    s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
+  });
+}
 
 cleanAmbientEnv();
 delete process.env.THREAD_DEPTH;
@@ -157,7 +166,7 @@ test('thread_start returns a card id; thread_status later shows idle; thread_rep
   const all = text(await c.call('thread_status', {}));
   assert.ok(all.includes(id));
 
-  const rep = await c.call('thread_report', { id });
+  const rep = await c.call('thread_report', { id, session_id: PARENT_SESSION });
   assert.notEqual(rep.isError, true);
   assert.ok(text(rep).includes('## Happened'));
   assert.equal(core.readState(e.projectDir).cards[0].thread.reported, true);
@@ -181,7 +190,7 @@ test('thread_continue and thread_end work through the tools', async (t) => {
   const cont = await c.call('thread_continue', { id: 'c1', message: 'and more' });
   assert.notEqual(cont.isError, true, cont.content?.[0]?.text);
   await waitFor(() => { const th = core.readState(e.projectDir).cards[0].thread; return th.runState === 'idle' && th.turns.length === 2; }, { timeout: 10000 });
-  const end = await c.call('thread_end', { id: 'c1' });
+  const end = await c.call('thread_end', { id: 'c1', session_id: PARENT_SESSION });
   assert.notEqual(end.isError, true);
   assert.equal(core.readState(e.projectDir).cards[0].thread.runState, 'ended');
 });
@@ -193,16 +202,23 @@ test('board_open returns text when the HTTP server is disabled', async (t) => {
   const r = await c.call('board_open');
   assert.equal(r.content[0].type, 'text');
   assert.ok(r.content[0].text.length > 0);
+  assert.match(r.content[0].text, /disabled|unavailable/i);
+  assert.doesNotMatch(r.content[0].text, /\?t=/);
 });
 
-test('board_open returns a localhost URL when the board server is enabled', async (t) => {
+test('board_open returns a tokened localhost URL with this project\'s tab when the board server is enabled', async (t) => {
   const e = setupThreadEnv(t);
-  const c = start(t, e, { THREAD_NO_HTTP: '' });
+  const port = await freePort();
+  const c = start(t, e, { THREAD_NO_HTTP: '', THREAD_BOARD_PORT: String(port) });
   await c.init();
   const r = await c.call('board_open');
-  assert.match(text(r), /http:\/\/(127\.0\.0\.1|localhost):\d+/);
-  const url = text(r).match(/http:\/\/(127\.0\.0\.1|localhost):\d+/)[0];
-  const res = await fetch(url + '/api/state');
+  const m = text(r).match(/(http:\/\/(?:127\.0\.0\.1|localhost):\d+\/)\?t=([0-9a-f]{32,64})#\/([0-9a-f]{12})\b/);
+  assert.ok(m, text(r));
+  assert.equal(m[3], core.projectKey(e.projectDir));
+  assert.equal(m[1], `http://127.0.0.1:${port}/`);
+  const denied = await fetch(m[1] + 'api/state');
+  assert.equal(denied.status, 401);
+  const res = await fetch(m[1] + 'api/state', { headers: { 'X-Thread-Token': m[2] } });
   assert.equal(res.status, 200);
 });
 

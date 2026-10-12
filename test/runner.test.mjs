@@ -77,7 +77,7 @@ test('mode write uses --permission-mode acceptEdits and no --disallowedTools', a
   assert.ok(!argv.includes('--disallowedTools'));
 });
 
-test('continueThread resumes the thread session without fork, resets reported/announced, records a second turn', async (t) => {
+test('continueThread resumes the thread session without fork, resets announced, clears reported once the new turn succeeds, records a second turn', async (t) => {
   const e = setupThreadEnv(t);
   await start(e);
   await untilState(e, 'idle');
@@ -89,10 +89,11 @@ test('continueThread resumes the thread session without fork, resets reported/an
 
   const c = await core.continueThread(e.projectDir, 'c1', 'please also check the follow-up question');
   assert.equal(c.thread.runState, 'running');
-  assert.equal(c.thread.reported, false);
+  assert.equal(c.thread.reported, true, 'still reported while the follow-up runs: nothing new exists yet');
   assert.equal(c.thread.announced, false);
 
   await waitFor(() => { const th = thread(e.projectDir); return th.runState === 'idle' && th.turns.length === 2 && th.turns[1].ok === true; });
+  assert.equal(thread(e.projectDir).reported, false, 'a new result is not reported yet');
   const log = e.readLog();
   assert.equal(log.length, 2);
   const { argv, prompt } = log[1];

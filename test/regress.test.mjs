@@ -241,3 +241,88 @@ test('the board API returns parsed views, sends a follow-up turn and ends a thre
   assert.equal((await ended.json()).thread.runState, 'ended');
   assert.equal((await post('api/threads/c1/messages', { message: 'x' })).status, 400, 'refused after end');
 });
+
+// ---- tool pre-approval and extra folders for headless threads
+
+function argsCard(over = {}) {
+  return { id: 'c1', title: 't', thread: { parentSessionId: PARENT_SESSION, sessionId: null, mode: 'read', turns: [{ prompt: 'p' }], ...over } };
+}
+function flagValues(argv, flag) {
+  const i = argv.indexOf(flag);
+  if (i < 0) return null;
+  const out = [];
+  for (let j = i + 1; j < argv.length && !argv[j].startsWith('--'); j++) out.push(argv[j]);
+  return out;
+}
+
+test('threads pre-approve web search and fetch by default, in read and write mode', (t) => {
+  setup(t);
+  delete process.env.THREAD_ALLOW_TOOLS;
+  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard()), '--allowedTools'), ['WebSearch', 'WebFetch']);
+  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard({ mode: 'write' })), '--allowedTools'), ['WebSearch', 'WebFetch']);
+  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard()), '--disallowedTools'), ['Edit', 'Write', 'NotebookEdit']);
+});
+
+test('THREAD_ALLOW_TOOLS replaces the list, "none" removes it, and a dash-led entry is dropped', (t) => {
+  setup(t, { THREAD_ALLOW_TOOLS: 'none' });
+  assert.equal(core.buildClaudeArgs(argsCard()).includes('--allowedTools'), false);
+  process.env.THREAD_ALLOW_TOOLS = 'WebSearch, Bash(gh repo view:*) ,--dangerously-skip-permissions';
+  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard()), '--allowedTools'), ['WebSearch', 'Bash(gh repo view:*)']);
+  process.env.THREAD_ALLOW_TOOLS = '${user_config.allow}';
+  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard()), '--allowedTools'), ['WebSearch', 'WebFetch']);
+});
+
+test('extra folders are validated at start, stored, and passed as --add-dir on every turn', async (t) => {
+  const { projectDir } = setup(t);
+  const extra = fs.mkdtempSync(path.join(os.tmpdir(), 'thread-extra-'));
+  t.after(() => fs.rmSync(extra, { recursive: true, force: true }));
+  const file = path.join(extra, 'f.txt');
+  fs.writeFileSync(file, 'x');
+  const start = (dirs) => core.startThread(projectDir, { title: 'd', task: 'do it', sessionId: PARENT_SESSION, dirs });
+  await assert.rejects(start(['relative/path']), /absolute/);
+  await assert.rejects(start(['--add-dir']), /absolute/);
+  await assert.rejects(start([path.join(extra, 'missing')]), /not found/);
+  await assert.rejects(start([file]), /not a folder/);
+  await assert.rejects(start('not-a-list'), /list/);
+  await assert.rejects(start(Array.from({ length: 6 }, (_, i) => { const d = path.join(extra, `d${i}`); fs.mkdirSync(d); return d; })), /at most 5/);
+  assert.equal(core.readState(projectDir).cards.length, 0, 'a rejected start creates no card');
+
+  const logFile = path.join(extra, 'fake.log');
+  process.env.FAKE_CLAUDE_LOG = logFile;
+  t.after(() => { delete process.env.FAKE_CLAUDE_LOG; });
+  const card = await start([extra, extra]);
+  assert.deepEqual(card.thread.dirs, [path.resolve(extra)]);
+  await waitFor(() => core.readState(projectDir).cards[0].thread.runState === 'idle');
+  await core.continueThread(projectDir, card.id, 'again');
+  await waitFor(() => core.readState(projectDir).cards[0].thread.runState === 'idle');
+  const runs = fs.readFileSync(logFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(runs.length, 2);
+  for (const r of runs) assert.deepEqual(flagValues(r.argv, '--add-dir'), [path.resolve(extra)]);
+  assert.equal(runs[1].argv.includes('--fork-session'), false);
+});
+
+test('a thread started without extra folders passes no --add-dir', (t) => {
+  setup(t);
+  assert.equal(core.buildClaudeArgs(argsCard()).includes('--add-dir'), false);
+  assert.equal(core.buildClaudeArgs(argsCard({ dirs: [] })).includes('--add-dir'), false);
+});
+
+test('a reported thread whose follow-up fails stays reported; one whose follow-up succeeds becomes not reported', async (t) => {
+  const { projectDir } = setup(t);
+  const card = await core.startThread(projectDir, { title: 'r', task: 'do it', sessionId: PARENT_SESSION });
+  const th = () => core.readState(projectDir).cards[0].thread;
+  await waitFor(() => th().runState === 'idle');
+  await core.reportThread(projectDir, card.id);
+  assert.equal(th().reported, true);
+
+  process.env.FAKE_CLAUDE_MODE = 'fail';
+  await core.continueThread(projectDir, card.id, 'new instruction that fails');
+  await waitFor(() => th().runState === 'failed');
+  assert.equal(th().reported, true, 'nothing new to report after a failed follow-up');
+
+  delete process.env.FAKE_CLAUDE_MODE;
+  await core.continueThread(projectDir, card.id, 'new instruction that works');
+  await waitFor(() => th().runState === 'idle' && th().turns.length === 3);
+  assert.equal(th().reported, false, 'the new result has not been reported');
+  assert.equal(th().announced, false, 'and the parent session will be told it finished');
+});

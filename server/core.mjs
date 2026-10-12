@@ -1,10 +1,10 @@
 // thread plugin: state + thread lifecycle (library). Zero dependencies, node: built-ins only.
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, rename, rm, rmdir, stat, writeFile, unlink } from 'node:fs/promises';
-import { readFileSync, existsSync } from 'node:fs';
+import { mkdir, open, readFile, rename, rm, rmdir, stat, writeFile, unlink } from 'node:fs/promises';
+import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const STATUSES = ['idea', 'new', 'in_progress', 'review', 'blocked', 'done'];
@@ -37,10 +37,97 @@ export function projectDir() {
   return resolve(envValue('THREAD_PROJECT_DIR') || envValue('CLAUDE_PROJECT_DIR') || process.cwd());
 }
 
+export function projectKey(projectDirArg) {
+  return createHash('sha1').update(resolve(String(projectDirArg))).digest('hex').slice(0, 12);
+}
+
 export function projectPaths(projectDirArg) {
-  const hash = createHash('sha1').update(resolve(String(projectDirArg))).digest('hex').slice(0, 12);
-  const dir = join(dataDir(), 'projects', hash);
+  const dir = join(dataDir(), 'projects', projectKey(projectDirArg));
   return { dir, state: join(dir, 'state.json'), lock: join(dir, 'state.lock'), logs: join(dir, 'logs') };
+}
+
+// ---------------------------------------------------------------- project listing
+
+const KEY_RE = /^[0-9a-f]{12}$/;
+
+function dirExists(p) {
+  try { return statSync(p).isDirectory(); } catch { return false; }
+}
+
+// One listing entry for the folder `key`, or null when it must not be listed.
+// Reads the state file without a lock and never writes.
+function listedProject(key) {
+  try {
+    if (!KEY_RE.test(key)) return null;
+    const file = join(dataDir(), 'projects', key, 'state.json');
+    const st = statSync(file);
+    const s = JSON.parse(readFileSync(file, 'utf8'));
+    if (!s || typeof s !== 'object' || Array.isArray(s) || !Array.isArray(s.cards)) return null;
+    if (typeof s.projectDir !== 'string' || !s.projectDir || projectKey(s.projectDir) !== key) return null;
+    let newest = NaN;
+    let threads = 0;
+    let running = 0;
+    for (const c of s.cards) {
+      if (!c || typeof c !== 'object') continue;
+      const t = Date.parse(c.updatedAt);
+      if (Number.isFinite(t) && !(t <= newest)) newest = t;
+      if (c.kind === 'thread') {
+        threads += 1;
+        if (c.thread && c.thread.runState === 'running') running += 1;
+      }
+    }
+    const parts = s.projectDir.split(/[\\/]+/).filter(Boolean);
+    return {
+      key,
+      projectDir: s.projectDir,
+      name: parts.length ? parts[parts.length - 1] : s.projectDir,
+      exists: dirExists(s.projectDir),
+      cards: s.cards.length,
+      threads,
+      running,
+      lastActivity: new Date(Number.isFinite(newest) ? newest : st.mtimeMs).toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function listProjects() {
+  let names;
+  try { names = readdirSync(join(dataDir(), 'projects')); } catch { return []; }
+  const out = [];
+  for (const n of names) {
+    const p = listedProject(n);
+    if (p) out.push(p);
+  }
+  out.sort((a, b) => Date.parse(b.lastActivity) - Date.parse(a.lastActivity));
+  return out;
+}
+
+export function projectDirForKey(key) {
+  const p = typeof key === 'string' ? listedProject(key) : null;
+  return p ? p.projectDir : null;
+}
+
+// Remove the data folder of a project whose own folder is gone. Never touches
+// anything outside <data dir>/projects/<key>.
+export async function forgetProject(key) {
+  const entry = typeof key === 'string' ? listedProject(key) : null;
+  if (!entry) throw new Error('unknown project');
+  if (entry.exists) throw new Error(`project folder still exists: ${entry.projectDir}`);
+  const root = join(dataDir(), 'projects');
+  const target = join(root, key);
+  if (!KEY_RE.test(key) || resolve(target) !== target) throw new Error('unknown project');
+  return withLock(entry.projectDir, async () => {
+    const again = listedProject(key);
+    if (!again) throw new Error('unknown project');
+    if (again.exists) throw new Error(`project folder still exists: ${again.projectDir}`);
+    const state = readState(again.projectDir);
+    const busy = state.cards.find((c) => c && c.kind === 'thread' && c.thread && c.thread.runState === 'running' && runnerAlive(again.projectDir, c));
+    if (busy) throw new Error(`thread ${busy.id} is still running; end it before forgetting the project`);
+    await rm(target, { recursive: true, force: true });
+    return true;
+  });
 }
 
 // ---------------------------------------------------------------- state io
@@ -241,6 +328,139 @@ function oneLine(s, max = 300) {
   return t.length > max ? t.slice(-max) : t;
 }
 
+// ---------------------------------------------------------------- sessions
+
+const SESSION_ID_RE = /^[0-9A-Za-z-]{8,64}$/;
+const TRANSCRIPT_CHUNK = 256 * 1024;
+const SESSION_THROTTLE_MS = 60000;
+const NAME_MAX = 120;
+const FIRST_MESSAGE_MAX = 60;
+const NAME_RANK = { none: 0, 'first-message': 1, 'ai-title': 2, title: 3 };
+
+const collapse = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+
+function validTranscriptPath(p) {
+  return typeof p === 'string' && p.length > 0 && isAbsolute(p) && p.endsWith('.jsonl');
+}
+
+function parseJsonLine(line) {
+  try {
+    const v = JSON.parse(line);
+    return v && typeof v === 'object' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readAt(fh, position, length) {
+  const buf = Buffer.alloc(length);
+  const { bytesRead } = await fh.read(buf, 0, length, position);
+  return buf.subarray(0, bytesRead).toString('utf8');
+}
+
+// The first usable user text in one transcript line, or ''.
+function userTextOf(obj) {
+  const content = obj && obj.message && obj.message.content;
+  const blocks = typeof content === 'string'
+    ? [content]
+    : Array.isArray(content)
+      ? content.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text)
+      : [];
+  for (const raw of blocks) {
+    const t = collapse(raw);
+    if (t && !t.startsWith('<')) return t;
+  }
+  return '';
+}
+
+// Reads at most the last 256 KB for an ai-title line and at most the first
+// 256 KB for the first user message. Never throws; null when nothing is found.
+async function nameFromTranscript(file) {
+  if (!validTranscriptPath(file)) return null;
+  let fh;
+  try {
+    fh = await open(file, 'r');
+    const { size } = await fh.stat();
+    if (!size) return null;
+    const len = Math.min(size, TRANSCRIPT_CHUNK);
+    const tailStart = size - len;
+    const tailLines = (await readAt(fh, tailStart, len)).split('\n');
+    if (tailStart > 0) tailLines.shift(); // partial first line
+    for (let i = tailLines.length - 1; i >= 0; i--) {
+      if (!tailLines[i].includes('ai-title')) continue;
+      const o = parseJsonLine(tailLines[i]);
+      if (o && o.type === 'ai-title' && typeof o.aiTitle === 'string' && collapse(o.aiTitle)) {
+        return { name: collapse(o.aiTitle).slice(0, NAME_MAX), source: 'ai-title' };
+      }
+    }
+    const headLines = (tailStart === 0 ? tailLines : (await readAt(fh, 0, len)).split('\n'));
+    if (size > len) headLines.pop(); // partial last line
+    for (const line of headLines) {
+      if (!line.includes('"user"')) continue;
+      const o = parseJsonLine(line);
+      if (!o || o.type !== 'user') continue;
+      const t = userTextOf(o);
+      if (t) {
+        return { name: t.length > FIRST_MESSAGE_MAX ? t.slice(0, FIRST_MESSAGE_MAX - 1) + '…' : t, source: 'first-message' };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fh) await fh.close().catch(() => {});
+  }
+}
+
+function sessionsOf(state) {
+  return state && state.sessions && typeof state.sessions === 'object' && !Array.isArray(state.sessions) ? state.sessions : {};
+}
+
+function recentlyNamed(rec) {
+  if (!rec || (rec.nameSource !== 'title' && rec.nameSource !== 'ai-title') || !rec.name) return false;
+  const seen = Date.parse(rec.lastSeenAt);
+  return Number.isFinite(seen) && Date.now() - seen < SESSION_THROTTLE_MS;
+}
+
+export async function touchSession(projectDirArg, sessionId, { transcriptPath, sessionTitle } = {}) {
+  if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) return null;
+  const key = sessionId.toLowerCase();
+  const tp = validTranscriptPath(transcriptPath) ? transcriptPath : '';
+  let prev;
+  try { prev = sessionsOf(readState(projectDirArg))[key]; } catch { prev = undefined; }
+  if (recentlyNamed(prev)) return prev;
+
+  let found = null;
+  const title = typeof sessionTitle === 'string' ? collapse(sessionTitle) : '';
+  if (title) found = { name: title.slice(0, NAME_MAX), source: 'title' };
+  else found = await nameFromTranscript(tp || (prev && prev.transcriptPath));
+
+  return updateState(projectDirArg, (state) => {
+    if (!state.sessions || typeof state.sessions !== 'object' || Array.isArray(state.sessions)) state.sessions = {};
+    const ts = now();
+    let rec = state.sessions[key];
+    if (!rec || typeof rec !== 'object') {
+      rec = { name: '', nameSource: 'none', transcriptPath: '', firstSeenAt: ts, lastSeenAt: ts };
+      state.sessions[key] = rec;
+    }
+    // A found name replaces the old one unless it is a weaker source.
+    if (found && (NAME_RANK[found.source] ?? 0) >= (NAME_RANK[rec.nameSource] ?? 0)) {
+      rec.name = found.name;
+      rec.nameSource = found.source;
+    }
+    if (tp) rec.transcriptPath = tp;
+    rec.lastSeenAt = ts;
+    return JSON.parse(JSON.stringify(rec));
+  });
+}
+
+export function sessionLabel(state, sessionId) {
+  const id = String(sessionId ?? '');
+  const short = id.slice(0, 8);
+  const rec = sessionsOf(state)[id.toLowerCase()];
+  return rec && typeof rec.name === 'string' && rec.name ? `${rec.name} · ${short}` : `session ${short}`;
+}
+
 // ---------------------------------------------------------------- board cards
 
 export async function addCard(projectDirArg, { title, note = '', status = 'new', kind = 'task', source = 'claude' } = {}) {
@@ -364,15 +584,56 @@ function stripMap(text) {
   return typeof text === 'string' ? text.replace(MAP_BLOCK_RE, '').trimEnd() : text;
 }
 
+// A thread runs headless, so it cannot answer a permission prompt: any tool that
+// would prompt is refused. These tools are pre-approved so research threads can
+// reach the web. THREAD_ALLOW_TOOLS replaces the list (comma separated); "none"
+// turns pre-approval off.
+const DEFAULT_ALLOW_TOOLS = ['WebSearch', 'WebFetch'];
+const MAX_EXTRA_DIRS = 5;
+
+export function allowedTools() {
+  const raw = envValue('THREAD_ALLOW_TOOLS');
+  if (!raw) return DEFAULT_ALLOW_TOOLS;
+  if (/^(none|off)$/i.test(raw)) return [];
+  // An entry is passed as one argv item, never through a shell; a leading dash
+  // is still refused so it cannot be read as another CLI flag.
+  return raw.split(',').map((x) => x.trim()).filter((x) => x && !x.startsWith('-')).slice(0, 30);
+}
+
+// Folders outside the project that a thread may read. Each must be an existing
+// absolute directory; anything else is an error the caller can show.
+function normalizeDirs(dirs) {
+  if (dirs == null) return [];
+  if (!Array.isArray(dirs)) throw new Error('extra_dirs must be a list of folder paths');
+  const out = [];
+  for (const d of dirs) {
+    const p = typeof d === 'string' ? d.trim() : '';
+    if (!p) continue;
+    if (p.startsWith('-') || !isAbsolute(p)) throw new Error(`extra_dirs entries must be absolute paths: ${p}`);
+    let st;
+    try { st = statSync(p); } catch { throw new Error(`extra_dirs folder not found: ${p}`); }
+    if (!st.isDirectory()) throw new Error(`extra_dirs entry is not a folder: ${p}`);
+    const r = resolve(p);
+    if (!out.includes(r)) out.push(r);
+  }
+  if (out.length > MAX_EXTRA_DIRS) throw new Error(`at most ${MAX_EXTRA_DIRS} extra_dirs are allowed`);
+  return out;
+}
+
 export function buildClaudeArgs(card) {
   const t = card.thread;
   const modeArgs = t.mode === 'write'
     ? ['--permission-mode', 'acceptEdits']
     : ['--disallowedTools', 'Edit', 'Write', 'NotebookEdit'];
-  if (!t.sessionId) {
-    return ['-p', '--resume', t.parentSessionId, '--fork-session', '--output-format', 'json', ...modeArgs];
-  }
-  return ['-p', '--resume', t.sessionId, '--output-format', 'json', ...modeArgs];
+  const allow = allowedTools();
+  const allowArgs = allow.length ? ['--allowedTools', ...allow] : [];
+  const dirs = Array.isArray(t.dirs) ? t.dirs.filter((d) => typeof d === 'string' && isAbsolute(d)) : [];
+  const dirArgs = dirs.length ? ['--add-dir', ...dirs] : [];
+  const base = t.sessionId
+    ? ['-p', '--resume', t.sessionId]
+    : ['-p', '--resume', t.parentSessionId, '--fork-session'];
+  // The prompt goes in on stdin, so the variadic flags at the end cannot swallow it.
+  return [...base, '--output-format', 'json', ...modeArgs, ...allowArgs, ...dirArgs];
 }
 
 export function buildPrompt(card) {
@@ -414,6 +675,15 @@ function markFailed(card, error) {
   setRunState(card, 'failed');
 }
 
+// A shared board server may launch a turn for a project other than its own,
+// so the child must not inherit this process's project variables.
+function childEnv() {
+  const env = { ...process.env };
+  delete env.THREAD_PROJECT_DIR;
+  delete env.CLAUDE_PROJECT_DIR;
+  return env;
+}
+
 // Called inside updateState so the runner (which reads under the same lock)
 // never sees the card before its pid is recorded.
 function launchRunner(projectDirArg, card) {
@@ -422,7 +692,7 @@ function launchRunner(projectDirArg, card) {
     child = spawn(process.execPath, [RUNNER_PATH, projectDirArg, card.id], {
       detached: true,
       stdio: 'ignore',
-      env: process.env,
+      env: childEnv(),
     });
   } catch (e) {
     markFailed(card, `could not start runner: ${oneLine(e.message)}`);
@@ -442,7 +712,7 @@ function launchRunner(projectDirArg, card) {
   child.unref();
 }
 
-export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read' } = {}) {
+export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', dirs } = {}) {
   if (process.env.THREAD_DEPTH) throw new Error('threads cannot start threads');
   if (typeof sessionId !== 'string' || !UUID_RE.test(sessionId)) {
     throw new Error('session_id must be a UUID (the main session id)');
@@ -452,6 +722,7 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
   if (!t) throw new Error('title must not be empty');
   if (!k) throw new Error('task must not be empty');
   if (!MODES.includes(mode)) throw new Error(`invalid mode "${mode}" (use read or write)`);
+  const extraDirs = normalizeDirs(dirs);
   return updateState(projectDirArg, (state) => {
     state.seq += 1;
     const ts = now();
@@ -469,6 +740,7 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
         parentSessionId: sessionId.toLowerCase(),
         sessionId: null,
         mode,
+        dirs: extraDirs,
         runState: 'running',
         pid: null,
         turns: [{ prompt: k, startedAt: ts, finishedAt: null, ok: null, result: null, error: null }],
@@ -483,7 +755,7 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
   });
 }
 
-export async function continueThread(projectDirArg, id, message) {
+export async function continueThread(projectDirArg, id, message, { sessionId } = {}) {
   if (process.env.THREAD_DEPTH) throw new Error('a side thread cannot continue threads');
   const m = typeof message === 'string' ? message.trim() : '';
   if (!m) throw new Error('message must not be empty');
@@ -493,8 +765,12 @@ export async function continueThread(projectDirArg, id, message) {
     if (th.runState === 'running') throw new Error(`thread ${id} is still running`);
     if (th.runState === 'ended') throw new Error(`thread ${id} has ended`);
     if (!th.sessionId) throw new Error(`thread ${id} has no session yet (its first turn did not finish); start a new thread instead`);
-    th.turns.push({ prompt: m, startedAt: now(), finishedAt: null, ok: null, result: null, error: null });
-    th.reported = false;
+    const turn = { prompt: m, startedAt: now(), finishedAt: null, ok: null, result: null, error: null };
+    if (typeof sessionId === 'string' && sessionId && !sameSession(sessionId, th.parentSessionId)) turn.sentBy = sessionId.toLowerCase();
+    th.turns.push(turn);
+    // `reported` is about the newest successful result, so it is left alone here:
+    // the runner clears it only when this turn produces a new result. A follow-up
+    // that fails leaves an already-reported thread reported.
     th.announced = false;
     th.pid = null;
     setRunState(card, 'running');
@@ -503,14 +779,51 @@ export async function continueThread(projectDirArg, id, message) {
   });
 }
 
-export async function reportThread(projectDirArg, id) {
+const CONFIRM_TTL_MS = 10 * 60 * 1000;
+
+function sameSession(a, b) {
+  return typeof a === 'string' && typeof b === 'string' && a.length > 0 && a.toLowerCase() === b.toLowerCase();
+}
+
+// Guard for a call made by a session other than the one that started the thread.
+// Returns null when the call may go ahead (the caller is the parent, or the
+// confirm code is valid and has been used up); otherwise issues a fresh code.
+// `other` tells the caller which of the two cases it is.
+function checkCaller(th, action, sessionId, confirmCode) {
+  if (sameSession(sessionId, th.parentSessionId)) return { ok: true, other: false };
+  const p = th.pendingConfirm;
+  const given = typeof confirmCode === 'string' ? confirmCode.trim().toLowerCase() : '';
+  const valid = !!p && !!given && p.code === given && p.action === action
+    && sameSession(p.sessionId, sessionId) && Date.parse(p.expiresAt) > Date.now();
+  if (valid) {
+    delete th.pendingConfirm;
+    return { ok: true, other: true };
+  }
+  const code = randomBytes(4).toString('hex');
+  th.pendingConfirm = { code, action, sessionId: String(sessionId).toLowerCase(), expiresAt: new Date(Date.now() + CONFIRM_TTL_MS).toISOString() };
+  return { ok: false, code };
+}
+
+export async function reportThread(projectDirArg, id, { sessionId, confirmCode } = {}) {
+  if (process.env.THREAD_DEPTH) throw new Error('a side thread cannot report threads');
   return updateState(projectDirArg, (state) => {
     const card = findThread(state, id);
     const th = card.thread;
     if (th.lastResult == null) {
       throw new Error(`thread ${id} has no successful turn yet (state: ${th.runState})`);
     }
-    th.reported = true;
+    let otherSession = false;
+    if (sessionId != null) {
+      const g = checkCaller(th, 'report', sessionId, confirmCode);
+      if (!g.ok) return { needsConfirm: true, action: 'report', code: g.code, card };
+      otherSession = g.other;
+    }
+    if (otherSession) {
+      if (!Array.isArray(th.reports)) th.reports = [];
+      th.reports.push({ sessionId: String(sessionId).toLowerCase(), at: now() });
+    } else {
+      th.reported = true;
+    }
     const last = th.turns[th.turns.length - 1];
     const digest = stripMap(th.lastResult);
     let text = digest;
@@ -519,17 +832,21 @@ export async function reportThread(projectDirArg, id) {
     } else if (last && last.ok === false) {
       text = `(the newest turn of thread ${id} failed: ${last.error || 'unknown error'}; this is the last successful result)\n${digest}`;
     }
-    return { card, text };
+    return otherSession ? { card, text, otherSession: true } : { card, text };
   });
 }
 
-export async function endThread(projectDirArg, id) {
+export async function endThread(projectDirArg, id, { sessionId, confirmCode } = {}) {
   if (process.env.THREAD_DEPTH) throw new Error('a side thread cannot end threads');
   let pidToKill = null;
-  const card = await updateState(projectDirArg, (state) => {
+  const result = await updateState(projectDirArg, (state) => {
     const c = findThread(state, id);
     const th = c.thread;
     if (th.runState === 'ended') return c;
+    if (sessionId != null) {
+      const g = checkCaller(th, 'end', sessionId, confirmCode);
+      if (!g.ok) return { needsConfirm: true, action: 'end', code: g.code, card: c };
+    }
     const wasRunning = th.runState === 'running';
     const pid = th.pid;
     if (wasRunning) {
@@ -543,7 +860,22 @@ export async function endThread(projectDirArg, id) {
   if (pidToKill) {
     try { process.kill(pidToKill, 'SIGTERM'); } catch { /* already gone */ }
   }
-  return card;
+  return result;
+}
+
+// Finished threads with a result nobody has pulled yet, split by whether the
+// given session started them.
+export async function pickReportable(projectDirArg, sessionId) {
+  const state = readState(projectDirArg);
+  const mine = [];
+  const others = [];
+  for (const card of state.cards) {
+    if (card.kind !== 'thread' || !card.thread) continue;
+    const th = card.thread;
+    if (th.lastResult == null || th.reported || th.runState === 'running') continue;
+    (sameSession(sessionId, th.parentSessionId) ? mine : others).push(card);
+  }
+  return { mine, others };
 }
 
 export async function reconcile(projectDirArg) {

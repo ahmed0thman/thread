@@ -2,7 +2,7 @@
 // stdout carries JSON-RPC only; every log line goes to stderr.
 import * as core from './core.mjs';
 
-const SERVER_INFO = { name: 'thread', version: '0.2.0' };
+const SERVER_INFO = { name: 'thread', version: '0.5.0' };
 const DEFAULT_PROTOCOL = '2025-06-18';
 
 function log(...a) {
@@ -31,6 +31,8 @@ const replyError = (id, code, message) => send({ jsonrpc: '2.0', id, error: { co
 const STATUSES = Array.isArray(core.STATUSES) ? core.STATUSES : ['idea', 'new', 'in_progress', 'review', 'blocked', 'done'];
 
 const ID_PROP = { type: 'string', description: 'Card id, for example "c4".' };
+const SESSION_PROP = { type: 'string', description: 'This session\'s id (a UUID), taken from the "[thread plugin]" note added at session start. Falls back to the CLAUDE_CODE_SESSION_ID environment variable if omitted.' };
+const CONFIRM_PROP = { type: 'string', description: 'The confirm code from a "CONFIRMATION REQUIRED" answer. Pass it only after the user agreed to continue.' };
 
 const TOOLS = [
   {
@@ -41,7 +43,9 @@ const TOOLS = [
       'call thread_report later when the user asks or when the result is needed. ' +
       'Pass the session id from the "[thread plugin]" SessionStart note as session_id. ' +
       'The default mode is "read" (the thread may read, search and analyse but not edit files). ' +
-      'Use mode "write" only when the user asks for the thread to change files.',
+      'Use mode "write" only when the user asks for the thread to change files. ' +
+      'The thread runs headless and cannot answer permission prompts: it can read inside the project and use web search and fetch, ' +
+      'but any other folder it must read has to be listed in extra_dirs.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -49,43 +53,47 @@ const TOOLS = [
         task: { type: 'string', description: 'What the thread should do. Be specific; the thread has this conversation as context but starts with only this instruction.' },
         session_id: { type: 'string', description: 'This session\'s id (a UUID), taken from the "[thread plugin]" note added at session start. Falls back to the CLAUDE_CODE_SESSION_ID environment variable if omitted.' },
         mode: { type: 'string', enum: ['read', 'write'], description: '"read" (default) forbids file edits. "write" lets the thread edit files; use it only when the user asks for that.' },
+        extra_dirs: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Absolute paths of folders outside the project that the task needs to read, for example another repository the user named. Only list folders the task actually requires.' },
       },
       required: ['title', 'task'],
     },
   },
   {
     name: 'thread_continue',
-    description: 'Send a follow-up message to a finished (idle or failed-after-first-turn) thread so it runs another turn in the background. Fails if the thread is still running, has ended, or has not completed a first turn. Fetch the result with thread_report.',
+    description: 'Send a follow-up message to a finished (idle or failed-after-first-turn) thread so it runs another turn in the background. Fails if the thread is still running, has ended, or has not completed a first turn. Fetch the result with thread_report. The thread\'s "finished" notice goes to the session that started it.',
     inputSchema: {
       type: 'object',
-      properties: { id: ID_PROP, message: { type: 'string', description: 'The follow-up instruction for the thread.' } },
+      properties: { id: ID_PROP, message: { type: 'string', description: 'The follow-up instruction for the thread.' }, session_id: SESSION_PROP },
       required: ['id', 'message'],
     },
   },
   {
     name: 'thread_status',
-    description: 'Show the state of threads: id, title, run state (running, idle, failed, ended), mode, number of turns, and whether the result has been reported. Omit id to list all threads.',
+    description: 'Show the state of threads: id, title, run state (running, idle, failed, ended), mode, number of turns, whether the result has been reported, and which session started each. Omit id to list all threads.',
     inputSchema: {
       type: 'object',
-      properties: { id: { type: 'string', description: 'Card id of one thread. Omit to list every thread.' } },
+      properties: { id: { type: 'string', description: 'Card id of one thread. Omit to list every thread.' }, session_id: SESSION_PROP },
       required: [],
     },
   },
   {
     name: 'thread_report',
-    description: 'Fetch the hand-back digest (Happened, Decided, Changed, Open) from a thread\'s newest successful turn. If a turn is still running, the previous digest is returned with a note. Marks the result as reported.',
+    description: 'Fetch the hand-back digest (Happened, Decided, Changed, Open) from a thread\'s newest successful turn. If a turn is still running, the previous digest is returned with a note. Marks the result as reported. ' +
+      'Always pass session_id. Omit id to pick this session\'s only finished, unreported thread; threads of other sessions are never picked. ' +
+      'A thread started by a different session is not reported until the user confirms: the tool then answers "CONFIRMATION REQUIRED" with a confirm_code.',
     inputSchema: {
       type: 'object',
-      properties: { id: ID_PROP },
-      required: ['id'],
+      properties: { id: { type: 'string', description: 'Card id, for example "c4". Optional: omit to let the tool pick this session\'s thread.' }, session_id: SESSION_PROP, confirm_code: CONFIRM_PROP },
+      required: [],
     },
   },
   {
     name: 'thread_end',
-    description: 'End a thread. If it is running its process is stopped. The card moves to done and the thread cannot be continued.',
+    description: 'End a thread. If it is running its process is stopped. The card moves to done and the thread cannot be continued. ' +
+      'Always pass session_id. A thread started by a different session is not ended until the user confirms: the tool then answers "CONFIRMATION REQUIRED" with a confirm_code.',
     inputSchema: {
       type: 'object',
-      properties: { id: ID_PROP },
+      properties: { id: ID_PROP, session_id: SESSION_PROP, confirm_code: CONFIRM_PROP },
       required: ['id'],
     },
   },
@@ -173,22 +181,135 @@ const oneLine = (s, n = 160) => {
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
 };
 
-function threadLine(c) {
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The calling session: the session_id argument, else the environment, else unknown.
+function callerId(args) {
+  const arg = optStr(args, 'session_id');
+  if (arg && UUID_RE.test(arg.trim())) return arg.trim().toLowerCase();
+  const env = process.env.CLAUDE_CODE_SESSION_ID;
+  if (typeof env === 'string' && UUID_RE.test(env.trim())) return env.trim().toLowerCase();
+  return undefined;
+}
+
+function needCaller(args) {
+  const id = callerId(args);
+  if (!id) throw new ToolError('no session id: pass session_id from the "[thread plugin]" note at session start');
+  return id;
+}
+
+const sameId = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+
+function ago(iso) {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms)) return '';
+  const min = Math.floor(Math.max(0, ms) / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return `${h} h ago`;
+  return `${Math.floor(h / 24)} days ago`;
+}
+
+function startedBy(state, c, caller) {
+  const parent = c.thread && c.thread.parentSessionId;
+  if (caller && sameId(caller, parent)) return 'this session';
+  return core.sessionLabel(state, parent);
+}
+
+function threadLine(c, state, caller) {
   const t = c.thread || {};
-  return `${c.id} "${oneLine(c.title, 80)}" — ${t.runState || '?'}, mode ${t.mode || '?'}, ${(t.turns || []).length} turn(s), reported: ${t.reported ? 'yes' : 'no'}, session ${t.sessionId || 'not known yet'}`;
+  return `${c.id} "${oneLine(c.title, 80)}" — ${t.runState || '?'}, mode ${t.mode || '?'}, ${(t.turns || []).length} turn(s), reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, session ${t.sessionId || 'not known yet'}`;
+}
+
+// The answer to a report or end that came from a session other than the one
+// that started the thread. It carries no digest text.
+function confirmText(r, state, caller) {
+  const { card, code } = r;
+  const verb = r.action === 'end' ? 'ended' : 'reported';
+  const cmd = r.action === 'end' ? 'end' : 'report';
+  const id = card.id;
+  const title = oneLine(card.title, 80);
+  const parent = card.thread.parentSessionId;
+  const parentLabel = core.sessionLabel(state, parent);
+  const seen = state.sessions && state.sessions[String(parent).toLowerCase()] && state.sessions[String(parent).toLowerCase()].lastSeenAt;
+  const when = seen && ago(seen) ? `, last active ${ago(seen)}` : '';
+  const callerLabel = core.sessionLabel(state, caller);
+  const isEnd = r.action === 'end';
+  const here = isEnd ? 'End it here' : 'Report here';
+  const effect = isEnd
+    ? 'End the thread now. The session that started it will find it ended.'
+    : 'Put this thread\'s digest into this session\'s context. The session that started it will not receive it.';
+  const alertLine = isEnd
+    ? 'Ending it here stops the thread for the session that started it.'
+    : 'Reporting here puts this thread\'s digest into **this** session\'s context. The session that started it will not receive it.';
+  return [
+    `CONFIRMATION REQUIRED. Nothing was ${verb}.`,
+    '',
+    `Thread ${id} "${title}" was started by a different session.`,
+    `Started by: ${parentLabel}${when}`,
+    `You are in: ${callerLabel}`,
+    '',
+    'Ask the user with the AskUserQuestion tool. Do not answer for them, do not skip the question, and do not show or summarise any part of the thread\'s digest before they answer.',
+    `  question: "Thread ${id} was started by another session (${parentLabel}). ${isEnd ? 'End it from this session' : 'Report its digest into this session'} anyway?"`,
+    '  header: "Wrong session"',
+    '  options, in this order:',
+    `    1. label "Cancel (Recommended)" - description "Leave this session unchanged. Run /thread:${cmd} ${id} in the session that started it."`,
+    `    2. label "${here}" - description "${effect}"`,
+    '',
+    'If the AskUserQuestion tool is not available, show the user the alert below exactly as written and stop until they reply.',
+    '',
+    '## Not the session that started this thread',
+    '',
+    `> **Thread ${id}** "${title}"`,
+    `> **Started by:** ${parentLabel}`,
+    `> **You are in:** ${callerLabel}`,
+    '>',
+    `> ${alertLine}`,
+    '',
+    `**${isEnd ? 'End it here anyway?' : 'Report here anyway?'}** Reply "yes" to continue, or "no" to cancel.`,
+    '',
+    `Only if the user chooses to continue, call thread_${cmd} again with id "${id}", the same session_id, and confirm_code "${code}".`,
+  ].join('\n');
 }
 
 // ---------- board server ----------
 
-let board = null; // { server, port, url } | null
+let board = null; // { url, owned, server } | null
 let boardPromise = Promise.resolve(null);
+let boardMod = null; // ./http.mjs, loaded lazily so a failure there cannot stop the MCP server
+let boardWatch = null;
+const BOARD_WATCH_MS = 5000;
 
 function startBoard(projectDir) {
   if (process.env.THREAD_NO_HTTP === '1') return;
   boardPromise = import('./http.mjs')
-    .then((m) => m.startBoardServer(projectDir))
-    .then((b) => { board = b; log('board at', b.url); return b; })
+    .then((m) => { boardMod = m; return m.ensureBoard(projectDir); })
+    .then((b) => { board = b; log('board at', b.url, b.owned ? '(owned)' : '(shared)'); watchBoard(projectDir); return b; })
     .catch((e) => { log('board server failed to start:', e); return null; });
+}
+
+// While another session owns the port, take it over once that server stops answering.
+function watchBoard(projectDir) {
+  if (boardWatch || !board || board.owned || closing) return;
+  let busy = false;
+  boardWatch = setInterval(async () => {
+    if (busy || closing) return;
+    busy = true;
+    try {
+      if (await boardMod.pingBoard(board.url)) return;
+      const b = await boardMod.ensureBoard(projectDir);
+      if (closing) { if (b.server) b.server.close(); return; }
+      board = b;
+      log('board at', b.url, b.owned ? '(owned)' : '(shared)');
+      if (b.owned) { clearInterval(boardWatch); boardWatch = null; }
+    } catch (e) {
+      log('board re-check failed:', e);
+    } finally {
+      busy = false;
+    }
+  }, BOARD_WATCH_MS);
+  if (typeof boardWatch.unref === 'function') boardWatch.unref();
 }
 
 // ---------- tool handlers ----------
@@ -203,25 +324,36 @@ const HANDLERS = {
       task: reqStr(args, 'task'),
       sessionId,
       mode,
+      dirs: args && args.extra_dirs,
     });
-    return `Thread ${card.id} "${oneLine(card.title, 80)}" started in the background (mode ${mode}). Results come back only through thread_report; call it with id ${card.id} when the user asks or the result is needed.`;
+    const extra = card.thread.dirs && card.thread.dirs.length ? `, extra folders: ${card.thread.dirs.join(', ')}` : '';
+    return `Thread ${card.id} "${oneLine(card.title, 80)}" started in the background (mode ${mode}${extra}). Results come back only through thread_report; call it with id ${card.id} when the user asks or the result is needed.`;
   },
 
   async thread_continue(args) {
-    const card = await core.continueThread(core.projectDir(), reqStr(args, 'id'), reqStr(args, 'message'));
-    return `Thread ${card.id} "${oneLine(card.title, 80)}" is running another turn. Use thread_report to fetch the result.`;
+    const pd = core.projectDir();
+    const caller = callerId(args);
+    const card = await core.continueThread(pd, reqStr(args, 'id'), reqStr(args, 'message'), { sessionId: caller });
+    let out = `Thread ${card.id} "${oneLine(card.title, 80)}" is running another turn. Use thread_report to fetch the result.`;
+    if (caller && !sameId(caller, card.thread.parentSessionId)) {
+      const label = core.sessionLabel(core.readState(pd), card.thread.parentSessionId);
+      out += ` This thread belongs to ${label}; its "finished" notice will go to that session.`;
+    }
+    return out;
   },
 
   async thread_status(args) {
     const id = optStr(args, 'id');
-    const state = await core.reconcile(core.projectDir());
+    const caller = callerId(args);
+    const pd = core.projectDir();
+    const state = await core.reconcile(pd);
     const threads = (state.cards || []).filter((c) => c.kind === 'thread');
     if (id) {
       const c = threads.find((x) => x.id === id);
       if (!c) throw new ToolError(`thread ${id} not found`);
       const t = c.thread;
       const last = (t.turns || [])[(t.turns || []).length - 1];
-      let out = threadLine(c);
+      let out = threadLine(c, state, caller);
       if (t.runState === 'failed' && last && last.error) out += `\nLast error: ${oneLine(last.error, 300)}`;
       return out;
     }
@@ -230,20 +362,48 @@ const HANDLERS = {
       const turns = c.thread.turns || [];
       const last = turns[turns.length - 1];
       const failed = c.thread.runState === 'failed' && last && last.error;
-      return failed ? `${threadLine(c)} — error: ${oneLine(last.error, 200)}` : threadLine(c);
+      return failed ? `${threadLine(c, state, caller)} — error: ${oneLine(last.error, 200)}` : threadLine(c, state, caller);
     }).join('\n');
   },
 
   async thread_report(args) {
-    const id = reqStr(args, 'id');
+    const caller = needCaller(args);
     const pd = core.projectDir();
+    let id = optStr(args, 'id');
+    if (id !== undefined && !id.trim()) id = undefined;
     await core.reconcile(pd);
-    const { card, text } = await core.reportThread(pd, id);
-    return `Thread ${card.id} "${oneLine(card.title, 80)}" (${card.thread.runState}):\n\n${text}`;
+    if (id === undefined) {
+      const { mine, others } = await core.pickReportable(pd, caller);
+      if (mine.length !== 1) {
+        const state = core.readState(pd);
+        const lines = [mine.length
+          ? 'Nothing was reported. More than one finished thread from this session is waiting; ask the user which one:'
+          : 'Nothing was reported. No finished, unreported thread from this session.'];
+        for (const c of mine) lines.push(`- ${c.id} "${oneLine(c.title, 80)}"`);
+        if (others.length) {
+          lines.push('', 'Finished threads from other sessions (a thread from another session must be requested by id, and the user is asked to confirm):');
+          for (const c of others) lines.push(`- ${c.id} "${oneLine(c.title, 80)}" (started by ${core.sessionLabel(state, c.thread.parentSessionId)})`);
+        }
+        return lines.join('\n');
+      }
+      id = mine[0].id;
+    }
+    const r = await core.reportThread(pd, id, { sessionId: caller, confirmCode: optStr(args, 'confirm_code') });
+    if (r.needsConfirm) return confirmText(r, core.readState(pd), caller);
+    const body = `Thread ${r.card.id} "${oneLine(r.card.title, 80)}" (${r.card.thread.runState}):\n\n${r.text}`;
+    if (r.otherSession) {
+      const label = core.sessionLabel(core.readState(pd), r.card.thread.parentSessionId);
+      return `Reported into a different session than the one that started this thread (${label}).\n${body}`;
+    }
+    return body;
   },
 
   async thread_end(args) {
-    const card = await core.endThread(core.projectDir(), reqStr(args, 'id'));
+    const caller = needCaller(args);
+    const pd = core.projectDir();
+    const r = await core.endThread(pd, reqStr(args, 'id'), { sessionId: caller, confirmCode: optStr(args, 'confirm_code') });
+    if (r.needsConfirm) return confirmText(r, core.readState(pd), caller);
+    const card = r;
     const note = card.thread.lastResult == null
       ? 'It produced no result.'
       : card.thread.reported ? 'Its last result was reported.' : 'Its last result was never reported; thread_report still works on an ended thread.';
@@ -304,7 +464,14 @@ const HANDLERS = {
     if (process.env.THREAD_NO_HTTP === '1') return 'The board server is disabled (THREAD_NO_HTTP=1).';
     await boardPromise;
     if (!board) return 'The board is unavailable: the HTTP server failed to start (see the plugin log on stderr).';
-    return `Board: ${board.url}`;
+    let link;
+    try {
+      link = `${board.url}?t=${boardMod.boardToken()}#/${core.projectKey(core.projectDir())}`;
+    } catch (e) {
+      log('board token failed:', e);
+      return 'The board is unavailable: its access token could not be read (see the plugin log on stderr).';
+    }
+    return `Board: ${link}\nThis link opens this project's tab; the same board shows every project.`;
   },
 };
 
@@ -395,9 +562,10 @@ function processLine(line) {
 async function shutdown() {
   if (closing) return;
   closing = true;
+  if (boardWatch) { clearInterval(boardWatch); boardWatch = null; }
   try { await queue; } catch { /* ignore */ }
   try {
-    if (board && board.server) {
+    if (board && board.owned && board.server) {
       await Promise.race([
         new Promise((resolve) => {
           board.server.close(() => resolve());

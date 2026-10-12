@@ -13,7 +13,7 @@ const prompt = Buffer.concat(chunks).toString('utf8');
 if (process.env.FAKE_CLAUDE_LOG) {
   appendFileSync(
     process.env.FAKE_CLAUDE_LOG,
-    JSON.stringify({ argv: process.argv.slice(2), prompt, cwd: process.cwd(), depth: process.env.THREAD_DEPTH }) + '\n',
+    JSON.stringify({ argv: process.argv.slice(2), prompt, cwd: process.cwd(), depth: process.env.THREAD_DEPTH, threadProjectDir: process.env.THREAD_PROJECT_DIR, claudeProjectDir: process.env.CLAUDE_PROJECT_DIR }) + '\n',
   );
 }
 // Test-only extra: lets the harness kill leftover children. Not part of the behaviour contract.

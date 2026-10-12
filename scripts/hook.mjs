@@ -47,19 +47,31 @@ async function main() {
   const sessionId = typeof input.session_id === 'string' ? input.session_id : '';
   if (!/^[0-9A-Za-z-]{8,64}$/.test(sessionId)) return;
 
+  // Register the session and its name. Never hold up the user's prompt waiting on the state lock.
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
+  let core = null;
+  if (projectDir && (event === 'SessionStart' || event === 'UserPromptSubmit')) {
+    process.env.THREAD_LOCK_WAIT_MS = '1000';
+    try {
+      core = await import(new URL('../server/core.mjs', import.meta.url).href);
+      await core.touchSession(projectDir, sessionId, {
+        transcriptPath: input.transcript_path,
+        sessionTitle: input.session_title,
+      });
+    } catch {
+      // naming is best effort
+    }
+  }
+
   if (event === 'SessionStart') {
     await emit('SessionStart',
-      `[thread plugin] This session's id is ${sessionId}. Pass it as session_id to thread_start.`);
+      `[thread plugin] This session's id is ${sessionId}. Pass it as session_id to thread_start, thread_report, thread_end, thread_continue and thread_status.`);
     return;
   }
 
   if (event === 'UserPromptSubmit') {
-    const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
-    if (!projectDir) return;
-    // Never hold up the user's prompt waiting on the state lock.
-    process.env.THREAD_LOCK_WAIT_MS = '1000';
-    const coreUrl = new URL('../server/core.mjs', import.meta.url).href;
-    const { reconcile, pendingAnnouncements, readState } = await import(coreUrl);
+    if (!projectDir || !core) return;
+    const { reconcile, pendingAnnouncements, readState } = core;
 
     await reconcile(projectDir);
     const announced = await pendingAnnouncements(projectDir, sessionId);

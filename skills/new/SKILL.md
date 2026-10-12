@@ -10,6 +10,7 @@ Start a side thread for the task the user described in the arguments.
 2. Write the task so it stands alone: the user's request plus any constraint they gave. Do not assume the thread knows what you were about to do next.
 3. Call the `thread_start` tool with `title`, `task`, `session_id` and `mode`.
 4. Use mode `read` unless the user explicitly asked the thread to change files. Mode `write` edits the same working tree as this session.
+5. The thread cannot answer permission prompts. It can read the project and use web search and fetch. If the task needs files in a folder outside the project, pass that folder's absolute path in `extra_dirs`; list only folders the task requires.
 
 Current session id: ${CLAUDE_SESSION_ID}
 If that line still shows a literal placeholder instead of a UUID, use the id from the "[thread plugin]" note at session start.

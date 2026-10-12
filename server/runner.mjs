@@ -1,7 +1,7 @@
 // thread plugin: detached process that runs one thread turn.
 // usage: node runner.mjs <projectDir> <cardId>
 import { spawn } from 'node:child_process';
-import { createWriteStream, mkdirSync, writeFileSync } from 'node:fs';
+import { createWriteStream, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildClaudeArgs, buildPrompt, projectPaths, readStateLocked, updateState } from './core.mjs';
 
@@ -20,6 +20,7 @@ let exitInfo = null;
 let spawnError = null;
 let timedOut = false;
 let userEnded = false;
+let missingDir = false;
 let finished = false;
 let finishFallback = null;
 let killTimer = null;
@@ -85,6 +86,7 @@ function parseResult(text) {
 function computeOutcome(crash) {
   if (crash) return { ok: false, error: `runner error: ${tail(crash && crash.message ? crash.message : crash, 300)}` };
   if (userEnded) return { ok: false, error: 'ended by user' };
+  if (missingDir) return { ok: false, error: `project folder not found: ${projectDir}` };
   if (spawnError) {
     if (spawnError.code === 'ENOENT') {
       return {
@@ -220,6 +222,14 @@ async function main() {
   const prompt = buildPrompt(card);
 
   if (userEnded) return finish();
+
+  // spawn reports a missing cwd as ENOENT, which would read as "claude CLI not found".
+  let dirOk = false;
+  try { dirOk = statSync(projectDir).isDirectory(); } catch { /* missing */ }
+  if (!dirOk) {
+    missingDir = true;
+    return finish();
+  }
 
   try {
     child = spawn(bin, args, {

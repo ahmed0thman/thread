@@ -6,6 +6,9 @@ argument-hint: thread id and a follow-up message
 
 The first word of the arguments is the thread id (for example `c4`); the rest is the follow-up message.
 
-Call the `thread_continue` tool with `id` and `message`. Write the message so it stands alone, since the thread only knows its own history.
+Current session id: ${CLAUDE_SESSION_ID}
+If that line still shows a literal placeholder instead of a UUID, use the id from the "[thread plugin]" note at session start.
 
-Tell the user in one sentence that the thread is running again. Do not wait for it and do not poll it. If the tool reports that the thread is still running, ended, or unknown, pass that on plainly.
+Call the `thread_continue` tool with `id`, `message` and `session_id`. Write the message so it stands alone, since the thread only knows its own history.
+
+Tell the user in one sentence that the thread is running again. Do not wait for it and do not poll it. If the tool says the thread belongs to another session, pass that on: its finished notice goes to that session. If the tool reports that the thread is still running, ended, or unknown, pass that on plainly.
