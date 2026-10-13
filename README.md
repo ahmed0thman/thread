@@ -8,6 +8,10 @@ While Claude is busy on one task, you often think of something else: a question 
 
 The plugin also keeps a **board** of tasks, ideas and threads for each project, shown on a local web page where you can read a thread's conversation, see what it did step by step, and send it follow-ups.
 
+![The board: tasks, ideas and threads in six columns, with each thread's state, tokens and agent](docs/board.png)
+
+![A thread opened full-window: its details and brief on the left, the conversation in the centre, the step-by-step trace on the right](docs/thread.png)
+
 ## Contents
 
 - [Install](#install)
@@ -242,6 +246,10 @@ Flags can go anywhere in the line. Thread states map to board columns: running i
   - **Right:** the trace, a timeline of what the thread did, labelled Did, Found, Decided, Changed and Open, with file references. Clicking a step scrolls the conversation to that turn.
 - **Keys:** `/` focuses search, `n` adds a card, `Esc` closes a panel.
 
+![Starting a card as a thread: session, Brief or Full copy, read-only or editing, and the agent](docs/start-as-thread.png)
+
+![The board in the dark theme](docs/board-dark.png)
+
 ## How threads work
 
 - **Context.** By default a thread starts a fresh session and knows only the brief and the task. It also loads the project's `CLAUDE.md` on its own, and sees files as they are on disk when it reads them. With `--full` it starts as a copy of the main session at that moment. Either way it does not see anything the main session does afterwards, and neither do its follow-ups: a follow-up resumes the thread's own session. Continue a thread for the same task; start a new one for a new task.
@@ -261,6 +269,14 @@ Flags can go anywhere in the line. Thread states map to board columns: running i
 - Thread cards are labelled with the name of the session that started them: Claude Code's title for the session, otherwise the start of its first message, otherwise a short id.
 
 ## Security
+
+What the plugin runs, sends and stores:
+
+- **Runs on your machine:** a local MCP server and two hooks (at session start and on each prompt), all plain Node scripts in this repository. For each thread turn it starts the `claude` CLI in the background, in your project folder.
+- **Flags it passes to a thread:** read mode passes `--disallowedTools Edit Write NotebookEdit`; write mode passes `--permission-mode acceptEdits`. Every thread gets `--allowedTools WebSearch WebFetch` (see `THREAD_ALLOW_TOOLS`), and `--add-dir` for folders you named. It never edits your Claude Code settings.
+- **Reads:** the end of the main session's transcript, to get the session's title and its model and effort, and the agent files in `.claude/agents/`.
+- **Sends nothing.** The plugin makes no network requests and has no telemetry. Its only listener is the board on `127.0.0.1`, and the board page loads nothing from the internet. Threads are ordinary Claude Code sessions, so they talk to Anthropic as any session does and can search and fetch the web.
+- **Stores:** cards, thread replies and logs in the data directory on your machine.
 
 - **Web access is pre-approved for threads, with no prompt per site.** A full thread holds your whole conversation, and any thread can read the project, so a malicious page could try to talk it into sending that content somewhere. If that matters for your project, set `THREAD_ALLOW_TOOLS=none`.
 - **The board is local.** It listens on `127.0.0.1` only, checks the request's host and origin, and requires the access token that is in the link from `/thread:board`. The token is stored in `board.token` in the data directory, readable only by you.
@@ -332,4 +348,4 @@ claude plugin validate .
 
 ## License
 
-MIT.
+MIT. See [LICENSE](LICENSE).

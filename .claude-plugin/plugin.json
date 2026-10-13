@@ -7,9 +7,15 @@
   },
   "license": "MIT",
   "keywords": [
+    "claude-code",
     "threads",
+    "side-task",
+    "background-tasks",
+    "subagents",
     "kanban",
     "board",
-    "side-task"
-  ]
+    "mcp"
+  ],
+  "homepage": "https://github.com/ahmed0thman/thread",
+  "repository": "https://github.com/ahmed0thman/thread"
 }
