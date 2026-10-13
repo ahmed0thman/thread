@@ -50,6 +50,7 @@
   --ok: #17703f;
   --idea: #8a5300;
   --thread: #6a3fc0;
+  --milestone: #0b6a69;
 
   --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px;
   --r1: 4px; --r2: 6px; --r3: 8px;
@@ -90,6 +91,7 @@
   --ok: #62d392;
   --idea: #e8b35e;
   --thread: #bca4f7;
+  --milestone: #5fd6cb;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -170,6 +172,8 @@ code, pre { font-family: var(--mono); }
 .search input:focus + .kbd, .search input:not(:placeholder-shown) + .kbd { display: none; }
 .toolbar-note { flex: 1 1 200px; min-width: 0; color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: var(--s2); }
 .toolbar-note:empty { display: none; }
+.mode-note { margin: 0 var(--s4) var(--s3); flex: none; font-size: 12.5px; color: var(--muted); }
+.mode-note code { font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
 .toolbar #new-btn { margin-left: auto; }
 
 /* ---------- controls ---------- */
@@ -220,6 +224,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .s-ring { border-radius: 50%; border: 2px solid currentColor; }
 .s-dring { border-radius: 50%; border: 2px dashed currentColor; }
 .s-square { border-radius: 2px; background: currentColor; }
+.s-tri { background: currentColor; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 .s-diamond { background: currentColor; transform: rotate(45deg) scale(0.82); }
 .s-hdiamond { border: 2px solid currentColor; transform: rotate(45deg) scale(0.82); }
 .s-pulse { border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
@@ -242,6 +247,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 [data-ck="task"] { --k: var(--muted); }
 [data-ck="idea"] { --k: var(--idea); }
 [data-ck="thread"] { --k: var(--thread); }
+[data-ck="milestone"] { --k: var(--milestone); }
 
 .pill {
   display: inline-flex; align-items: center; gap: 6px; padding: 1px 7px 1px 6px;
@@ -271,7 +277,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 /* ---------- board ---------- */
 .board {
   flex: 1 1 0; min-height: 0; overflow-x: auto; overflow-y: hidden;
-  display: grid; grid-template-columns: repeat(6, minmax(190px, 1fr)); grid-template-rows: minmax(0, 1fr);
+  display: grid; grid-template-columns: repeat(var(--cols, 6), minmax(190px, 1fr)); grid-template-rows: minmax(0, 1fr);
   gap: var(--s2); padding: 0 var(--s4) var(--s4);
 }
 .col {
@@ -301,6 +307,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .card[draggable="true"] { cursor: grab; }
 .card.dragging { opacity: 0.4; }
 .card.is-thread { border-left: 3px solid var(--thread); padding-left: 8px; }
+.card.is-milestone { border-left: 3px solid var(--milestone); padding-left: 8px; }
 .card-top { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .card-title {
   margin: 0; font-size: 13.5px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere;
@@ -312,6 +319,33 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .card-agent { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
 .unseen { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--warn); }
 .unseen .shape { color: var(--warn); width: 7px; height: 7px; }
+
+/* milestones: the progress line, the tag on a card and the list on a milestone's page */
+.ms-prog { display: flex; align-items: center; gap: var(--s2); min-width: 0; font-size: 12px; color: var(--muted); }
+.ms-prog .ms-bar { flex: 1 1 auto; min-width: 40px; max-width: 220px; }
+.ms-bar { height: 4px; border-radius: 2px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); overflow: hidden; }
+.ms-bar > i { display: block; height: 100%; background: var(--milestone); }
+.ms-tag {
+  align-self: flex-start; max-width: 100%; min-width: 0; cursor: pointer;
+  color: var(--milestone); background: transparent; border: 1px solid var(--border-strong);
+}
+.ms-tag:hover { border-color: var(--milestone); }
+.ms-tag .shape { flex: none; }
+.ms-tag-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ms-cards { display: flex; flex-direction: column; gap: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--border); }
+.ms-cards-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); }
+.ms-h { margin: 0; flex: none; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.ms-cards-head .ms-prog { flex: 1 1 160px; }
+.ms-stage { display: flex; align-items: center; gap: var(--s2); margin: var(--s2) 0 0; font-size: 12.5px; font-weight: 650; }
+.ms-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ms-row {
+  display: flex; align-items: center; gap: var(--s2); min-width: 0; padding: 6px var(--s3);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r2); color: inherit; text-decoration: none;
+}
+.ms-row:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.ms-row:focus-visible { outline-offset: -2px; }
+.ms-row .idchip, .ms-row .kindmark { flex: none; }
+.ms-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- banner ---------- */
 .banner {
@@ -337,6 +371,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .drawer.page .dr-body, .drawer.page .dr-foot { padding-left: max(var(--s4), calc(50% - 380px)); padding-right: max(var(--s4), calc(50% - 380px)); }
 .drawer.page .dr-foot { border-top-color: var(--border-strong); }
 .drawer.page textarea.input { min-height: 240px; }
+.drawer.page.is-ms textarea.input { min-height: 96px; }   /* a milestone's cards are the main content */
 .ws-ids { flex: none; display: inline-flex; align-items: center; gap: var(--s2); }
 .dr-head { flex: none; padding: var(--s3) var(--s4) var(--s3); border-bottom: 1px solid var(--border); }
 .dr-head-row { display: flex; align-items: center; gap: var(--s2); min-height: 32px; }
@@ -596,7 +631,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   .toolbar { padding: 0 var(--s3) var(--s3); }
   .search { flex-basis: 100%; max-width: none; }
   .toolbar-note { order: 3; flex-basis: 100%; }
-  .board { padding: 0 var(--s3) var(--s3); grid-template-columns: repeat(6, 264px); scroll-snap-type: x proximity; }
+  .board { padding: 0 var(--s3) var(--s3); grid-template-columns: repeat(var(--cols, 6), 264px); scroll-snap-type: x proximity; }
   .col { scroll-snap-align: start; }
   .drawer { width: 100vw; border-left: 0; }
   .drawer.page .dr-body, .drawer.page .dr-foot { padding-left: var(--s3); padding-right: var(--s3); }
@@ -637,9 +672,12 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     </div>
     <button type="button" class="btn" id="threads-only" aria-pressed="false">Threads only</button>
     <label class="sel" id="session-wrap" hidden><span>Session</span><select class="input" id="session-filter" aria-label="Filter threads by the session that started them"></select></label>
+    <label class="sel" id="milestone-wrap" hidden><span>Milestone</span><select class="input" id="milestone-filter" aria-label="Filter cards by milestone"></select></label>
     <span class="toolbar-note" id="filter-note" aria-live="polite"></span>
     <button type="button" class="btn primary" id="new-btn" aria-keyshortcuts="n">New card <kbd class="hint" aria-hidden="true">N</kbd></button>
   </div>
+  <p class="mode-note" id="old-note" role="status" hidden>This board is served by a session on an older plugin version, so your stages and milestones are not shown. Run <code>/thread:board</code> in an updated session, then reload this page.</p>
+  <p class="mode-note" id="mode-note" role="status" hidden>The task board is off for this project (chat-only), so only threads are shown. Run <code>/thread:setup</code> to turn it on.</p>
   <div class="callout warn notice" id="notice" role="status" hidden></div>
   <main class="board" id="board" aria-label="Board columns"></main>
 </div>
@@ -666,8 +704,13 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 (function () {
   'use strict';
 
-  const STATUSES = ['idea', 'new', 'in_progress', 'review', 'blocked', 'done'];
+  // The stages come from the project's config; these are the defaults, for a server that sends none.
   const LABELS = { idea: 'Idea', new: 'New', in_progress: 'In progress', review: 'Review', blocked: 'Blocked', done: 'Done' };
+  const DEFAULT_CONFIG = {
+    mode: 'tasks',
+    stages: Object.keys(LABELS).map((id) => ({ id, label: LABELS[id] })),
+    roles: { start: 'new', working: 'in_progress', review: 'review', blocked: 'blocked', done: 'done' },
+  };
   const EMPTY = {
     idea: 'No ideas yet. Park half-formed thoughts here.',
     new: 'Nothing waiting. New work lands here.',
@@ -682,7 +725,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   const SECTIONS = [['happened', 'Happened', 'did'], ['decided', 'Decided', 'decided'], ['changed', 'Changed', 'changed'], ['open', 'Open', 'open']];
   const RUN = { running: 'Running', idle: 'Finished', failed: 'Failed', ended: 'Ended' };
   const RUN_SHAPE = { running: 's-pulse', idle: 's-check', failed: 's-cross', ended: 's-square' };
-  const CK_SHAPE = { task: 's-square', idea: 's-diamond', thread: 's-ring' };
+  const CK_SHAPE = { task: 's-square', idea: 's-diamond', thread: 's-ring', milestone: 's-tri' };
   const POLL_MS = 2000;
   const PROJECTS_MS = 5000;
   const TOKEN_KEY = 'thread-board-token';
@@ -694,6 +737,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   const elBanner = $('banner'), elBannerText = $('banner-text');
   const elTabsWrap = $('ptabs-wrap'), elTabs = $('ptabs'), elNotice = $('notice');
   const elSession = $('session-filter'), elSessionWrap = $('session-wrap');
+  const elMilestone = $('milestone-filter'), elMilestoneWrap = $('milestone-wrap'), elModeNote = $('mode-note'), elOldNote = $('old-note');
   const elGate = $('gate'), elGateRetry = $('gate-retry'), elGateMsg = $('gate-msg');
 
   // ---------- access token ----------
@@ -722,7 +766,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   let selKey = '';           // the selected project
   let projectsAt = 0;
   let projectsBusy = false;
-  const filterMemo = {};     // per project: { q, threadsOnly, session }
+  const filterMemo = {};     // per project: { q, threadsOnly, session, milestone }
 
   let current = null;        // newest state from the server
   let currentKey = '';
@@ -761,13 +805,21 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     u.appendChild(h('span', null, 'Claude has not seen this yet'));
     return u;
   }
-  function label(status) { return LABELS[status] || String(status); }
+  // The board's settings as the server sent them (stages, which stage each role uses, chat-only or not).
+  function cfg() {
+    const c = current && current.config;
+    return c && Array.isArray(c.stages) && c.stages.length && c.roles ? c : DEFAULT_CONFIG;
+  }
+  function isChat() { return cfg().mode === 'chat'; }
+  function label(status) {
+    const s = cfg().stages.find((x) => x.id === status);
+    return s ? s.label : String(status);
+  }
   function findCard(id) {
     if (!current) return null;
     for (const c of current.cards) if (c.id === id) return c;
     return null;
   }
-  function isThread(c) { return c.kind === 'thread' && !!c.thread; }
   function cssEscape(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/[^a-zA-Z0-9_-]/g, ''); }
   function turnsOf(c) { return (c.thread && Array.isArray(c.thread.turns)) ? c.thread.turns : []; }
 
@@ -836,6 +888,49 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   // A thread without the field is an old one: a full copy.
   function isBrief(t) { return t.context === 'brief'; }
   // ---- end tokens and agents ----
+  // ---- milestones and stages (page.test.mjs runs this block on its own) ----
+  const NO_MS = ':none';     // the Milestone filter's "No milestone"; a colon is not valid in a card id
+  const CHAT_ROLES = ['working', 'review', 'blocked', 'done'];
+  function isThread(c) { return c.kind === 'thread' && !!c.thread; }
+  function clip(s, n) {
+    const t = String(s || '').replace(/\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n - 1) + '…' : t;
+  }
+  // The columns a chat-only project shows: the stages the thread roles point to, in stage order.
+  function chatStages(config) {
+    const ids = CHAT_ROLES.map((r) => config.roles[r]);
+    return config.stages.filter((s) => ids.includes(s.id));
+  }
+  // f: { q, threadsOnly, session, milestone }; q is lower case
+  function matches(c, f) {
+    if (f.session && !(isThread(c) && c.thread.parentSessionId === f.session)) return false;
+    if (f.threadsOnly && !isThread(c)) return false;
+    if (f.milestone === NO_MS) { if (c.kind === 'milestone' || c.parent) return false; }
+    else if (f.milestone && c.id !== f.milestone && c.parent !== f.milestone) return false;
+    if (!f.q) return true;
+    return (c.id + ' ' + c.title + ' ' + (c.note || '')).toLowerCase().includes(f.q);
+  }
+  function childrenOf(cards, id) { return cards.filter((c) => c.parent === id); }
+  function progressOf(cards, id, doneStage) {
+    const kids = childrenOf(cards, id);
+    return { done: kids.filter((c) => c.status === doneStage).length, total: kids.length };
+  }
+  // [{ stage, cards }] in stage order; a stage with no card is left out
+  function groupByStage(cards, stages) {
+    return stages.map((stage) => ({ stage, cards: cards.filter((c) => c.status === stage.id) })).filter((g) => g.cards.length);
+  }
+  // The plain-text report of a milestone, in the shape of the board_list tool's report.
+  function milestoneReport(m, cards, stages, doneStage) {
+    const p = progressOf(cards, m.id, doneStage);
+    const lines = ['Milestone ' + m.id + ' "' + clip(m.title, 120) + '": ' + p.done + ' of ' + p.total + ' done.'];
+    if (!p.total) lines.push('No cards in this milestone yet.');
+    groupByStage(childrenOf(cards, m.id), stages).forEach((g) => {
+      lines.push(g.stage.label + ' (' + g.cards.length + ')');
+      g.cards.forEach((c) => lines.push('- ' + c.id + ' [' + (c.kind === 'thread' && c.thread ? 'thread:' + c.thread.runState : c.kind) + '] ' + clip(c.title, 120)));
+    });
+    return lines.join('\n');
+  }
+  // ---- end milestones and stages ----
   function elapsedEl(iso) {
     const e = h('span', 'elapsed', fmtMs(Date.now() - new Date(iso).getTime()));
     e.dataset.since = iso;
@@ -1219,6 +1314,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     elBoard.replaceChildren();
     elNote.replaceChildren();
     updateSessionOptions();
+    updateMilestoneOptions();
     updateToolbar();
     renderNotice();
     poll();
@@ -1226,20 +1322,26 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
   function saveFilters() {
     if (!selKey) return;
-    filterMemo[selKey] = { q: elSearch.value, threadsOnly: elThreadsOnly.getAttribute('aria-pressed') === 'true', session: sessionSel };
+    filterMemo[selKey] = { q: elSearch.value, threadsOnly: elThreadsOnly.getAttribute('aria-pressed') === 'true', session: sessionSel, milestone: milestoneSel };
   }
   function loadFilters() {
-    const m = filterMemo[selKey] || { q: '', threadsOnly: false, session: '' };
+    const m = filterMemo[selKey] || { q: '', threadsOnly: false, session: '', milestone: '' };
     elSearch.value = m.q;
     elThreadsOnly.setAttribute('aria-pressed', m.threadsOnly ? 'true' : 'false');
     sessionSel = m.session;
+    milestoneSel = m.milestone;
   }
 
-  // The toolbar's New card button follows the selected project's state.
+  // The toolbar follows the selected project's state: read-only, and chat-only (no New card, no Threads only, a note).
   function updateToolbar() {
     const ro = !!selKey && isRO();
+    const chat = isChat();
     elNewBtn.setAttribute('aria-disabled', ro ? 'true' : 'false');
     elNewBtn.title = ro ? READONLY_WHY : '';
+    elNewBtn.hidden = chat;
+    elThreadsOnly.hidden = chat;
+    elModeNote.hidden = !chat;
+    elOldNote.hidden = !(current && !current.config);
   }
 
   // The bar above the columns for a project whose folder is gone.
@@ -1320,6 +1422,74 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   }
   elSession.addEventListener('change', () => { sessionSel = elSession.value; renderBoard(false); });
 
+  // ---------- milestones ----------
+  let milestoneSel = '';     // the Milestone filter: '' = all, NO_MS = cards in no milestone, else a milestone id
+  // A chat-only project has no visible task cards, so no milestones either.
+  function milestoneCards() { return current && !isChat() ? current.cards.filter((c) => c.kind === 'milestone') : []; }
+  function milestoneOf(card) {
+    if (!card.parent || card.kind === 'milestone') return null;
+    return milestoneCards().find((m) => m.id === card.parent) || null;
+  }
+  // [[id, label]] by title; two milestones with one title get their ids
+  function milestoneChoices() {
+    const list = milestoneCards().slice().sort((a, b) => a.title.localeCompare(b.title));
+    const seen = {};
+    list.forEach((m) => { seen[m.title] = (seen[m.title] || 0) + 1; });
+    return list.map((m) => [m.id, seen[m.title] > 1 ? m.title + ' (' + m.id + ')' : m.title]);
+  }
+  let msSig = '';
+  function updateMilestoneOptions() {
+    const choices = milestoneChoices();
+    // a deleted milestone (or none left) takes its filter with it
+    if (current && milestoneSel && milestoneSel !== NO_MS && !choices.some((c) => c[0] === milestoneSel)) milestoneSel = '';
+    if (current && !choices.length) milestoneSel = '';
+    const sig = JSON.stringify([choices, milestoneSel]);
+    if (sig === msSig) return;
+    msSig = sig;
+    elMilestoneWrap.hidden = !choices.length;
+    fillSelect(elMilestone, [['', 'All']].concat(choices, [[NO_MS, 'No milestone']]), milestoneSel);
+  }
+  elMilestone.addEventListener('change', () => { milestoneSel = elMilestone.value; renderBoard(false); });
+  // a card's milestone tag: show only that milestone and its cards
+  function filterToMilestone(id) {
+    milestoneSel = id;
+    updateMilestoneOptions();
+    renderBoard(false);
+    elMilestone.focus({ preventScroll: true });
+  }
+  function milestoneTag(m) {
+    const b = h('button', 'tag ms-tag');
+    b.type = 'button';
+    b.appendChild(shape('s-tri'));
+    b.appendChild(h('span', 'ms-tag-text', clip(m.title, 30)));
+    b.title = 'Show only the cards in “' + m.title + '”';
+    b.setAttribute('aria-label', 'Milestone ' + m.title + ': show only its cards');
+    b.addEventListener('click', (e) => { e.stopPropagation(); filterToMilestone(m.id); });
+    return b;
+  }
+  // "3/5 done" with a thin bar
+  function progressEl(p) {
+    const row = h('div', 'ms-prog');
+    const bar = h('span', 'ms-bar');
+    bar.setAttribute('aria-hidden', 'true');
+    const fill = h('i');
+    fill.style.width = (p.total ? Math.round(100 * p.done / p.total) : 0) + '%';
+    bar.appendChild(fill);
+    row.append(bar, h('span', 'tnum', p.total ? p.done + '/' + p.total + ' done' : 'No cards yet'));
+    return row;
+  }
+  function progressFor(m) { return progressOf(current.cards, m.id, cfg().roles.done); }
+
+  // A <select>'s options from [[value, text]]; rebuilt only when they changed. `want` is the value to show (the first option if it is gone).
+  function fillSelect(sel, pairs, want) {
+    const sig = JSON.stringify(pairs);
+    if (sel.dataset.sig !== sig) {
+      sel.dataset.sig = sig;
+      sel.replaceChildren(...pairs.map(([v, t]) => { const o = h('option', null, t); o.value = v; return o; }));
+    }
+    sel.value = pairs.some((p) => p[0] === want) ? want : (pairs.length ? pairs[0][0] : '');
+  }
+
   let dirShown = null;
   function setDir(dir) {
     if (dir === dirShown) return;
@@ -1333,21 +1503,19 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   // ---------- board ----------
 
   function filterState() {
-    return { q: elSearch.value.trim().toLowerCase(), threadsOnly: elThreadsOnly.getAttribute('aria-pressed') === 'true', session: sessionSel };
+    // chat-only shows threads only; its Threads only button is hidden, so a pressed state does not count
+    return { q: elSearch.value.trim().toLowerCase(), threadsOnly: elThreadsOnly.getAttribute('aria-pressed') === 'true' && !isChat(), session: sessionSel, milestone: milestoneSel };
   }
-  function matches(c, f) {
-    if (f.session && !(isThread(c) && c.thread.parentSessionId === f.session)) return false;
-    if (f.threadsOnly && !isThread(c)) return false;
-    if (!f.q) return true;
-    return (c.id + ' ' + c.title + ' ' + (c.note || '')).toLowerCase().includes(f.q);
-  }
+  // the text of an empty column: the written ones for the default stages, else a plain one
+  function emptyText(stage) { return LABELS[stage.id] === stage.label ? EMPTY[stage.id] : 'Nothing in ' + stage.label + '.'; }
 
   function renderBoard(force) {
     if (!current) return;
     if (dragId !== null) { pendingRender = true; return; }
     updateSessionOptions();
+    updateMilestoneOptions();
     const f = filterState();
-    const key = currentKey + '|' + f.q + '|' + f.threadsOnly + '|' + f.session;
+    const key = currentKey + '|' + f.q + '|' + f.threadsOnly + '|' + f.session + '|' + f.milestone;
     if (!force && key === boardKey) return;
     boardKey = key;
     pendingRender = false;
@@ -1356,16 +1524,23 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     const colScroll = {};
     elBoard.querySelectorAll('.col').forEach((c) => { colScroll[c.dataset.status] = c.querySelector('.col-body').scrollTop; });
     const a = document.activeElement;
-    const focusId = (a && a.classList && a.classList.contains('card') && elBoard.contains(a)) ? a.dataset.id : null;
+    const focusCard = (a && a.closest && elBoard.contains(a)) ? a.closest('.card') : null;
+    const focusId = focusCard ? focusCard.dataset.id : null;
+    const focusTag = !!(a && a.classList && a.classList.contains('ms-tag'));
 
-    const filtering = !!(f.q || f.threadsOnly || f.session);
-    const shown = current.cards.filter((c) => matches(c, f));
+    const conf = cfg();
+    const chat = conf.mode === 'chat';
+    const stages = chat ? chatStages(conf) : conf.stages;
+    const pool = chat ? current.cards.filter(isThread) : current.cards;   // chat-only shows threads only
+    const filtering = !!(f.q || f.threadsOnly || f.session || f.milestone);
+    const shown = pool.filter((c) => matches(c, f));
     const byStatus = {};
-    STATUSES.forEach((s) => { byStatus[s] = []; });
+    stages.forEach((st) => { byStatus[st.id] = []; });
     shown.forEach((c) => { if (byStatus[c.status]) byStatus[c.status].push(c); });
 
     const frag = document.createDocumentFragment();
-    STATUSES.forEach((s) => frag.appendChild(buildColumn(s, byStatus[s], filtering, f.session)));
+    stages.forEach((st) => frag.appendChild(buildColumn(st, byStatus[st.id], filtering, f.session)));
+    elBoard.style.setProperty('--cols', String(stages.length));
     elBoard.replaceChildren(frag);
     elBoard.scrollLeft = scrollLeft;
     elBoard.querySelectorAll('.col').forEach((c) => {
@@ -1373,18 +1548,19 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     });
     if (focusId) {
       const t = elBoard.querySelector('.card[data-id="' + cssEscape(focusId) + '"]');
-      if (t) t.focus({ preventScroll: true });
+      if (t) (focusTag && t.querySelector('.ms-tag') || t).focus({ preventScroll: true });
     }
 
     // the line beside the toolbar
     elNote.replaceChildren();
-    if (!current.cards.length) {
-      elNote.textContent = 'The board is empty. Press N to add the first card.';
+    if (!pool.length) {
+      elNote.textContent = chat ? 'No threads yet. Start one with /thread:new.' : 'The board is empty. Press N to add the first card.';
     } else if (filtering) {
-      const total = current.cards.length;
+      const total = pool.length;
       if (!shown.length) {
         let what;
-        if (f.session) what = f.q ? 'No threads from ' + sessionLabel(f.session) + ' match “' + elSearch.value.trim() + '”.' : 'No threads from ' + sessionLabel(f.session) + ' on this board. Tasks and ideas are hidden while a session is selected.';
+        if (f.milestone) what = f.q ? 'No cards in that milestone match “' + elSearch.value.trim() + '”.' : 'No cards to show for that milestone filter.';
+        else if (f.session) what = f.q ? 'No threads from ' + sessionLabel(f.session) + ' match “' + elSearch.value.trim() + '”.' : 'No threads from ' + sessionLabel(f.session) + ' on this board. Tasks and ideas are hidden while a session is selected.';
         else what = f.q ? 'No cards match “' + elSearch.value.trim() + '”' + (f.threadsOnly ? ' among threads.' : '.') : 'No threads on the board yet.';
         elNote.appendChild(h('span', null, what));
       } else {
@@ -1394,6 +1570,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         elSearch.value = '';
         elThreadsOnly.setAttribute('aria-pressed', 'false');
         sessionSel = '';
+        milestoneSel = '';
         renderBoard(true);
         elSearch.focus();
       });
@@ -1401,18 +1578,18 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     }
   }
 
-  function buildColumn(status, cards, filtering, session) {
+  function buildColumn(stage, cards, filtering, session) {
     const col = h('section', 'col');
-    col.dataset.status = status;
-    col.setAttribute('aria-label', label(status) + ', ' + cards.length + (cards.length === 1 ? ' card' : ' cards'));
+    col.dataset.status = stage.id;
+    col.setAttribute('aria-label', stage.label + ', ' + cards.length + (cards.length === 1 ? ' card' : ' cards'));
 
     const head = h('div', 'col-head');
-    head.appendChild(h('h2', null, label(status)));
+    head.appendChild(h('h2', null, stage.label));
     head.appendChild(h('span', 'count', String(cards.length)));
     col.appendChild(head);
 
     const body = h('div', 'col-body');
-    if (!cards.length) body.appendChild(h('div', 'col-empty', session ? 'No threads from this session here.' : filtering ? 'No matching cards in this column.' : EMPTY[status]));
+    if (!cards.length) body.appendChild(h('div', 'col-empty', session ? 'No threads from this session here.' : filtering ? 'No matching cards in this column.' : emptyText(stage)));
     cards.forEach((c) => body.appendChild(buildCard(c)));
     col.appendChild(body);
 
@@ -1429,7 +1606,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       e.preventDefault();
       const id = dragId;
       endDrag();
-      moveCard(id, status);
+      moveCard(id, stage.id);
     });
     return col;
   }
@@ -1437,7 +1614,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   function buildCard(card) {
     const thread = isThread(card);
     const t = thread ? card.thread : null;
-    const el = h('article', 'card' + (thread ? ' is-thread' : ''));
+    const milestone = card.kind === 'milestone';
+    const ms = milestoneOf(card);
+    const el = h('article', 'card' + (thread ? ' is-thread' : milestone ? ' is-milestone' : ''));
     el.dataset.id = card.id;
     el.tabIndex = 0;
     el.setAttribute('role', 'button');
@@ -1449,7 +1628,10 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     el.appendChild(top);
 
     el.appendChild(h('h3', 'card-title', card.title));
+    if (ms) el.appendChild(milestoneTag(ms));
     if (card.note) el.appendChild(h('p', 'card-note', card.note));
+    const prog = milestone ? progressFor(card) : null;
+    if (prog) el.appendChild(progressEl(prog));
     if (thread && t.parentSessionId) {
       const from = h('p', 'card-from', 'from ' + sessionLabel(t.parentSessionId));
       from.title = sessionLabel(t.parentSessionId);
@@ -1471,7 +1653,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     if (foot.childNodes.length) el.appendChild(foot);
 
     const rs = thread ? reportState(card) : '';
-    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
+    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (ms ? ', in milestone ' + ms.title : '') + (prog ? ', ' + prog.done + ' of ' + prog.total + ' done' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
 
     el.addEventListener('click', () => {
       if (Date.now() - lastDragEnd < 200) return;
@@ -1713,7 +1895,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     returnFocus = fromEl ? { id } : null;
     navigateOpen(id);
   }
-  function openNew() { if (halted || isRO()) return; returnFocus = { el: elNewBtn }; navigateOpen('new'); }
+  function openNew() { if (halted || isRO() || isChat()) return; returnFocus = { el: elNewBtn }; navigateOpen('new'); }
   function navigateOpen(target) {
     if (panel) return;
     hashPushed = true;
@@ -1741,7 +1923,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     if (hs.key !== wanted) history.replaceState(null, '', location.pathname + location.search + hashFor(wanted, hs.target));
     if (!current) return;                        // the board is still loading; apply() comes back here
     const target = hs.target;
-    if (target === 'new' && isRO()) {
+    if (target === 'new' && (isRO() || isChat())) {
       history.replaceState(null, '', location.pathname + location.search + hashFor(selKey, ''));
       if (panel) removePanel(false);
       return;
@@ -1831,7 +2013,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   function buildPanel(target) {
     if (target === 'new') { buildTaskPanel(null); }
     else {
-      const card = findCard(target);
+      const card = shownCard(target);
       if (!card) buildMissing(target);
       else if (isThread(card)) buildThreadPanel(card);
       else buildTaskPanel(card);
@@ -1842,6 +2024,11 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     }
   }
 
+  // a chat-only project shows its threads only; a task card is as good as missing
+  function shownCard(id) {
+    const c = findCard(id);
+    return c && (isThread(c) || !isChat()) ? c : null;
+  }
   function buildMissing(id) {
     const P = panel = { target: id, type: 'missing', isDirty: null };
     mountDrawer(P);
@@ -1851,15 +2038,21 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     t.id = 'drawer-title';
     head.appendChild(t);
     const body = h('div', 'dr-body');
-    body.appendChild(h('p', 'muted', 'There is no card ' + id + ' on this board. It may have been deleted.'));
+    body.appendChild(h('p', 'muted', findCard(id) ? 'Card ' + id + ' is hidden because the task board is off for this project (chat-only).' : 'There is no card ' + id + ' on this board. It may have been deleted.'));
     P.root.append(head, body);
     head.querySelector('.dr-head-row .muted').textContent = id;
   }
 
-  function panelKey(card) { return JSON.stringify([card, isRO(), isThread(card) ? sessionInfo(card.thread.parentSessionId) : null]); }
+  // A panel also shows the stages, the milestones to pick from and, on a milestone, its cards: a change in any of them redraws it.
+  function panelCtx(card) {
+    const ctx = [current.config, milestoneChoices()];
+    if (card.kind === 'milestone') ctx.push(childrenOf(current.cards, card.id).map((k) => [k.id, k.kind, k.title, k.status, k.thread && k.thread.runState]));
+    return ctx;
+  }
+  function panelKey(card) { return JSON.stringify([card, isRO(), isThread(card) ? sessionInfo(card.thread.parentSessionId) : null, panelCtx(card)]); }
   function updatePanel() {
     if (!panel || panel.target === 'new') return;
-    const card = findCard(panel.target);
+    const card = shownCard(panel.target);
     if (!card) {
       if (panel.type !== 'missing') { const id = panel.target; removePanel(true); buildMissing(id); panel.root.focus({ preventScroll: true }); }
       return;
@@ -1883,19 +2076,17 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     f.append(l, control);
     return f;
   }
-  function statusSelect() {
-    const s = h('select', 'input');
-    STATUSES.forEach((st) => { const o = h('option', null, label(st)); o.value = st; s.appendChild(o); });
-    return s;
-  }
+  const stagePairs = () => cfg().stages.map((st) => [st.id, st.label]);
+  const milestonePairs = () => [['', 'None']].concat(milestoneChoices());
 
   function buildTaskPanel(card) {
     const create = !card;
     const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? panelKey(card) : '', confirmDelete: false, starting: false };
     const page = !create;      // a new card stays a side drawer
+    const isMs = !create && card.kind === 'milestone';
     mountDrawer(P, page);
 
-    P.base = create ? { title: '', note: '', status: 'new', kind: 'task' } : { title: card.title, note: card.note || '', status: card.status, kind: card.kind };
+    P.base = create ? { title: '', note: '', status: cfg().roles.start, kind: 'task', parent: '' } : { title: card.title, note: card.note || '', status: card.status, kind: card.kind, parent: card.parent || '' };
     P.baseUpdatedAt = card ? card.updatedAt : '';
 
     const head = h('div', page ? 'ws-bar' : 'dr-head');
@@ -1931,20 +2122,32 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     const fNote = h('textarea', 'input');
     fNote.rows = 7;
     fNote.value = P.base.note;
-    const fStatus = statusSelect();
-    fStatus.value = P.base.status;
+    const fStatus = h('select', 'input');
+    fillSelect(fStatus, stagePairs(), P.base.status);
     body.appendChild(fTitleWrap);
     body.appendChild(field('Note', fNote, 'f-note'));
+    // the milestone this card belongs to (none for a milestone itself); hidden while no milestone exists
     let fKind = null;
+    const fMs = isMs ? null : h('select', 'input');
+    if (fMs) fillSelect(fMs, milestonePairs(), P.base.parent);
+    const msField = fMs ? field('Milestone', fMs, 'f-milestone') : null;
+    function syncMsField() { if (msField) msField.hidden = (fKind ? fKind.value === 'milestone' : false) || milestonePairs().length < 2; }
     if (create) {
       fKind = h('select', 'input');
-      ['task', 'idea'].forEach((k) => { const o = h('option', null, k); o.value = k; fKind.appendChild(o); });
+      ['task', 'idea', 'milestone'].forEach((k) => { const o = h('option', null, k); o.value = k; fKind.appendChild(o); });
+      fKind.addEventListener('change', () => { if (fKind.value === 'milestone') fMs.value = ''; syncMsField(); });
       const row = h('div', 'row2');
       row.append(field('Status', fStatus, 'f-status'), field('Kind', fKind, 'f-kind'));
       body.appendChild(row);
     } else {
       body.appendChild(field('Status', fStatus, 'f-status'));
     }
+    if (msField) body.appendChild(msField);
+    syncMsField();
+
+    // a milestone's page lists its cards, grouped by stage, and copies that list as a report
+    const msSection = isMs ? h('section', 'ms-cards') : null;
+    if (msSection) { body.appendChild(msSection); P.root.classList.add('is-ms'); fNote.rows = 3; }
 
     const metaKind = h('dd'), metaBy = h('dd'), metaCreated = h('dd'), metaUpdated = h('dd');
     if (!create) {
@@ -1958,6 +2161,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
     P.isDirty = () => {
       if (fTitle.value !== P.base.title || fNote.value !== P.base.note || fStatus.value !== P.base.status) return true;
+      if (fMs && fMs.value !== P.base.parent) return true;
       return create ? fKind.value !== P.base.kind : false;
     };
     P.initialFocus = () => (create ? fTitle : P.root);
@@ -2000,6 +2204,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         try {
           if (create) {
             const bodyObj = { title: newTitle, status: fStatus.value, kind: fKind.value };
+            if (fKind.value !== 'milestone' && fMs.value) bodyObj.parent = fMs.value;
             if (fNote.value.trim()) bodyObj.note = fNote.value.trim();
             const made = await api('POST', pp(pk, 'cards'), bodyObj);
             wrote();
@@ -2014,10 +2219,11 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
             if (newTitle !== P.base.title) patch.title = newTitle;
             if (fNote.value !== P.base.note) patch.note = fNote.value;
             if (fStatus.value !== P.base.status) patch.status = fStatus.value;
+            if (fMs && fMs.value !== P.base.parent) patch.parent = fMs.value;   // '' takes the card out of its milestone
             if (!Object.keys(patch).length) { msgEl.textContent = 'No changes to save.'; return; }
             const saved = await api('PATCH', pp(pk, 'cards/' + encodeURIComponent(card.id)), patch);
             wrote();
-            P.base = { title: saved.title, note: saved.note || '', status: saved.status, kind: saved.kind };
+            P.base = { title: saved.title, note: saved.note || '', status: saved.status, kind: saved.kind, parent: saved.parent || '' };
             P.baseUpdatedAt = saved.updatedAt;
             P.latestUpdatedAt = saved.updatedAt;
             if (fTitle.value === saved.title) fTitle.value = saved.title; else if (fTitle.value.trim() === saved.title) fTitle.value = saved.title;
@@ -2032,7 +2238,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
     function resetFields() {
       fTitle.value = P.base.title; fNote.value = P.base.note; fStatus.value = P.base.status;
+      if (fMs) fMs.value = P.base.parent;
       if (fKind) fKind.value = P.base.kind;
+      syncMsField();
     }
     function cancel() {
       resetFields();
@@ -2131,7 +2339,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         return;
       }
       if (P.confirmDelete) {
-        foot.appendChild(h('span', 'confirm-text', 'Delete ' + card.id + '? This cannot be undone.'));
+        foot.appendChild(h('span', 'confirm-text', 'Delete ' + card.id + '? ' + (isMs ? 'Its cards stay on the board. ' : '') + 'This cannot be undone.'));
         foot.appendChild(h('span', 'grow'));
         const del = actionBtn('Delete card', 'danger solid', 'delete:' + selKey + ':' + card.id, () => doDelete(card.id));
         const keep = plainBtn('Keep it', null, () => { P.confirmDelete = false; renderFoot(true); });
@@ -2148,8 +2356,10 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       foot.append(saveBtn, plainBtn('Cancel', null, cancel), msgEl);
       foot.appendChild(h('span', 'grow'));
       if (!create) {
-        startBtn = plainBtn('Start as thread', null, () => { P.starting = true; renderFoot(true); });
-        foot.appendChild(startBtn);
+        if (!isMs) {      // a milestone cannot be a thread
+          startBtn = plainBtn('Start as thread', null, () => { P.starting = true; renderFoot(true); });
+          foot.appendChild(startBtn);
+        }
         const del = plainBtn('Delete', 'danger', () => { P.confirmDelete = true; renderFoot(true); });
         if (ro) { del.disabled = true; del.title = READONLY_WHY; }
         foot.appendChild(del);
@@ -2193,7 +2403,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       if (ro === roShown) return;
       roShown = ro;
       roNote.hidden = !ro;
-      [fTitle, fNote, fStatus, fKind].forEach((f) => { if (f) { f.disabled = ro; f.title = ro ? READONLY_WHY : ''; } });
+      [fTitle, fNote, fStatus, fMs, fKind].forEach((f) => { if (f) { f.disabled = ro; f.title = ro ? READONLY_WHY : ''; } });
       if (ro) P.confirmDelete = P.starting = false;
       renderFoot();
     }
@@ -2205,19 +2415,60 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       seenWrap.replaceChildren();
       if (c.seenByClaude === false) seenWrap.appendChild(unseenEl('div'));
       // follow the server only for fields the user has not touched
-      const nb = { title: c.title, note: c.note || '', status: c.status };
-      [[fTitle, 'title'], [fNote, 'note'], [fStatus, 'status']].forEach(([f, k]) => {
+      const nb = { title: c.title, note: c.note || '', status: c.status, parent: c.parent || '' };
+      [[fTitle, 'title'], [fNote, 'note']].forEach(([f, k]) => {
         if (f.value === P.base[k]) { f.value = nb[k]; P.base[k] = nb[k]; }
       });
+      // the stages and milestones may have changed too: refill the lists, keeping what the user picked
+      [[fStatus, stagePairs(), 'status'], [fMs, milestonePairs(), 'parent']].forEach(([f, pairs, k]) => {
+        if (!f) return;
+        const clean = f.value === P.base[k];
+        fillSelect(f, pairs, clean ? nb[k] : f.value);
+        if (clean) P.base[k] = nb[k];
+      });
+      syncMsField();
       P.base.kind = c.kind;
       if (!P.isDirty()) P.baseUpdatedAt = c.updatedAt;
       metaKind.textContent = c.kind;
       metaBy.textContent = c.source === 'user' ? 'You' : 'Claude';
       metaCreated.replaceChildren(timeEl(c.createdAt));
       metaUpdated.replaceChildren(timeEl(c.updatedAt));
+      if (msSection) renderMsCards(c);
       refreshConflict();
       applyRO();
     };
+
+    // "Cards in this milestone": a link per card, grouped by stage, and the same list as a plain-text report
+    function renderMsCards(m) {
+      const a = document.activeElement;
+      const fid = a && msSection.contains(a) && a.dataset ? a.dataset.fid : null;
+      const conf = cfg();
+      const kids = childrenOf(current.cards, m.id);
+      msSection.replaceChildren();
+      const head = h('div', 'ms-cards-head');
+      head.append(h('h3', 'ms-h', 'Cards in this milestone'), progressEl(progressFor(m)));
+      const cp = copyBtn(milestoneReport(m, current.cards, conf.stages, conf.roles.done), 'milestone report', 'Copy report');
+      cp.dataset.fid = 'ms-copy';
+      head.appendChild(cp);
+      msSection.appendChild(head);
+      if (!kids.length) msSection.appendChild(h('p', 'muted', 'No cards in this milestone yet. Open a task or idea and pick this milestone to add it.'));
+      groupByStage(kids, conf.stages).forEach((g) => {
+        const sh = h('h4', 'ms-stage', g.stage.label);
+        sh.appendChild(h('span', 'count', String(g.cards.length)));
+        const ul = h('ul', 'ms-list');
+        g.cards.forEach((k) => {
+          const li = h('li');
+          const link = h('a', 'ms-row');
+          link.href = hashFor(selKey, k.id);
+          link.dataset.fid = 'ms-' + k.id;
+          link.append(h('span', 'idchip', k.id), kindMark(k.kind), h('span', 'ms-row-title', k.title));
+          li.appendChild(link);
+          ul.appendChild(li);
+        });
+        msSection.append(sh, ul);
+      });
+      if (fid) { const t = msSection.querySelector('[data-fid="' + fid + '"]'); if (t) t.focus({ preventScroll: true }); }
+    }
 
     if (create) {
       headRowWrap.appendChild(headRow(null, true));
@@ -2329,7 +2580,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     const queuedNote = h('p', 'ws-queued');
     queuedNote.setAttribute('role', 'status');
     queuedNote.hidden = true;
-    bar.append(back, chip, titleEl, meta, actions, queuedNote);
+    const saveNote = h('span', 'sr-only');     // says aloud that the milestone was saved
+    saveNote.setAttribute('role', 'status');
+    bar.append(back, chip, titleEl, meta, actions, queuedNote, saveNote);
 
     // ----- view tabs (single-pane layout only) -----
     const tabs = h('div', 'tabs ws-tabs');
@@ -2925,6 +3178,21 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
         out.push(h('h3', 'dg-h', 'Details'));
         const facts = h('div', 'ab-ids');
+        // the milestone, saved as soon as it is picked
+        const choices = milestoneChoices();
+        if (choices.length) {
+          const sel = h('select', 'input');
+          sel.id = 'c-milestone';
+          sel.dataset.fid = 'c-milestone';
+          fillSelect(sel, milestonePairs(), c.parent || '');
+          if (isRO()) { sel.disabled = true; sel.title = READONLY_WHY; }
+          sel.addEventListener('change', () => setMilestone(sel));
+          const lab = h('label', 'k', 'Milestone');
+          lab.htmlFor = 'c-milestone';
+          const r = h('div', 'ab-row');
+          r.append(lab, sel);
+          facts.appendChild(r);
+        }
         const fact = (k, v) => {
           const line = h('div', 'line');
           line.appendChild(h('span', 'v plain', v));
@@ -3013,6 +3281,23 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       });
     }
 
+    async function setMilestone(sel) {
+      clearError();
+      const pk = selKey;
+      await runAction('parent:' + pk + ':' + card.id, async () => {
+        try {
+          applyCard(await api('PATCH', pp(pk, 'cards/' + encodeURIComponent(card.id)), { parent: sel.value }), pk);
+          wrote();
+          saveNote.textContent = sel.value ? 'Milestone saved.' : 'Removed from its milestone.';
+        } catch (e) {
+          showError(e.message);
+          const c = findCard(P.target);
+          sel.value = c && c.parent ? c.parent : '';
+        }
+      });
+      poll();
+    }
+
     // ----- bar actions: End thread and Delete, with their confirm steps -----
     function renderActions(c, focusFirst) {
       const t = c.thread;
@@ -3083,7 +3368,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       const sess = sessionInfo(t.parentSessionId);
       const k = {
         head: JSON.stringify([c.title, t.runState, t.mode, turns.length, turns[0] && turns[0].startedAt, c.seenByClaude, reportState(c), sess && sess.label, ro]),
-        about: JSON.stringify([t.sessionId, t.parentSessionId, turns, reportState(c), sess, t.context, t.brief, t.agent, t.model, t.effort]),
+        about: JSON.stringify([t.sessionId, t.parentSessionId, turns, reportState(c), sess, t.context, t.brief, t.agent, t.model, t.effort, c.parent, milestoneChoices(), ro]),
         trace: JSON.stringify([turns, t.runState]),
         convo: JSON.stringify([turns, t.runState]),
         composer: t.runState + '|' + t.sessionId + '|' + ro,
@@ -3111,7 +3396,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   // ---------- global keys ----------
 
   function trapList() {
-    const sel = 'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [tabindex="0"]';
+    const sel = 'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [tabindex="0"]';
     const list = Array.from(panel.root.querySelectorAll(sel)).filter((e) => e.tabIndex >= 0 && !e.closest('[hidden]') && e.getClientRects().length);
     if (!elBanner.hidden) list.push($('banner-close'));
     return list;

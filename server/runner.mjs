@@ -191,7 +191,7 @@ async function record(outcome) {
     }
     th.pid = null;
     if (ended) card.updatedAt = ts;
-    else setRunState(card, outcome.ok ? 'idle' : 'failed');
+    else setRunState(projectDir, card, outcome.ok ? 'idle' : 'failed');
   };
   let lastErr;
   for (let attempt = 0; attempt < 4; attempt++) {

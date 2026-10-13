@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Hook entry point for the thread plugin. Any failure exits 0 with no output.
 
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 const MAX_CONTEXT = 600; // the notices; report requests are kept whole
 const MAX_TOTAL = 1500;
 
@@ -29,6 +32,24 @@ function readStdin(ms) {
 function emit(eventName, additionalContext) {
   const out = JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext } });
   return new Promise((resolve) => process.stdout.write(out + '\n', () => resolve()));
+}
+
+const SETUP_HINT = 'The thread plugin has not been set up. Tell the user once, when it does not interrupt their request, that /thread:setup lets them choose chat-only or the task board, their own stages, and whether that applies to every project.';
+
+// The line that points a new install at /thread:setup: only while no config file exists, and once
+// per machine (a marker file in the data dir). A marker that cannot be written must not break the hook.
+function setupHint(core, projectDir) {
+  try {
+    const marker = join(core.dataDir(), 'setup-hint');
+    if (existsSync(marker) || core.readConfig(projectDir).configured) return '';
+    try {
+      mkdirSync(core.dataDir(), { recursive: true });
+      writeFileSync(marker, '');
+    } catch { /* the hint then shows again next time */ }
+    return SETUP_HINT;
+  } catch {
+    return '';
+  }
 }
 
 async function main() {
@@ -63,8 +84,10 @@ async function main() {
   }
 
   if (event === 'SessionStart') {
-    await emit('SessionStart',
-      `[thread plugin] This session's id is ${sessionId}. Pass it as session_id to thread_start, thread_report, thread_end, thread_continue and thread_status.`);
+    let note = `[thread plugin] This session's id is ${sessionId}. Pass it as session_id to thread_start, thread_report, thread_end, thread_continue and thread_status.`;
+    const hint = core && projectDir ? setupHint(core, projectDir) : '';
+    if (hint) note += `\n${hint}`;
+    await emit('SessionStart', note);
     return;
   }
 
@@ -76,7 +99,8 @@ async function main() {
     const announced = await pendingAnnouncements(projectDir, sessionId);
     const requested = await pendingReportRequests(projectDir, sessionId);
     const state = readState(projectDir);
-    const unseen = state.cards.filter((c) => c.seenByClaude === false);
+    // Chat-only: the task board is off, so new board cards are not mentioned.
+    const unseen = core.readConfig(projectDir).mode === 'chat' ? [] : state.cards.filter((c) => c.seenByClaude === false);
 
     if (!announced.length && !unseen.length && !requested.length) return;
 

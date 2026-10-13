@@ -10,13 +10,16 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dataDir, envValue, now, projectKey, projectPaths, readState, updateState, withLock } from './state.mjs';
 import { EFFORTS, cleanEffort, cleanModel, collapse, sameSession, sessionModel } from './sessions.mjs';
+import { ChatOnlyError, DEFAULT_STAGES, readConfig } from './config.mjs';
 
 export * from './state.mjs';
 export * from './sessions.mjs';
+export * from './config.mjs';
 
-export const STATUSES = ['idea', 'new', 'in_progress', 'review', 'blocked', 'done'];
+// The default stage ids. A project's own stages come from readConfig.
+export const STATUSES = DEFAULT_STAGES.map((s) => s.id);
 
-export const KINDS = ['task', 'idea'];
+export const KINDS = ['task', 'idea', 'milestone'];
 export const MODES = ['read', 'write'];
 export const CONTEXTS = ['brief', 'full'];
 export const AGENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
@@ -161,27 +164,61 @@ export function findThread(state, id) {
   return card;
 }
 
-function checkStatus(status) {
-  if (!STATUSES.includes(status)) {
-    throw new Error(`invalid status "${status}" (use one of: ${STATUSES.join(', ')})`);
+function checkStatus(cfg, status) {
+  const ids = cfg.stages.map((s) => s.id);
+  if (!ids.includes(status)) {
+    throw new Error(`invalid status "${status}" (use one of: ${ids.join(', ')})`);
   }
 }
 
-function statusForRunState(runState) {
+// A task board that is switched off still has its threads.
+function requireTasks(cfg) {
+  if (cfg.mode === 'chat') throw new ChatOnlyError();
+}
+
+function statusForRunState(roles, runState) {
   switch (runState) {
-    case 'running': return 'in_progress';
-    case 'idle': return 'review';
-    case 'failed': return 'blocked';
-    case 'ended': return 'done';
-    default: return 'in_progress';
+    case 'idle': return roles.review;
+    case 'failed': return roles.blocked;
+    case 'ended': return roles.done;
+    default: return roles.working;
   }
 }
 
-export function setRunState(card, runState) {
+export function setRunState(projectDirArg, card, runState) {
   card.thread.runState = runState;
-  card.status = statusForRunState(runState);
+  card.status = statusForRunState(readConfig(projectDirArg).roles, runState);
   card.updatedAt = now();
 }
+
+// The stage a card is shown in. A thread: always the stage for its run state, so it follows a
+// change of roles and a status written by an older plugin version. Any other card: its own
+// stage when that is still one, else the start stage. The stored status is not rewritten.
+export function effectiveStatus(card, cfg) {
+  if (isThread(card)) return statusForRunState(cfg.roles, card.thread.runState);
+  return cfg.stages.some((s) => s.id === card.status) ? card.status : cfg.roles.start;
+}
+
+// done and total over the cards under a milestone.
+export function milestoneProgress(cards, milestoneId, cfg) {
+  const kids = cards.filter((c) => c.parent === milestoneId);
+  return { done: kids.filter((c) => effectiveStatus(c, cfg) === cfg.roles.done).length, total: kids.length };
+}
+
+// Checks a parent for `card` (kind, or null when not known yet) against the state.
+function checkParent(state, parentId, kind) {
+  if (kind === 'milestone') throw new Error('a milestone cannot have a parent');
+  const m = state.cards.find((c) => c.id === parentId);
+  if (!m) throw new Error(`milestone not found: ${parentId}`);
+  if (m.kind !== 'milestone') throw new Error(`${parentId} is not a milestone`);
+}
+
+const cleanParent = (parent) => {
+  if (parent === undefined) return undefined;
+  if (parent === null || (typeof parent === 'string' && !parent.trim())) return null;
+  if (typeof parent !== 'string') throw new Error('parent must be a milestone card id');
+  return parent.trim();
+};
 
 // The first n characters of a collapsed text, with an ellipsis when cut.
 export function clip(s, n) {
@@ -194,14 +231,19 @@ export const tail = (s, n = 500) => collapse(s).slice(-n);
 
 // ---------------------------------------------------------------- board cards
 
-export async function addCard(projectDirArg, { title, note = '', status = 'new', kind = 'task', source = 'claude' } = {}) {
+export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent } = {}) {
+  const cfg = readConfig(projectDirArg);
+  requireTasks(cfg);
   const t = typeof title === 'string' ? title.trim() : '';
   if (!t) throw new Error('title must not be empty');
-  checkStatus(status);
+  if (status === undefined) status = cfg.roles.start;
+  checkStatus(cfg, status);
   if (kind === 'thread') throw new Error('thread cards are created with thread_start');
-  if (!KINDS.includes(kind)) throw new Error(`invalid kind "${kind}" (use task or idea)`);
+  if (!KINDS.includes(kind)) throw new Error(`invalid kind "${kind}" (use ${KINDS.join(', ')})`);
   if (source !== 'claude' && source !== 'user') throw new Error(`invalid source "${source}"`);
+  const parentId = cleanParent(parent);
   return updateState(projectDirArg, (state) => {
+    if (parentId) checkParent(state, parentId, kind);
     state.seq += 1;
     const ts = now();
     const card = {
@@ -215,22 +257,30 @@ export async function addCard(projectDirArg, { title, note = '', status = 'new',
       createdAt: ts,
       updatedAt: ts,
     };
+    if (parentId) card.parent = parentId;
     state.cards.push(card);
     return card;
   });
 }
 
-export async function updateCard(projectDirArg, id, { title, note, status } = {}, { source = 'claude' } = {}) {
+export async function updateCard(projectDirArg, id, { title, note, status, parent } = {}, { source = 'claude' } = {}) {
+  const cfg = readConfig(projectDirArg);
   if (title !== undefined) {
     if (typeof title !== 'string' || !title.trim()) throw new Error('title must not be empty');
   }
-  if (status !== undefined) checkStatus(status);
+  if (status !== undefined) checkStatus(cfg, status);
+  const parentId = cleanParent(parent);
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, id);
-    if (card.kind === 'thread' && status !== undefined && status !== card.status) {
+    if (!isThread(card)) requireTasks(cfg);
+    // A thread card is shown in the stage for its run state when its stored one is gone; sending that back is no change.
+    if (card.kind === 'thread' && status !== undefined && status !== card.status && status !== effectiveStatus(card, cfg)) {
       throw new Error('thread status follows the thread');
     }
     let changed = false;
+    if (parentId) {
+      if (card.parent !== parentId) { checkParent(state, parentId, card.kind); card.parent = parentId; changed = true; }
+    } else if (parentId === null && card.parent !== undefined) { delete card.parent; changed = true; }
     if (title !== undefined && title.trim() !== card.title) { card.title = title.trim(); changed = true; }
     if (note !== undefined && String(note) !== card.note) { card.note = String(note ?? ''); changed = true; }
     if (status !== undefined && status !== card.status) { card.status = status; changed = true; }
@@ -243,11 +293,15 @@ export async function updateCard(projectDirArg, id, { title, note, status } = {}
 }
 
 export async function removeCard(projectDirArg, id) {
+  const cfg = readConfig(projectDirArg);
   await updateState(projectDirArg, (state) => {
     const card = findCard(state, id);
+    if (!isThread(card)) requireTasks(cfg);
     if (isThread(card) && card.thread.runState === 'running' && isAlive(card.thread.pid)) {
       throw new Error(`thread ${id} is still running; end it before removing the card`);
     }
+    // The cards under a milestone stay, without a parent.
+    if (card.kind === 'milestone') for (const c of state.cards) if (c.parent === id) delete c.parent;
     state.cards = state.cards.filter((c) => c.id !== id);
     return true;
   });
@@ -489,10 +543,10 @@ function closeOpenTurn(card, error) {
   }
 }
 
-function markFailed(card, error) {
+function markFailed(projectDirArg, card, error) {
   closeOpenTurn(card, error);
   card.thread.pid = null;
-  setRunState(card, 'failed');
+  setRunState(projectDirArg, card, 'failed');
 }
 
 // A shared board server may launch a turn for a project other than its own,
@@ -515,7 +569,7 @@ function launchRunner(projectDirArg, card) {
       env: childEnv(),
     });
   } catch (e) {
-    markFailed(card, `could not start runner: ${tail(e.message, 300)}`);
+    markFailed(projectDirArg, card, `could not start runner: ${tail(e.message, 300)}`);
     return;
   }
   const pid = child.pid ?? null;
@@ -525,7 +579,7 @@ function launchRunner(projectDirArg, card) {
     updateState(projectDirArg, (state) => {
       const c = state.cards.find((x) => x.id === card.id);
       if (isThread(c) && c.thread.runState === 'running' && (c.thread.pid === pid || c.thread.pid == null)) {
-        markFailed(c, `could not start runner: ${tail(e.message, 300)}`);
+        markFailed(projectDirArg, c, `could not start runner: ${tail(e.message, 300)}`);
       }
     }).catch(() => {});
   });
@@ -580,18 +634,20 @@ function beginThread(projectDirArg, card, { sessionId, mode, prompt, ...opts }) 
     reported: false,
     announced: false,
   };
-  setRunState(card, 'running');
+  setRunState(projectDirArg, card, 'running');
   launchRunner(projectDirArg, card);
 }
 
-export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs, context, brief, agent, model, effort } = {}) {
+export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs, context, brief, agent, model, effort, parent } = {}) {
   refuseInsideThread('start');
   const t = typeof title === 'string' ? title.trim() : '';
   const k = typeof task === 'string' ? task.trim() : '';
   const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief, agent, model, effort });
   if (!t) throw new Error('title must not be empty');
   if (!k) throw new Error('task must not be empty');
+  const parentId = cleanParent(parent);
   return updateState(projectDirArg, (state) => {
+    if (parentId) checkParent(state, parentId, 'thread');
     state.seq += 1;
     const ts = now();
     const card = {
@@ -599,12 +655,13 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
       kind: 'thread',
       title: t,
       note: '',
-      status: 'in_progress',
+      status: readConfig(projectDirArg).roles.working,
       source: 'claude',
       seenByClaude: true,
       createdAt: ts,
       updatedAt: ts,
     };
+    if (parentId) card.parent = parentId;
     state.cards.push(card);
     beginThread(projectDirArg, card, { sessionId, mode, prompt: k, ...opts });
     return card;
@@ -615,11 +672,13 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
 // Nobody writes a brief on the board, so in brief mode the card's note is the brief.
 export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mode = 'read', extraDirs, context, agent } = {}) {
   refuseInsideThread('start');
+  requireTasks(readConfig(projectDirArg));
   const existing = readState(projectDirArg).cards.find((c) => c.id === cardId);
   const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief: existing && existing.note, agent });
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, cardId);
     if (card.kind === 'thread') throw new Error(`card ${cardId} is already a thread`);
+    if (card.kind === 'milestone') throw new Error(`card ${cardId} is a milestone and cannot be started as a thread`);
     const text = typeof card.note === 'string' ? card.note.trim() : '';
     card.kind = 'thread';
     // In brief mode the note already travels as the brief, so the task is the title alone.
@@ -647,7 +706,7 @@ export async function continueThread(projectDirArg, id, message, { sessionId } =
     // that fails leaves an already-reported thread reported.
     th.announced = false;
     th.pid = null;
-    setRunState(card, 'running');
+    setRunState(projectDirArg, card, 'running');
     launchRunner(projectDirArg, card);
     return card;
   });
@@ -726,7 +785,7 @@ export async function endThread(projectDirArg, id, { sessionId, confirmCode } = 
     }
     th.pid = null;
     delete th.reportRequestedAt;
-    setRunState(c, 'ended');
+    setRunState(projectDirArg, c, 'ended');
     return { card: c };
   });
   if (pidToKill) {
@@ -783,7 +842,7 @@ export async function reconcile(projectDirArg) {
     for (const card of state.cards) {
       if (!isThread(card)) continue;
       if (card.thread.runState === 'running' && !runnerAlive(projectDirArg, card)) {
-        markFailed(card, 'runner exited without a result');
+        markFailed(projectDirArg, card, 'runner exited without a result');
       }
     }
     return state;

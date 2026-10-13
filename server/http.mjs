@@ -142,6 +142,7 @@ async function handleProject(req, res, projectDir, sub, query) {
     return;
   }
 
+  const viewOf = (card) => withViews(card, core.readConfig(projectDir), core.readState(projectDir).cards);
   const present = core.dirExists(projectDir);
   if (!isState && !isAgents && !isActivity && !present) {
     req.resume();
@@ -152,7 +153,14 @@ async function handleProject(req, res, projectDir, sub, query) {
   if (isState) {
     // A project whose folder is gone is read-only: no reconcile, no write.
     const state = present ? await core.reconcile(projectDir) : core.readState(projectDir);
-    send(res, 200, { projectDir, exists: present, cards: state.cards.map(withViews), sessions: sessionsView(state) });
+    const cfg = core.readConfig(projectDir);
+    send(res, 200, {
+      projectDir,
+      exists: present,
+      config: { mode: cfg.mode, stages: cfg.stages, roles: cfg.roles },
+      cards: state.cards.map((c) => withViews(c, cfg, state.cards)),
+      sessions: sessionsView(state),
+    });
     return;
   }
 
@@ -164,9 +172,9 @@ async function handleProject(req, res, projectDir, sub, query) {
   if (isCardCreate) {
     requireJson(req);
     const body = await readJsonBody(req);
-    const args = pick(body, ['title', 'note', 'status', 'kind']);
+    const args = pick(body, ['title', 'note', 'status', 'kind', 'parent']);
     const card = await core.addCard(projectDir, { ...args, source: 'user' });
-    send(res, 201, card);
+    send(res, 201, viewOf(card));
     return;
   }
 
@@ -174,8 +182,10 @@ async function handleProject(req, res, projectDir, sub, query) {
     requireJson(req);
     const body = await readJsonBody(req);
     const args = pick(body, ['title', 'note', 'status']);
+    if (body.parent === null) args.parent = null; // null takes the card out of its milestone, like ''
+    else Object.assign(args, pick(body, ['parent']));
     const card = await core.updateCard(projectDir, cm[1], args, { source: 'user' });
-    send(res, 200, card);
+    send(res, 200, viewOf(card));
     return;
   }
   if (cm && method === 'DELETE') {
@@ -197,7 +207,7 @@ async function handleProject(req, res, projectDir, sub, query) {
 
   if (threadRoute === 'DELETE report-request') {
     req.resume();
-    send(res, 200, withViews(await core.cancelReportRequest(projectDir, tm[1])));
+    send(res, 200, viewOf(await core.cancelReportRequest(projectDir, tm[1])));
     return;
   }
 
@@ -214,7 +224,7 @@ async function handleProject(req, res, projectDir, sub, query) {
   } else {
     card = await core.requestReport(projectDir, tm[1]);
   }
-  send(res, 200, withViews(card));
+  send(res, 200, viewOf(card));
 }
 
 function projectsView(homeDir) {
@@ -326,10 +336,23 @@ function makeHandler(homeDir, token, stop) {
   };
 }
 
-// Attach the parsed hand-back (free text, digest sections, step map) to each
-// turn for the board page. Computed per response; never stored.
-function withViews(card) {
-  if (!card || card.kind !== 'thread' || !card.thread) return card;
+// What the board page gets for a card. The status is the stage it is shown in (see
+// core.effectiveStatus), a milestone carries its progress, and a thread gets the parsed
+// hand-back (free text, digest sections, step map) on each turn. Computed per response; never stored.
+// `cards` are the project's stored cards, for the progress of a milestone.
+function withViews(card, cfg, cards) {
+  if (!card) return card;
+  const view = { ...card, status: core.effectiveStatus(card, cfg) };
+  // an older plugin version can remove a milestone without clearing its cards
+  if (view.parent && !cards.some((c) => c.id === view.parent && c.kind === 'milestone')) delete view.parent;
+  if (card.kind === 'milestone') {
+    view.progress = core.milestoneProgress(cards, card.id, cfg);
+  }
+  return threadView(view);
+}
+
+function threadView(card) {
+  if (card.kind !== 'thread' || !card.thread) return card;
   const turns = (card.thread.turns || []).map((t) => (
     typeof t.result === 'string' ? { ...t, view: core.parseHandback(t.result) } : t
   ));
@@ -373,7 +396,7 @@ export async function startBoardServer(projectDir, { port = 0, token } = {}) {
   const handle = makeHandler(projectDir, token, () => closeBoardServer(server));
   const server = http.createServer((req, res) => {
     handle(req, res).catch((e) => {
-      if (e instanceof HttpError) send(res, e.status, { error: e.message });
+      if (e instanceof HttpError || e instanceof core.ChatOnlyError) send(res, e.status, { error: e.message });
       else if (e && e.message) send(res, 400, { error: String(e.message).split('\n')[0] });
       else send(res, 500, { error: 'internal error' });
     });

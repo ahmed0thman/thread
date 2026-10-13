@@ -28,10 +28,12 @@ const replyError = (id, code, message) => send({ jsonrpc: '2.0', id, error: { co
 
 // ---------- tool definitions ----------
 
-const { STATUSES, MODES, KINDS, EFFORTS, CONTEXTS } = core;
+const { MODES, KINDS, EFFORTS, CONTEXTS, CONFIG_MODES, CONFIG_SCOPES, ROLE_NAMES } = core;
 
 const ID_PROP = { type: 'string', description: 'Card id, for example "c4".' };
 const SESSION_PROP = { type: 'string', description: 'This session\'s id (a UUID), taken from the "[thread plugin]" note added at session start. Falls back to the CLAUDE_CODE_SESSION_ID environment variable if omitted.' };
+const STATUS_NOTE = 'one of the board\'s stage ids (board_list shows them)';
+const PARENT_PROP = { type: 'string', description: 'Optional: the id of a milestone card this card belongs to.' };
 const CONFIRM_PROP = { type: 'string', description: 'The confirm code from a "CONFIRMATION REQUIRED" answer. Pass it only after the user agreed to continue.' };
 
 const TOOLS = [
@@ -64,13 +66,16 @@ const TOOLS = [
         session_id: SESSION_PROP,
         mode: { type: 'string', enum: MODES, description: '"read" (default) forbids file edits. "write" lets the thread edit files; use it only when the user asks for that.' },
         extra_dirs: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Absolute paths of folders outside the project that the task needs to read, for example another repository the user named. Only list folders the task actually requires.' },
+        parent: { type: 'string', description: 'Optional: the id of a milestone card this thread belongs to.' },
       },
       required: ['title', 'task'],
     },
   },
   {
     name: 'thread_continue',
-    description: 'Send a follow-up message to a finished (idle or failed-after-first-turn) thread so it runs another turn in the background. Fails if the thread is still running, has ended, or has not completed a first turn. Fetch the result with thread_report. The thread\'s "finished" notice goes to the session that started it.',
+    description: 'Send a follow-up message to a finished (idle or failed-after-first-turn) thread so it runs another turn in the background. Fails if the thread is still running, has ended, or has not completed a first turn. Fetch the result with thread_report. The thread\'s "finished" notice goes to the session that started it. ' +
+      'A thread knows only its own history. When things that matter to the thread changed in this session since its last turn (a decision, a file it read that was edited, a changed requirement), ' +
+      'start the message with a short catch-up headed "Since your last turn:" before the request. Leave it out when nothing relevant changed.',
     inputSchema: {
       type: 'object',
       properties: { id: ID_PROP, message: { type: 'string', description: 'The follow-up instruction for the thread.' }, session_id: SESSION_PROP },
@@ -79,7 +84,7 @@ const TOOLS = [
   },
   {
     name: 'thread_status',
-    description: 'Show the state of threads: id, title, run state (running, idle, failed, ended), mode, context (brief or full), agent or model, number of turns, tokens used, whether the result has been reported, and which session started each. Omit id to list all threads.',
+    description: 'Show the state of threads: id, title, milestone, run state (running, idle, failed, ended), mode, context (brief or full), agent or model, number of turns, tokens used, whether the result has been reported, and which session started each. Omit id to list all threads.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string', description: 'Card id of one thread. Omit to list every thread.' }, session_id: SESSION_PROP },
@@ -109,28 +114,30 @@ const TOOLS = [
   },
   {
     name: 'board_add',
-    description: 'Add a card (task or idea) to the project board that the user sees on a local web page.',
+    description: 'Add a card (task, idea or milestone) to the project board that the user sees on a local web page. A milestone groups other cards: give them its id as parent. Refused when the project is chat-only.',
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Card title.' },
         note: { type: 'string', description: 'Optional longer note.' },
-        status: { type: 'string', enum: STATUSES, description: 'Column. Defaults to "new".' },
+        status: { type: 'string', description: `Column: ${STATUS_NOTE}. Defaults to the board's start stage.` },
         kind: { type: 'string', enum: KINDS, description: 'Defaults to "task".' },
+        parent: PARENT_PROP,
       },
       required: ['title'],
     },
   },
   {
     name: 'board_update',
-    description: 'Change a board card\'s title, note or status. Thread cards follow their thread and should not be moved by hand.',
+    description: 'Change a board card\'s title, note, status or milestone. Thread cards follow their thread and should not be moved by hand.',
     inputSchema: {
       type: 'object',
       properties: {
         id: ID_PROP,
         title: { type: 'string', description: 'New title.' },
         note: { type: 'string', description: 'New note (replaces the old one).' },
-        status: { type: 'string', enum: STATUSES, description: 'New column.' },
+        status: { type: 'string', description: `New column: ${STATUS_NOTE}.` },
+        parent: { type: 'string', description: 'The id of the milestone card this card belongs to, or an empty string to take it out of its milestone.' },
       },
       required: ['id'],
     },
@@ -146,13 +153,51 @@ const TOOLS = [
   },
   {
     name: 'board_list',
-    description: 'List every board card grouped by status. Cards the user added or edited since the last listing are flagged "(new from user)". Listing marks them as seen.',
-    inputSchema: { type: 'object', properties: {}, required: [] },
+    description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a milestone shows how many of its cards are done. ' +
+      'With parent, list only that milestone and its cards, after a summary line: the report for a milestone. Cards the user added or edited since the last listing are flagged "(new from user)". Listing marks them as seen.',
+    inputSchema: { type: 'object', properties: { parent: { type: 'string', description: 'Optional: a milestone card id; list only that milestone and the cards under it.' } }, required: [] },
   },
   {
     name: 'board_open',
     description: 'Return the URL of the local board web page for this project. Starts the board again if it was stopped.',
     inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'config_get',
+    description: 'Show the plugin settings that apply to this project: the mode (task board or chat-only), the stages and which stage the plugin itself uses for each role, where each came from, the config file paths, and whether the plugin has been set up.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'config_set',
+    description: 'Change the plugin settings in the global config (every project) or this project\'s config. Use it only when the user asks to set up or change the plugin (the /thread:setup skill does). Cards are never changed. Returns the new effective settings.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', enum: CONFIG_SCOPES, description: '"global" applies to every project that has no setting of its own; "project" only to this one.' },
+        mode: { type: ['string', 'null'], enum: [...CONFIG_MODES, null], description: '"tasks" (threads and the task board) or "chat" (threads only). null removes it from this scope.' },
+        stages: {
+          type: ['array', 'null'],
+          minItems: 2,
+          maxItems: 10,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'Lowercase letters, digits and underscores, starting with a letter, at most 24 characters.' },
+              label: { type: 'string', description: 'Shown name, 1 to 30 characters.' },
+            },
+            required: ['id', 'label'],
+          },
+          description: 'The board\'s columns in order, 2 to 10. null returns this scope to the default stages (or the global ones).',
+        },
+        roles: {
+          type: ['object', 'null'],
+          properties: Object.fromEntries(ROLE_NAMES.map((r) => [r, { type: 'string', description: 'A stage id.' }])),
+          description: 'Which stage the plugin itself uses: start (a new card), working (a running thread), review (a finished turn), blocked (a failed thread), done (an ended thread; also what counts as done for milestone progress). Left out, they follow the stages\' order, and giving new stages without roles drops the old roles. null removes them.',
+        },
+        reset: { type: 'boolean', description: 'true deletes this scope\'s config file. Give no other setting with it.' },
+      },
+      required: ['scope'],
+    },
   },
   {
     name: 'board_stop',
@@ -239,9 +284,16 @@ function usageText(t) {
   return `, tokens ${tokens(sum((u) => u.input + u.cacheRead + u.cacheWrite))} in / ${tokens(sum((u) => u.output))} out`;
 }
 
+// ` [Milestone title]` for a card that belongs to a milestone, else ''.
+function milestoneTag(cards, c) {
+  if (!c.parent) return '';
+  const m = cards.find((x) => x.id === c.parent);
+  return m ? ` [${core.clip(m.title, 30)}]` : '';
+}
+
 function threadLine(c, state, caller) {
   const t = c.thread;
-  return `${c.id} "${core.clip(c.title, 80)}" — ${t.runState}, mode ${t.mode}, ${core.threadContext(t)} context, ${runsAs(t)}, ${t.turns.length} turn(s)${usageText(t)}, reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, session ${t.sessionId || 'not known yet'}${t.reportRequestedAt ? ', report requested' : ''}`;
+  return `${c.id} "${core.clip(c.title, 80)}"${milestoneTag(state.cards, c)} — ${t.runState}, mode ${t.mode}, ${core.threadContext(t)} context, ${runsAs(t)}, ${t.turns.length} turn(s)${usageText(t)}, reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, session ${t.sessionId || 'not known yet'}${t.reportRequestedAt ? ', report requested' : ''}`;
 }
 
 // The answer to a report or end that came from a session other than the one
@@ -295,6 +347,30 @@ function confirmText(r, state, caller) {
   ].join('\n');
 }
 
+const ROLE_HELP = {
+  start: 'a new card lands here',
+  working: 'a thread whose turn is running',
+  review: 'a thread whose turn finished',
+  blocked: 'a thread that failed',
+  done: 'a thread that was ended; also what counts as done for milestone progress',
+};
+
+// The effective settings of a project as text: config_get and config_set answer with it.
+function configText(cfg) {
+  const from = (s) => (s === 'default' ? 'default' : `${s} config file`);
+  const file = (scope) => `${cfg.paths[scope]} (${cfg.invalid[scope] ? `IGNORED, not valid: ${cfg.invalid[scope]}` : cfg.exists[scope] ? 'exists' : 'not created'})`;
+  return [
+    `Set up: ${cfg.configured ? 'yes' : 'no (no config file exists; the defaults are in use)'}`,
+    `Mode: ${cfg.mode === 'chat' ? 'chat (threads only; the task board is off)' : 'tasks (threads and the task board)'} — from ${from(cfg.source.mode)}`,
+    `Stages, in order — from ${from(cfg.source.stages)}:`,
+    ...cfg.stages.map((st) => `- ${st.id}: ${st.label}`),
+    'Roles (the stage the plugin itself uses):',
+    ...core.ROLE_NAMES.map((r) => `- ${r}: ${cfg.roles[r]} (${ROLE_HELP[r]})`),
+    `Global config file: ${file('global')}`,
+    `Project config file: ${file('project')}`,
+  ].join('\n');
+}
+
 // ---------- board server ----------
 
 let board = null; // { url, owned, server } | null
@@ -325,18 +401,23 @@ function setBoard(b, projectDir) {
   } else watchBoard(projectDir);
 }
 
-// While another session owns the port, take it over once that server stops answering.
+// While another session owns the port, take it over once that server stops answering, or when
+// it is served by an older plugin version (which would show an older page and hide newer data).
 function watchBoard(projectDir) {
   if (boardWatch || !board || board.owned || closing) return;
   let busy = false;
+  let stuck = null;   // an older version that could not be replaced: not asked again
   boardWatch = setInterval(async () => {
     if (busy || closing || !board || board.owned) return;
     busy = true;
     try {
-      if (boardMod.boardStopped() || await boardMod.pingBoard(board.url)) return;
+      if (boardMod.boardStopped()) return;
+      const info = await boardMod.pingBoard(board.url);
+      if (info && (info.version === stuck || !boardMod.olderVersion(info.version, core.VERSION))) return;
       const b = await boardMod.ensureBoard(projectDir);
       if (closing) { if (b.server) b.server.close(); return; }
-      setBoard(b, projectDir);
+      if (!b.owned && info) stuck = info.version;
+      if (b.owned || b.url !== board.url) setBoard(b, projectDir);
     } catch (e) {
       log('board re-check failed:', e);
     } finally {
@@ -363,6 +444,7 @@ const HANDLERS = {
       agent: optStr(args, 'agent'),
       model: optStr(args, 'model'),
       effort: optEnum(args, 'effort', EFFORTS),
+      parent: optStr(args, 'parent'),
     });
     const t = card.thread;
     const extra = t.dirs.length ? `, extra folders: ${t.dirs.join(', ')}` : '';
@@ -448,23 +530,29 @@ const HANDLERS = {
   },
 
   async board_add(args) {
-    const card = await core.addCard(core.projectDir(), clean({
+    const pd = core.projectDir();
+    const card = await core.addCard(pd, clean({
       title: reqStr(args, 'title'),
       note: optStr(args, 'note'),
-      status: optEnum(args, 'status', STATUSES),
+      status: optStr(args, 'status'),
       kind: optEnum(args, 'kind', KINDS),
+      parent: optStr(args, 'parent'),
       source: 'claude',
     }));
-    return `Added ${card.id} [${card.kind}] "${core.clip(card.title, 80)}" in ${card.status}.`;
+    const m = card.parent ? `, milestone ${card.parent}` : '';
+    return `Added ${card.id} [${card.kind}] "${core.clip(card.title, 80)}" in ${card.status}${m}.`;
   },
 
   async board_update(args) {
-    const card = await core.updateCard(core.projectDir(), reqStr(args, 'id'), clean({
+    const pd = core.projectDir();
+    const card = await core.updateCard(pd, reqStr(args, 'id'), clean({
       title: optStr(args, 'title'),
       note: optStr(args, 'note'),
-      status: optEnum(args, 'status', STATUSES),
+      status: optStr(args, 'status'),
+      parent: optStr(args, 'parent'),
     }), { source: 'claude' });
-    return `Updated ${card.id} "${core.clip(card.title, 80)}" (${card.status}).`;
+    const m = card.parent ? `, milestone ${card.parent}` : '';
+    return `Updated ${card.id} "${core.clip(card.title, 80)}" (${card.status}${m}).`;
   },
 
   async board_remove(args) {
@@ -473,28 +561,77 @@ const HANDLERS = {
     return `Removed ${id}.`;
   },
 
-  async board_list() {
+  async board_list(args) {
     const pd = core.projectDir();
     await core.reconcile(pd);
-    const unseen = new Set((await core.markSeen(pd)).map((c) => c.id));
-    const cards = core.readState(pd).cards;
-    if (!cards.length) return 'The board is empty.';
+    const parent = optStr(args, 'parent');
+    const cfg = core.readConfig(pd);
+    const chat = cfg.mode === 'chat';
+    // In chat-only mode the user's task cards are not listed, so they stay unseen.
+    const unseen = new Set(chat ? [] : (await core.markSeen(pd)).map((c) => c.id));
+    const all = core.readState(pd).cards.map((c) => ({ ...c, status: core.effectiveStatus(c, cfg) }));
     const lines = [];
-    const known = new Set(STATUSES);
-    const groups = [...STATUSES, ...[...new Set(cards.map((c) => c.status))].filter((s) => !known.has(s))];
-    for (const s of groups) {
-      const inCol = cards.filter((c) => c.status === s);
+    let cards = all;
+    if (parent) {
+      const m = all.find((c) => c.id === parent);
+      if (!m) throw new ToolError(`milestone not found: ${parent}`);
+      if (m.kind !== 'milestone') throw new ToolError(`${parent} is not a milestone`);
+      const p = core.milestoneProgress(all, parent, cfg);
+      lines.push(`Milestone ${parent} "${core.clip(m.title, 120)}": ${p.done} of ${p.total} done.`);
+      cards = all.filter((c) => c.id === parent || c.parent === parent);
+    }
+    if (chat) {
+      lines.push('This project is chat-only (the task board is off); only threads are listed.');
+      cards = cards.filter((c) => c.kind === 'thread');
+    }
+    // Always given, so a status can be set on an empty board and a stage can be found by its role.
+    const stageLines = ['', 'Stages, as id: label [what the plugin uses it for]:', ...cfg.stages.map((st) => {
+      const roles = ROLE_NAMES.filter((r) => cfg.roles[r] === st.id);
+      return `- ${st.id}: ${st.label}${roles.length ? ` [${roles.join(', ')}]` : ''}`;
+    })];
+    if (!cards.length) return [...lines, chat ? 'No threads.' : 'The board is empty.', ...stageLines].join('\n');
+    for (const st of cfg.stages) {
+      const inCol = cards.filter((c) => c.status === st.id);
       if (!inCol.length) continue;
-      lines.push(`${s} (${inCol.length})`);
+      lines.push(`${st.label} (${inCol.length})`);
       for (const c of inCol) {
         const kind = c.kind === 'thread' ? `thread:${c.thread.runState}` : c.kind;
+        const progress = c.kind === 'milestone' ? core.milestoneProgress(all, c.id, cfg) : null;
+        const done = progress ? ` (${progress.done}/${progress.total} done)` : '';
         const flag = unseen.has(c.id) ? ' (new from user)' : '';
         const note = c.note ? ` — ${core.clip(c.note, 200)}` : '';
-        lines.push(`- ${c.id} [${kind}] ${core.clip(c.title, 120)}${flag}${note}`);
+        lines.push(`- ${c.id} [${kind}] ${core.clip(c.title, 120)}${milestoneTag(all, c)}${done}${flag}${note}`);
       }
     }
     if (unseen.size) lines.push('', `${unseen.size} card(s) new from the user.`);
-    return lines.join('\n');
+    return [...lines, ...stageLines].join('\n');
+  },
+
+  async config_get() {
+    return configText(core.readConfig(core.projectDir()));
+  },
+
+  async config_set(args) {
+    const pd = core.projectDir();
+    const scope = optEnum(args, 'scope', CONFIG_SCOPES);
+    if (!scope) throw new ToolError('argument "scope" is required (global or project)');
+    if (process.env.THREAD_DEPTH) throw new ToolError('a side thread cannot change the plugin settings');
+    const mode = args.mode === null ? null : optEnum(args, 'mode', CONFIG_MODES);
+    const { stages, roles, reset } = args;
+    if (reset !== undefined && typeof reset !== 'boolean') throw new ToolError('argument "reset" must be true or false');
+    let cfg;
+    if (reset === true) {
+      if (mode !== undefined || stages !== undefined || roles !== undefined) throw new ToolError('reset deletes the config file; give no other setting with it');
+      cfg = await core.resetConfig(pd, scope);
+    } else {
+      if (mode === undefined && stages === undefined && roles === undefined) throw new ToolError('nothing to change: give mode, stages, roles or reset');
+      cfg = await core.saveConfig(pd, scope, { mode, stages, roles });
+    }
+    const gone = core.readState(pd).cards.filter((c) => c.kind !== 'thread' && !cfg.stages.some((st) => st.id === c.status)).length;
+    const cards = gone
+      ? `In this project, ${gone} card(s) have a status that is no longer a stage; they show in the start stage (${cfg.roles.start}). Threads follow their state.`
+      : 'In this project, every card is in a current stage. Threads follow their state.';
+    return `${reset === true ? `The ${scope} config file was deleted.` : `Saved to the ${scope} config file.`}\n\n${configText(cfg)}\n\n${cards}`;
   },
 
   async board_open() {
