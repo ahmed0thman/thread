@@ -2,7 +2,7 @@
 import http from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { chmodSync, linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as core from './core.mjs';
 
@@ -236,7 +236,7 @@ function projectsView(homeDir) {
   return { home: homeKey, projects: list };
 }
 
-function makeHandler(homeDir, token) {
+function makeHandler(homeDir, token, stop) {
   const requireToken = typeof token === 'string' && token.length > 0;
   return async function handle(req, res) {
     if (!hostAllowed(req.headers.host)) {
@@ -275,6 +275,14 @@ function makeHandler(homeDir, token) {
         send(res, 401, { error: 'missing or wrong board token' });
         return;
       }
+    }
+
+    // Stops only this web server; the process that owns it keeps running.
+    if (method === 'POST' && path === '/api/shutdown') {
+      req.resume();
+      res.on('finish', stop);
+      send(res, 200, { ok: true }, { Connection: 'close' });
+      return;
     }
 
     if (method === 'GET' && path === '/api/projects') {
@@ -362,7 +370,7 @@ function listenOnce(server, port) {
 }
 
 export async function startBoardServer(projectDir, { port = 0, token } = {}) {
-  const handle = makeHandler(projectDir, token);
+  const handle = makeHandler(projectDir, token, () => closeBoardServer(server));
   const server = http.createServer((req, res) => {
     handle(req, res).catch((e) => {
       if (e instanceof HttpError) send(res, e.status, { error: e.message });
@@ -387,7 +395,48 @@ export async function startBoardServer(projectDir, { port = 0, token } = {}) {
   return { server, port: actual, url: `http://127.0.0.1:${actual}/` };
 }
 
+export function closeBoardServer(server) {
+  try { server.close(); server.closeAllConnections(); } catch { /* already closed */ }
+}
+
 // ---------------------------------------------------------------- shared board
+
+// While this file exists no session starts or takes over the board; opening the board removes it.
+const stoppedFile = () => join(core.dataDir(), 'board.stopped');
+export function boardStopped() { return existsSync(stoppedFile()); }
+export function setBoardStopped(on) {
+  if (on) { mkdirSync(core.dataDir(), { recursive: true }); writeFileSync(stoppedFile(), ''); }
+  else try { unlinkSync(stoppedFile()); } catch { /* not stopped */ }
+}
+
+/** True when plugin version `a` is lower than `b`; false when either is not x.y.z. */
+export function olderVersion(a, b) {
+  const parse = (v) => { const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(v)); return m ? m.slice(1).map(Number) : null; };
+  const x = parse(a), y = parse(b);
+  if (!x || !y) return false;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i];
+  return false;
+}
+
+/** Ask the board at <base> to stop. Resolves true when it agreed; boards before 0.8.2 cannot. */
+export function stopBoard(baseUrl) {
+  return new Promise((resolveP) => {
+    let req;
+    try {
+      req = http.request(new URL('/api/shutdown', baseUrl), { method: 'POST', agent: false, timeout: 2000, headers: { 'X-Thread-Token': boardToken(), 'Content-Length': 0 } }, (res) => {
+        res.resume();
+        res.on('end', () => resolveP(res.statusCode === 200));
+        res.on('error', () => resolveP(false));
+      });
+    } catch {
+      resolveP(false);
+      return;
+    }
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolveP(false));
+    req.end();
+  });
+}
 
 /** The board's access token: 32 random hex characters in <data dir>/board.token (0600). */
 export function boardToken() {
@@ -457,6 +506,8 @@ export function pingBoard(baseUrl) {
 
 /**
  * Own the board port, or adopt a thread board already serving the same data.
+ * A board from an older plugin version is asked to stop and replaced, so the
+ * page always comes from the newest version that is running.
  * Resolves { url, owned, server }; throws when no port in the range works.
  */
 export async function ensureBoard(projectDir, { port } = {}) {
@@ -477,6 +528,15 @@ export async function ensureBoard(projectDir, { port } = {}) {
     const url = `http://127.0.0.1:${p}/`;
     const info = await pingBoard(url);
     if (info && info.app === 'thread-board' && info.dataKey === dataKey()) {
+      if (olderVersion(info.version, core.VERSION) && await stopBoard(url)) {
+        for (let n = 0; n < 20; n++) {
+          try {
+            const b = await startBoardServer(projectDir, { port: p, token });
+            return { url: b.url, owned: true, server: b.server };
+          } catch { await new Promise((r) => setTimeout(r, 50)); }
+        }
+        if (!(await pingBoard(url))) continue;   // someone else's port now
+      }
       return { url, owned: false, server: null };
     }
   }

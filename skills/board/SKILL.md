@@ -1,7 +1,12 @@
 ---
 name: board
-description: Show the project's kanban board and its local web address.
+description: Show the project's kanban board and its local web address, or stop the board web page with --stop.
+argument-hint: "[--stop]"
 ---
+
+If the arguments contain `--stop`: call the `board_stop` tool, pass on what it returns, and do nothing else.
+
+Otherwise:
 
 1. Call the `board_list` tool.
 2. Call the `board_open` tool.

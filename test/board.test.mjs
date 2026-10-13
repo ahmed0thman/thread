@@ -7,7 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { setupThreadEnv, cleanAmbientEnv, writeStateFile, emptyState, threadCard, runNode, waitFor, statePathFor, freePort, McpClient, ROOT } from './helpers.mjs';
 import * as core from '../server/core.mjs';
-import { startBoardServer, boardToken, ensureBoard } from '../server/http.mjs';
+import { startBoardServer, boardToken, ensureBoard, pingBoard, boardStopped, olderVersion } from '../server/http.mjs';
 
 // Only ever sent as an Origin header to the local board; nothing connects to it.
 const FOREIGN = 'http://other-site.example';
@@ -431,6 +431,110 @@ test('THREAD_BOARD_PORT sets the base port', async (t) => {
   const b = await ensureBoard(e.projectDir);
   t.after(() => closeServer(b.server));
   assert.equal(b.url, `http://127.0.0.1:${port}/`);
+});
+
+// ------------------------------------------------------------ stop and handover
+
+test('POST /api/shutdown needs the token and stops only the web server', async (t) => {
+  const e = setupThreadEnv(t);
+  const token = 'a'.repeat(32);
+  const b = await startBoardServer(e.projectDir, { port: 0, token });
+  t.after(() => closeServer(b.server));
+  assert.equal((await fetch(b.url + 'api/shutdown', { method: 'POST' })).status, 401);
+  assert.equal((await fetch(b.url + 'api/shutdown', { method: 'POST', headers: { 'X-Thread-Token': token, Origin: FOREIGN } })).status, 403);
+  assert.ok(await pingBoard(b.url));
+  assert.equal((await fetch(b.url + 'api/shutdown', { method: 'POST', headers: { 'X-Thread-Token': token } })).status, 200);
+  await waitFor(async () => !(await pingBoard(b.url)));
+  assert.equal(b.server.listening, false);
+});
+
+test('olderVersion compares x.y.z and is false for anything else', () => {
+  assert.equal(olderVersion('0.8.1', '0.8.2'), true);
+  assert.equal(olderVersion('0.9.0', '0.10.0'), true);
+  assert.equal(olderVersion('0.8.2', '0.8.2'), false);
+  assert.equal(olderVersion('1.0.0', '0.8.2'), false);
+  assert.equal(olderVersion('unknown', '0.8.2'), false);
+  assert.equal(olderVersion('0.8.1', 'unknown'), false);
+});
+
+// A stand-in for a board served by another plugin version.
+async function fakeBoard(t, e, port, version, canStop) {
+  const dataKey = crypto.createHash('sha1').update(path.resolve(e.dataDir)).digest('hex').slice(0, 12);
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push(req.method + ' ' + req.url + ' ' + (req.headers['x-thread-token'] || ''));
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/api/ping') { res.end(JSON.stringify({ app: 'thread-board', version, dataKey })); return; }
+    if (req.url === '/api/shutdown' && canStop) { res.on('finish', () => { server.close(); server.closeAllConnections(); }); res.end('{"ok":true}'); return; }
+    res.statusCode = 404;
+    res.end('{"error":"not found"}');
+  });
+  await new Promise((r) => server.listen(port, '127.0.0.1', r));
+  t.after(() => closeServer(server));
+  return { server, seen };
+}
+
+test('ensureBoard replaces a board from an older plugin version, and adopts one it cannot stop', async (t) => {
+  const e = setupThreadEnv(t);
+  const port = await freePort();
+  const old = await fakeBoard(t, e, port, '0.0.1', true);
+  const b = await ensureBoard(e.projectDir, { port });
+  t.after(() => b.server && closeServer(b.server));
+  assert.equal(b.owned, true);
+  assert.equal(b.url, `http://127.0.0.1:${port}/`);
+  assert.equal(old.server.listening, false);
+  assert.ok(old.seen.includes('POST /api/shutdown ' + boardToken()), old.seen.join('\n'));
+  assert.equal((await pingBoard(b.url)).version, core.VERSION);
+
+  const p2 = await freePort();
+  const stuck = await fakeBoard(t, e, p2, '0.0.1', false);
+  const c = await ensureBoard(e.projectDir, { port: p2 });
+  assert.equal(c.owned, false);
+  assert.equal(stuck.server.listening, true);
+
+  const p3 = await freePort();
+  const newer = await fakeBoard(t, e, p3, '99.0.0', true);
+  const d = await ensureBoard(e.projectDir, { port: p3 });
+  assert.equal(d.owned, false);
+  assert.deepEqual(newer.seen.filter((x) => x.startsWith('POST')), []);
+});
+
+test('board_stop stops the board for every session and board_open starts it again', async (t) => {
+  const e = setupThreadEnv(t);
+  const port = await freePort();
+  const url = `http://127.0.0.1:${port}/`;
+  const env = { THREAD_NO_HTTP: '', THREAD_BOARD_PORT: String(port) };
+  const a = new McpClient(e, env);
+  t.after(() => a.kill());
+  await a.init();
+  assert.match((await a.call('board_open')).text, /\?t=/);
+  const b = new McpClient(e, env);
+  t.after(() => b.kill());
+  await b.init();
+  assert.match((await b.call('board_open')).text, /\?t=/);
+
+  // b is a guest of a's board and stops it
+  assert.match((await b.call('board_stop')).text, /^Board stopped\./);
+  assert.equal(await pingBoard(url), null);
+  assert.equal(boardStopped(), true);
+  assert.match((await a.call('board_stop')).text, /not running/);
+
+  // a session that starts while the board is stopped leaves it stopped
+  const c = new McpClient(e, env);
+  t.after(() => c.kill());
+  await c.init();
+  await c.call('board_list');
+  assert.equal(await pingBoard(url), null);
+
+  assert.match((await c.call('board_open')).text, new RegExp(`http://127\\.0\\.0\\.1:${port}/\\?t=`));
+  assert.equal(boardStopped(), false);
+  assert.ok(await pingBoard(url));
+
+  // c owns it now and stops its own
+  assert.match((await c.call('board_stop')).text, /^Board stopped\./);
+  assert.equal(await pingBoard(url), null);
+  assert.match((await a.call('board_open')).text, /\?t=/);
+  assert.ok(await pingBoard(url));
 });
 
 // ------------------------------------------------------------ MCP

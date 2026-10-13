@@ -151,7 +151,12 @@ const TOOLS = [
   },
   {
     name: 'board_open',
-    description: 'Return the URL of the local board web page for this project.',
+    description: 'Return the URL of the local board web page for this project. Starts the board again if it was stopped.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'board_stop',
+    description: 'Stop the local board web page for every session, until board_open is called again. Cards and threads are not touched. Use it only when the user asks.',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
 ];
@@ -301,9 +306,23 @@ const BOARD_WATCH_MS = 5000;
 function startBoard(projectDir) {
   if (process.env.THREAD_NO_HTTP === '1') return;
   boardPromise = import('./http.mjs')
-    .then((m) => { boardMod = m; return m.ensureBoard(projectDir); })
-    .then((b) => { board = b; log('board at', b.url, b.owned ? '(owned)' : '(shared)'); watchBoard(projectDir); return b; })
+    .then((m) => { boardMod = m; return m.boardStopped() ? null : m.ensureBoard(projectDir); })
+    .then((b) => { if (b) setBoard(b, projectDir); else log('board is stopped; board_open starts it'); return b; })
     .catch((e) => { log('board server failed to start:', e); return null; });
+}
+
+function setBoard(b, projectDir) {
+  board = b;
+  log('board at', b.url, b.owned ? '(owned)' : '(shared)');
+  if (b.owned) {
+    if (boardWatch) { clearInterval(boardWatch); boardWatch = null; }
+    // Stopped from outside (board_stop, or a newer version taking over): this session is a guest from now on.
+    b.server.once('close', () => {
+      if (closing || board !== b) return;
+      board = { url: b.url, owned: false, server: null };
+      watchBoard(projectDir);
+    });
+  } else watchBoard(projectDir);
 }
 
 // While another session owns the port, take it over once that server stops answering.
@@ -311,15 +330,13 @@ function watchBoard(projectDir) {
   if (boardWatch || !board || board.owned || closing) return;
   let busy = false;
   boardWatch = setInterval(async () => {
-    if (busy || closing) return;
+    if (busy || closing || !board || board.owned) return;
     busy = true;
     try {
-      if (await boardMod.pingBoard(board.url)) return;
+      if (boardMod.boardStopped() || await boardMod.pingBoard(board.url)) return;
       const b = await boardMod.ensureBoard(projectDir);
       if (closing) { if (b.server) b.server.close(); return; }
-      board = b;
-      log('board at', b.url, b.owned ? '(owned)' : '(shared)');
-      if (b.owned) { clearInterval(boardWatch); boardWatch = null; }
+      setBoard(b, projectDir);
     } catch (e) {
       log('board re-check failed:', e);
     } finally {
@@ -483,6 +500,17 @@ const HANDLERS = {
   async board_open() {
     if (process.env.THREAD_NO_HTTP === '1') return 'The board server is disabled (THREAD_NO_HTTP=1).';
     await boardPromise;
+    try {
+      if (boardMod) {
+        boardMod.setBoardStopped(false);
+        // Start it if it was stopped or went away, and replace a board from an older plugin version.
+        const info = board && !board.owned ? await boardMod.pingBoard(board.url) : null;
+        if (!board || (!board.owned && (!info || boardMod.olderVersion(info.version, core.VERSION)))) setBoard(await boardMod.ensureBoard(core.projectDir()), core.projectDir());
+      }
+    } catch (e) {
+      log('board server failed to start:', e);
+      board = null;
+    }
     if (!board) return 'The board is unavailable: the HTTP server failed to start (see the plugin log on stderr).';
     let link;
     try {
@@ -492,6 +520,21 @@ const HANDLERS = {
       return 'The board is unavailable: its access token could not be read (see the plugin log on stderr).';
     }
     return `Board: ${link}\nThis link opens this project's tab; the same board shows every project.`;
+  },
+
+  async board_stop() {
+    if (process.env.THREAD_NO_HTTP === '1') return 'The board server is disabled (THREAD_NO_HTTP=1).';
+    await boardPromise;
+    if (!boardMod) return 'The board is unavailable: the HTTP server failed to start (see the plugin log on stderr).';
+    const again = 'Cards and threads are untouched. /thread:board starts it again.';
+    boardMod.setBoardStopped(true);
+    if (!board) return 'The board is not running. ' + again;
+    if (board.owned) { boardMod.closeBoardServer(board.server); return 'Board stopped. ' + again; }
+    const info = await boardMod.pingBoard(board.url);
+    if (!info) return 'The board is not running. ' + again;
+    if (await boardMod.stopBoard(board.url)) return 'Board stopped. ' + again;
+    boardMod.setBoardStopped(false);
+    return `The board was not stopped: it is served by another session on plugin version ${info.version}, which is too old to be stopped from here. Reload that session's window, or stop its process.`;
   },
 };
 

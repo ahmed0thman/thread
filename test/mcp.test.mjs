@@ -7,7 +7,7 @@ cleanAmbientEnv();
 
 const EXPECTED_TOOLS = [
   'thread_start', 'thread_continue', 'thread_status', 'thread_report', 'thread_end',
-  'board_add', 'board_update', 'board_remove', 'board_list', 'board_open',
+  'board_add', 'board_update', 'board_remove', 'board_list', 'board_open', 'board_stop',
 ];
 
 function start(t, e, extraEnv) {
@@ -31,13 +31,13 @@ test('initialize echoes protocolVersion and names the server thread', async (t) 
   assert.ok(r.result.capabilities && 'tools' in r.result.capabilities);
 });
 
-test('tools/list returns exactly the 10 tools, each with an object inputSchema', async (t) => {
+test('tools/list returns exactly the 11 tools, each with an object inputSchema', async (t) => {
   const e = setupThreadEnv(t);
   const c = start(t, e);
   await c.init();
   const r = await c.request('tools/list', {});
   const tools = r.result.tools;
-  assert.equal(tools.length, 10);
+  assert.equal(tools.length, 11);
   assert.deepEqual(tools.map((x) => x.name).sort(), [...EXPECTED_TOOLS].sort());
   for (const tool of tools) {
     assert.equal(tool.inputSchema?.type, 'object', `${tool.name} inputSchema`);

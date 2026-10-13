@@ -222,7 +222,7 @@ Each thread's token use is shown on its card and in `/thread:status`, so you can
 | `/thread:report [id]` | Pull a thread's digest into this session. With no id, picks the one unreported thread this session started. |
 | `/thread:status` | List threads with their state, context, agent or model, turns, tokens used, reported status and who started them. |
 | `/thread:end <id>` | End a thread, stopping it if it is running, and mark its card done. |
-| `/thread:board` | List the cards and print the board link. |
+| `/thread:board` | List the cards and print the board link. `--stop` stops the board web page. |
 | `/thread:add <task or idea>` | Add a card without acting on it. |
 
 ```text
@@ -236,6 +236,7 @@ Flags can go anywhere in the line. Thread states map to board columns: running i
 
 `/thread:board` prints a link such as `http://127.0.0.1:47800/?t=<token>#/<project>`.
 
+- **One board, served by one session.** The first Claude Code session to start serves the page and the others share it. When a session on a newer plugin version starts, or runs `/thread:board`, it replaces a board served by an older version, so after an update you only reload the browser tab. `/thread:board --stop` stops the page for every session until someone runs `/thread:board` again; cards and threads are not touched.
 - **One board for every project.** Each project has a tab, with a dot when one of its threads is running. A project whose folder was deleted is shown read-only and can be forgotten, which removes its saved cards and logs.
 - **Cards** show their id, kind and title. Thread cards also show their state, the number of turns, the session that started them, a **Not reported** tag when they hold a result the main session has not pulled, the tokens they have used, and their agent when they run as one.
 - **Toolbar:** search by id, title or note; show threads only; filter by the session that started them; add a card. A button in the header switches between light and dark.
@@ -311,6 +312,7 @@ State is one file per project: `<data dir>/projects/<key>/state.json`, with each
 | Claude picked an agent or model you did not want | Name it yourself with `--agent` or `--model`. If it keeps happening, make the agent's `description` say what it is for and what it is not for; that text is all Claude chooses by. |
 | Starting a thread fails with "give an agent, or a model and effort, not both" | An agent brings its own model and effort. Drop `--model` and `--effort`, or drop `--agent`. |
 | A thread reports that a tool was refused | It needed a permission prompt it could not answer. Allow the tool in your Claude Code permission rules, add it to `THREAD_ALLOW_TOOLS`, or name the folder it needs in the task. |
+| The board still shows the old page after a plugin update | A session on an older version is serving it. Run `/thread:board` in a session that has the new version (reload its window first). A board from before 0.8.2 cannot be replaced or stopped this way: reload the window of the session that serves it. |
 | The board says it needs its access link | The link was opened without its token, or from an old bookmark. Run `/thread:board` and open the link it prints. |
 | `/thread:report` lists threads instead of reporting | This session started none or several unreported threads. Pass the id. |
 | A thread shows "running" for a long time | Check its card on the board. A thread whose process died is marked failed the next time the board or a command looks at it. |
@@ -318,6 +320,7 @@ State is one file per project: `<data dir>/projects/<key>/state.json`, with each
 
 ## What's new
 
+- **0.8.2** `/thread:board --stop` stops the board. A newer plugin version takes over a board served by an older one.
 - **0.8.1** Task and idea cards open as a full page, like threads. The plugin has an icon.
 - **0.8.0** Claude picks the sub-agent or model for a thread by how hard the task is. `--model` and `--effort` set them by hand.
 - **0.7.0** Threads start from a brief instead of a copy of the session; `--full` keeps the copy. `--agent` runs a thread as a sub-agent. Token use is recorded per turn and shown on the board.
