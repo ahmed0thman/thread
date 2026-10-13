@@ -159,7 +159,7 @@ test('removeCard deletes that card\'s log and activity files and leaves other ca
 test('startThreadFromCard converts a task in place and starts the first turn with title and note', async (t) => {
   const e = setupThreadEnv(t);
   const task = await core.addCard(e.projectDir, { title: 'Fix the login bug', note: 'It fails on Safari.\nSee issue 12.', source: 'user' });
-  const c = await core.startThreadFromCard(e.projectDir, task.id, { sessionId: PARENT_SESSION });
+  const c = await core.startThreadFromCard(e.projectDir, task.id, { sessionId: PARENT_SESSION, context: 'full' });
   assert.equal(c.id, task.id);
   assert.equal(c.kind, 'thread');
   assert.equal(c.title, task.title);

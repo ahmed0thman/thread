@@ -28,7 +28,7 @@ const replyError = (id, code, message) => send({ jsonrpc: '2.0', id, error: { co
 
 // ---------- tool definitions ----------
 
-const { STATUSES, MODES, KINDS } = core;
+const { STATUSES, MODES, KINDS, CONTEXTS } = core;
 
 const ID_PROP = { type: 'string', description: 'Card id, for example "c4".' };
 const SESSION_PROP = { type: 'string', description: 'This session\'s id (a UUID), taken from the "[thread plugin]" note added at session start. Falls back to the CLAUDE_CODE_SESSION_ID environment variable if omitted.' };
@@ -38,7 +38,9 @@ const TOOLS = [
   {
     name: 'thread_start',
     description:
-      'Start a side thread: a full copy of this conversation, with the same tools, that works on a task in the background while you carry on. ' +
+      'Start a side thread: a separate Claude session that works on a task in the background while you carry on. ' +
+      'By default it is a fresh session that knows only the brief and the task you write (plus the project\'s CLAUDE.md, which it loads itself), so it costs little. ' +
+      'With context "full" it is instead a copy of this whole conversation, which re-sends everything said so far on every turn and costs far more. ' +
       'It runs detached and never writes into this session. Its results come back only through thread_report, so do not wait for it; ' +
       'call thread_report later when the user asks or when the result is needed. ' +
       'Pass the session id from the "[thread plugin]" SessionStart note as session_id. ' +
@@ -50,7 +52,10 @@ const TOOLS = [
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Short title for the thread card on the board.' },
-        task: { type: 'string', description: 'What the thread should do. Be specific; the thread has this conversation as context but starts with only this instruction.' },
+        task: { type: 'string', description: 'What the thread should do, written so that it stands alone. Be specific.' },
+        context: { type: 'string', enum: CONTEXTS, description: '"brief" (default): a fresh session that knows only brief and task. "full": a copy of this whole conversation; use it only when the task depends on much of what was said, because it costs far more tokens.' },
+        brief: { type: 'string', description: 'What the thread needs to know from this conversation; it has not seen it. A good brief gives the goal, the decisions and constraints that apply, exact file paths, what was already tried or ruled out, and the meaning of any project term the task uses. Leave out anything the task does not need and anything in CLAUDE.md. As long as the task needs and no longer. Ignored with context "full".' },
+        agent: { type: 'string', description: 'Optional name of a sub-agent from .claude/agents (project or user) to run the thread as; it brings its own model, effort and instructions. Without it the thread uses the same model and effort as this session.' },
         session_id: SESSION_PROP,
         mode: { type: 'string', enum: MODES, description: '"read" (default) forbids file edits. "write" lets the thread edit files; use it only when the user asks for that.' },
         extra_dirs: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Absolute paths of folders outside the project that the task needs to read, for example another repository the user named. Only list folders the task actually requires.' },
@@ -69,7 +74,7 @@ const TOOLS = [
   },
   {
     name: 'thread_status',
-    description: 'Show the state of threads: id, title, run state (running, idle, failed, ended), mode, number of turns, whether the result has been reported, and which session started each. Omit id to list all threads.',
+    description: 'Show the state of threads: id, title, run state (running, idle, failed, ended), mode, context (brief or full), agent or model, number of turns, tokens used, whether the result has been reported, and which session started each. Omit id to list all threads.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string', description: 'Card id of one thread. Omit to list every thread.' }, session_id: SESSION_PROP },
@@ -208,9 +213,25 @@ function startedBy(state, c, caller) {
   return core.sessionLabel(state, parent);
 }
 
+// Who a thread runs as: its agent, else the model and effort it was given, else the CLI default.
+function runsAs(t) {
+  if (t.agent) return `agent ${t.agent}`;
+  return [t.model && `model ${t.model}`, t.effort && `effort ${t.effort}`].filter(Boolean).join(', ') || 'default model';
+}
+
+const tokens = (n) => (n < 1000 ? String(n) : n < 1e6 ? `${(n / 1000).toFixed(1)}k` : `${(n / 1e6).toFixed(1)}M`);
+
+// Tokens over all turns that recorded usage, input side (fresh, cache read, cache write) and output; '' when none did.
+function usageText(t) {
+  const used = t.turns.map((x) => x.usage).filter(Boolean);
+  if (!used.length) return '';
+  const sum = (f) => used.reduce((a, u) => a + f(u), 0);
+  return `, tokens ${tokens(sum((u) => u.input + u.cacheRead + u.cacheWrite))} in / ${tokens(sum((u) => u.output))} out`;
+}
+
 function threadLine(c, state, caller) {
   const t = c.thread;
-  return `${c.id} "${core.clip(c.title, 80)}" — ${t.runState}, mode ${t.mode}, ${t.turns.length} turn(s), reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, session ${t.sessionId || 'not known yet'}${t.reportRequestedAt ? ', report requested' : ''}`;
+  return `${c.id} "${core.clip(c.title, 80)}" — ${t.runState}, mode ${t.mode}, ${core.threadContext(t)} context, ${runsAs(t)}, ${t.turns.length} turn(s)${usageText(t)}, reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, session ${t.sessionId || 'not known yet'}${t.reportRequestedAt ? ', report requested' : ''}`;
 }
 
 // The answer to a report or end that came from a session other than the one
@@ -315,9 +336,13 @@ const HANDLERS = {
       sessionId,
       mode,
       extraDirs: args.extra_dirs,
+      context: optEnum(args, 'context', CONTEXTS),
+      brief: optStr(args, 'brief'),
+      agent: optStr(args, 'agent'),
     });
-    const extra = card.thread.dirs.length ? `, extra folders: ${card.thread.dirs.join(', ')}` : '';
-    return `Thread ${card.id} "${core.clip(card.title, 80)}" started in the background (mode ${mode}${extra}). Results come back only through thread_report; call it with id ${card.id} when the user asks or the result is needed.`;
+    const t = card.thread;
+    const extra = t.dirs.length ? `, extra folders: ${t.dirs.join(', ')}` : '';
+    return `Thread ${card.id} "${core.clip(card.title, 80)}" started in the background (mode ${mode}, ${t.context} context, ${runsAs(t)}${extra}). Results come back only through thread_report; call it with id ${card.id} when the user asks or the result is needed.`;
   },
 
   async thread_continue(args) {

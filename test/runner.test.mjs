@@ -43,9 +43,9 @@ test('startThread returns a running thread card, then the turn finishes idle wit
   assert.equal(done.thread.announced, false);
 });
 
-test('first turn argv, stdin prompt, depth and cwd match the contract (read mode)', async (t) => {
+test('first turn argv, stdin prompt, depth and cwd match the contract (read mode, full context)', async (t) => {
   const e = setupThreadEnv(t);
-  await start(e);
+  await start(e, { context: 'full' });
   await untilState(e, 'idle');
   const log = e.readLog();
   assert.equal(log.length, 1);
@@ -54,6 +54,7 @@ test('first turn argv, stdin prompt, depth and cwd match the contract (read mode
   const ri = argv.indexOf('--resume');
   assert.ok(ri >= 0 && argv[ri + 1] === PARENT_SESSION, `--resume <parent id> in ${argv}`);
   assert.ok(argv.includes('--fork-session'));
+  assert.equal(argv[0], '-p');
   const oi = argv.indexOf('--output-format');
   assert.ok(oi >= 0 && argv[oi + 1] === 'stream-json');
   assert.ok(argv.includes('--verbose'), '--verbose is required with stream-json in print mode');

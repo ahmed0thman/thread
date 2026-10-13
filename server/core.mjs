@@ -5,10 +5,11 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readdir, rm } from 'node:fs/promises';
 import { readFileSync, statSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dataDir, envValue, now, projectKey, projectPaths, readState, updateState, withLock } from './state.mjs';
-import { collapse, sameSession } from './sessions.mjs';
+import { cleanEffort, cleanModel, collapse, sameSession, sessionModel } from './sessions.mjs';
 
 export * from './state.mjs';
 export * from './sessions.mjs';
@@ -17,6 +18,9 @@ export const STATUSES = ['idea', 'new', 'in_progress', 'review', 'blocked', 'don
 
 export const KINDS = ['task', 'idea'];
 export const MODES = ['read', 'write'];
+export const CONTEXTS = ['brief', 'full'];
+export const AGENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const MAX_BRIEF = 50000;
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const KEY_RE = /^[0-9a-f]{12}$/;
 const CARD_ID_RE = /^c[0-9]+$/;
@@ -356,6 +360,48 @@ function normalizeDirs(dirs) {
   return out;
 }
 
+// A thread stored before contexts existed was a full copy.
+export const threadContext = (t) => (t.context === 'brief' ? 'brief' : 'full');
+
+// ---------------------------------------------------------------- agents
+
+const frontmatterValue = (head, key) => {
+  const m = new RegExp(`^${key}:[ \\t]*(.*?)[ \\t]*$`, 'm').exec(head);
+  return m ? m[1].replace(/^(["'])(.*)\1$/, '$2').trim() : '';
+};
+
+function agentsIn(dir, scope) {
+  let files;
+  try { files = readdirSync(dir).filter((f) => f.endsWith('.md')).sort(); } catch { return []; }
+  const out = [];
+  for (const f of files) {
+    let head;
+    try { head = /^---\r?\n([\s\S]*?)\r?\n---/.exec(readFileSync(join(dir, f), 'utf8')); } catch { continue; }
+    if (!head) continue;
+    const name = frontmatterValue(head[1], 'name') || f.slice(0, -3);
+    if (!AGENT_RE.test(name)) continue;
+    out.push({
+      name,
+      description: clip(frontmatterValue(head[1], 'description'), 300),
+      model: cleanModel(frontmatterValue(head[1], 'model')),
+      // Shown on the board only, never passed to the CLI, so the agent file's own wording is kept.
+      effort: clip(frontmatterValue(head[1], 'effort'), 20) || null,
+      scope,
+    });
+  }
+  return out;
+}
+
+// Sub-agents a thread can run as: <project>/.claude/agents and the user folder, top level only.
+// The project's definition wins when both have the same name.
+export function listAgents(projectDirArg, userDir = join(homedir(), '.claude', 'agents')) {
+  const out = agentsIn(join(projectDirArg, '.claude', 'agents'), 'project');
+  for (const a of agentsIn(userDir, 'user')) {
+    if (!out.some((x) => x.name === a.name)) out.push(a);
+  }
+  return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
 export function buildClaudeArgs(card) {
   const t = card.thread;
   const modeArgs = t.mode === 'write'
@@ -365,11 +411,17 @@ export function buildClaudeArgs(card) {
   const allowArgs = allow.length ? ['--allowedTools', ...allow] : [];
   const dirs = Array.isArray(t.dirs) ? t.dirs.filter((d) => typeof d === 'string' && isAbsolute(d)) : [];
   const dirArgs = dirs.length ? ['--add-dir', ...dirs] : [];
+  // A brief thread starts a fresh session; a full one forks the main session. Follow-ups resume the thread's own.
   const base = t.sessionId
     ? ['-p', '--resume', t.sessionId]
-    : ['-p', '--resume', t.parentSessionId, '--fork-session'];
+    : threadContext(t) === 'brief' ? ['-p'] : ['-p', '--resume', t.parentSessionId, '--fork-session'];
+  const model = cleanModel(t.model);
+  const effort = cleanEffort(t.effort);
+  const who = typeof t.agent === 'string' && AGENT_RE.test(t.agent)
+    ? ['--agent', t.agent]
+    : [...(model ? ['--model', model] : []), ...(effort ? ['--effort', effort] : [])];
   // The prompt goes in on stdin, so the variadic flags at the end cannot swallow it.
-  return [...base, '--output-format', 'stream-json', '--verbose', ...modeArgs, ...allowArgs, ...dirArgs];
+  return [...base, '--output-format', 'stream-json', '--verbose', ...who, ...modeArgs, ...allowArgs, ...dirArgs];
 }
 
 // One turn's activity file. Shared by the runner (writes) and readActivity (reads).
@@ -399,9 +451,14 @@ export function buildPrompt(card) {
   const turn = t.turns[t.turns.length - 1];
   const text = turn ? turn.prompt : '';
   if (!t.sessionId) {
+    const brief = threadContext(t) === 'brief';
+    const context = brief && typeof t.brief === 'string' && t.brief.trim() ? ['## Context', t.brief.trim()] : [];
     return [
       `[side thread ${card.id}: ${card.title}]`,
-      'You are now a side thread copied from the main session. The main session continues separately and cannot see anything you do here unless it asks for your report.',
+      brief
+        ? 'You are a side thread started from a main session. You have not been given that session\'s conversation; everything you know about it is in the brief below. The main session continues separately and cannot see anything you do here unless it asks for your report.'
+        : 'You are now a side thread copied from the main session. The main session continues separately and cannot see anything you do here unless it asks for your report.',
+      ...context,
       `Task: ${text}`,
       t.mode === 'write'
         ? 'You may edit files. Keep changes limited to this task.'
@@ -475,22 +532,37 @@ function launchRunner(projectDirArg, card) {
   child.unref();
 }
 
-// The checks both ways of starting a thread share; returns the extra folders.
-function launchOptions(sessionId, mode, extraDirs) {
+// The checks both ways of starting a thread share. Returns what beginThread stores.
+async function launchOptions(projectDirArg, { sessionId, mode, extraDirs, context = 'brief', brief, agent }) {
   if (typeof sessionId !== 'string' || !UUID_RE.test(sessionId)) {
     throw new Error('session_id must be a UUID (the main session id)');
   }
   if (!MODES.includes(mode)) throw new Error(`invalid mode "${mode}" (use read or write)`);
-  return normalizeDirs(extraDirs);
+  if (!CONTEXTS.includes(context)) throw new Error(`invalid context "${context}" (use brief or full)`);
+  const text = context === 'brief' && typeof brief === 'string' ? brief.trim() : '';
+  if (text.length > MAX_BRIEF) {
+    throw new Error(`brief is too long (${text.length} characters, the limit is ${MAX_BRIEF}); shorten it, or use context "full" to copy the whole conversation`);
+  }
+  const dirs = normalizeDirs(extraDirs);
+  const name = typeof agent === 'string' ? agent.trim() : '';
+  if (name) {
+    const known = listAgents(projectDirArg).map((a) => a.name);
+    if (!known.includes(name)) {
+      throw new Error(`Unknown agent "${clip(name, 60)}". ${known.length ? `Available: ${known.join(', ')}.` : 'No agents are defined in .claude/agents.'}`);
+    }
+  }
+  // An agent brings its own model; otherwise the thread runs as the main session does.
+  const { model, effort } = name ? { model: null, effort: null } : await sessionModel(projectDirArg, sessionId);
+  return { context, brief: text, dirs, agent: name || null, model, effort };
 }
 
 // Gives `card` its thread and launches the first turn. Called inside updateState.
-function beginThread(projectDirArg, card, { sessionId, mode, dirs, prompt }) {
+function beginThread(projectDirArg, card, { sessionId, mode, prompt, ...opts }) {
   card.thread = {
     parentSessionId: sessionId.toLowerCase(),
     sessionId: null,
+    ...opts,
     mode,
-    dirs,
     runState: 'running',
     pid: null,
     turns: [{ prompt, startedAt: now(), finishedAt: null, ok: null, result: null, error: null }],
@@ -502,11 +574,11 @@ function beginThread(projectDirArg, card, { sessionId, mode, dirs, prompt }) {
   launchRunner(projectDirArg, card);
 }
 
-export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs } = {}) {
+export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs, context, brief, agent } = {}) {
   refuseInsideThread('start');
   const t = typeof title === 'string' ? title.trim() : '';
   const k = typeof task === 'string' ? task.trim() : '';
-  const dirs = launchOptions(sessionId, mode, extraDirs);
+  const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief, agent });
   if (!t) throw new Error('title must not be empty');
   if (!k) throw new Error('task must not be empty');
   return updateState(projectDirArg, (state) => {
@@ -524,21 +596,25 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
       updatedAt: ts,
     };
     state.cards.push(card);
-    beginThread(projectDirArg, card, { sessionId, mode, dirs, prompt: k });
+    beginThread(projectDirArg, card, { sessionId, mode, prompt: k, ...opts });
     return card;
   });
 }
 
 // Turns a task or idea card into a thread in place: same id, title, note and source.
-export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mode = 'read', extraDirs } = {}) {
+// Nobody writes a brief on the board, so in brief mode the card's note is the brief.
+export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mode = 'read', extraDirs, context, agent } = {}) {
   refuseInsideThread('start');
-  const dirs = launchOptions(sessionId, mode, extraDirs);
+  const existing = readState(projectDirArg).cards.find((c) => c.id === cardId);
+  const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief: existing && existing.note, agent });
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, cardId);
     if (card.kind === 'thread') throw new Error(`card ${cardId} is already a thread`);
-    const note = typeof card.note === 'string' ? card.note.trim() : '';
+    const text = typeof card.note === 'string' ? card.note.trim() : '';
     card.kind = 'thread';
-    beginThread(projectDirArg, card, { sessionId, mode, dirs, prompt: note ? `${card.title}\n\n${note}` : card.title });
+    // In brief mode the note already travels as the brief, so the task is the title alone.
+    const prompt = text && opts.context === 'full' ? `${card.title}\n\n${text}` : card.title;
+    beginThread(projectDirArg, card, { sessionId, mode, prompt, ...opts });
     return card;
   });
 }

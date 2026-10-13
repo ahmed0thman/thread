@@ -309,6 +309,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .card-note { margin: 0; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-from { margin: 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); font-size: 12px; color: var(--muted); }
+.card-agent { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
 .unseen { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--warn); }
 .unseen .shape { color: var(--warn); width: 7px; height: 7px; }
 
@@ -339,6 +340,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .dr-foot {
   flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2);
   padding: var(--s3) var(--s4); border-top: 1px solid var(--border); background: var(--surface);
+  max-height: 70vh; overflow-y: auto;
 }
 .dr-foot .grow { flex: 1 1 auto; }
 .foot-note { font-size: 12px; color: var(--muted); }
@@ -347,6 +349,8 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .start-step p { margin: 0; }
 .start-mode { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .start-mode legend { padding: 0 0 5px; font-size: 12px; font-weight: 650; color: var(--muted); }
+.start-opts { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s5); }
+.start-opts > * { flex: 1 1 190px; }
 .radio { display: flex; align-items: center; gap: var(--s2); cursor: pointer; }
 .radio input { margin: 0; accent-color: var(--accent); }
 .start-btns { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
@@ -437,6 +441,10 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .ab-row .line { display: flex; align-items: flex-start; gap: var(--s2); }
 .ab-row .v { flex: 1 1 auto; min-width: 0; padding-top: 4px; font: 12px/1.5 var(--mono); overflow-wrap: anywhere; user-select: all; }
 .ab-row .v.muted { font-family: var(--sans); user-select: auto; }
+.ab-row .v.plain { font: 13px/1.5 var(--sans); user-select: auto; }
+.ab-brief { margin-top: var(--s3); }
+.ab-brief summary { cursor: pointer; padding: 4px 0; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.ab-brief pre { margin: var(--s2) 0 0; padding: var(--s2) var(--s3); max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 var(--sans); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r2); }
 .ab-who { padding-top: 4px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ab-seen { margin-top: 2px; font-size: 12px; color: var(--muted); }
 .ab-note { margin: 0; font-size: 12.5px; color: var(--muted); }
@@ -788,6 +796,38 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     const hr = Math.floor(m / 60); m = m % 60;
     return hr + 'h ' + String(m).padStart(2, '0') + 'm';
   }
+  // ---- tokens and agents (page.test.mjs runs this block on its own) ----
+  // 945, 48.2k, 1.35M: three significant digits
+  function fmtTokens(n) {
+    const short = (v) => String(+v.toFixed(v < 10 ? 2 : v < 100 ? 1 : 0));
+    if (!Number.isFinite(n) || n < 1000) return String(Math.max(0, Math.round(n) || 0));
+    return n < 999500 ? short(n / 1000) + 'k' : short(n / 1e6) + 'M';
+  }
+  // A turn's tokens, input side (fresh, cache read, cache write) and output; null when the turn recorded none.
+  function turnTokens(t) {
+    const u = t && t.usage;
+    if (!u || typeof u !== 'object') return null;
+    const n = (x) => (Number.isFinite(x) ? x : 0);
+    return { in: n(u.input) + n(u.cacheRead) + n(u.cacheWrite), out: n(u.output) };
+  }
+  function threadTokens(turns) {
+    let sum = null;
+    turns.forEach((t) => {
+      const x = turnTokens(t);
+      if (x) sum = { in: (sum ? sum.in : 0) + x.in, out: (sum ? sum.out : 0) + x.out };
+    });
+    return sum;
+  }
+  function tokensText(x) { return fmtTokens(x.in) + ' in · ' + fmtTokens(x.out) + ' out'; }
+  function totalText(x) { return fmtTokens(x.in + x.out) + ' tokens'; }
+  function effortText(e) { return e === 'xhigh' ? 'extra-high' : e || ''; }
+  // 'worker · claude-sonnet-5-5 · extra-high'
+  function agentLabel(a) { return [a.name, a.model, effortText(a.effort)].filter(Boolean).join(' · '); }
+  // The model a thread runs on: 'claude-sonnet-5-5 · extra-high', '' when neither is known.
+  function modelText(t) { return [t.model, effortText(t.effort)].filter(Boolean).join(' · '); }
+  // A thread without the field is an old one: a full copy.
+  function isBrief(t) { return t.context === 'brief'; }
+  // ---- end tokens and agents ----
   function elapsedEl(iso) {
     const e = h('span', 'elapsed', fmtMs(Date.now() - new Date(iso).getTime()));
     e.dataset.since = iso;
@@ -1415,12 +1455,15 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       foot.appendChild(h('span', 'tnum', n + (n === 1 ? ' turn' : ' turns')));
       const rt = reportTag(card);
       if (rt) foot.appendChild(rt);
+      const tk = threadTokens(turnsOf(card));
+      if (tk) { const e = h('span', 'tnum', totalText(tk)); e.title = tokensText(tk); foot.appendChild(e); }
+      if (t.agent) { const e = h('span', 'card-agent', t.agent); e.title = 'Runs as the ' + t.agent + ' agent'; foot.appendChild(e); }
     }
     if (card.seenByClaude === false) foot.appendChild(unseenEl('span'));
     if (foot.childNodes.length) el.appendChild(foot);
 
     const rs = thread ? reportState(card) : '';
-    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
+    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
 
     el.addEventListener('click', () => {
       if (Date.now() - lastDragEnd < 200) return;
@@ -1986,12 +2029,28 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       return Object.keys(all).map((id) => [id, all[id] || {}]).sort((a, b) => String(b[1].lastSeenAt || '').localeCompare(String(a[1].lastSeenAt || '')));
     }
 
+    const CONTEXT_NOTE = { brief: 'Gets only this card’s title and note.', full: 'Copies the whole session; uses far more tokens.' };
+    // A labelled radio choice; the first option is checked.
+    function radioGroup(name, legend, options) {
+      const box = h('fieldset', 'start-mode');
+      box.appendChild(h('legend', null, legend));
+      const radios = options.map(([value, text], i) => {
+        const r = h('input');
+        r.type = 'radio'; r.name = name; r.value = value; r.checked = i === 0;
+        const l = h('label', 'radio');
+        l.append(r, h('span', null, text));
+        box.appendChild(l);
+        return r;
+      });
+      return { box, value: () => radios.find((r) => r.checked).value };
+    }
+
     function renderFoot(focusFirst) {
       foot.replaceChildren();
       startBtn = goBtn = whyEl = null;
       if (P.starting) {
         const step = h('div', 'start-step');
-        step.appendChild(h('p', null, 'This card becomes a thread: a background copy of the session you choose, working on this card’s title and note.'));
+        step.appendChild(h('p', null, 'This card becomes a thread: a background Claude session working on this card’s title and note.'));
         const list = startSessions();
         const cancel = plainBtn('Cancel', null, () => { P.starting = false; renderFoot(); startBtn.focus(); });
         if (!list.length) {
@@ -2005,20 +2064,39 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
             o.value = id;
             sel.appendChild(o);
           });
-          step.appendChild(field('Session to copy', sel, 'f-start-session'));
-          const modes = h('fieldset', 'start-mode');
-          modes.appendChild(h('legend', null, 'Mode'));
-          const radios = [['read', 'Read-only'], ['write', 'Can edit files']].map(([value, text]) => {
-            const r = h('input');
-            r.type = 'radio'; r.name = 'start-mode'; r.value = value; r.checked = value === 'read';
-            const l = h('label', 'radio');
-            l.append(r, h('span', null, text));
-            modes.appendChild(l);
-            return r;
-          });
-          modes.appendChild(h('p', 'foot-note', 'Edits the same files as your main session.'));
-          step.appendChild(modes);
-          goBtn = actionBtn('Start', 'primary', 'start:' + selKey + ':' + card.id, () => doStart(sel.value, radios.find((r) => r.checked).value));
+          step.appendChild(field('Started from session', sel, 'f-start-session'));
+
+          const ctx = radioGroup('start-context', 'Context', [['brief', 'Brief'], ['full', 'Full copy']]);
+          const ctxNote = h('p', 'foot-note', CONTEXT_NOTE.brief);
+          ctxNote.id = 'f-start-context-note';
+          ctx.box.setAttribute('aria-describedby', ctxNote.id);
+          ctx.box.appendChild(ctxNote);
+          ctx.box.addEventListener('change', () => { ctxNote.textContent = CONTEXT_NOTE[ctx.value()]; });
+
+          const mode = radioGroup('start-mode', 'Mode', [['read', 'Read-only'], ['write', 'Can edit files']]);
+          mode.box.appendChild(h('p', 'foot-note', 'Edits the same files as your main session.'));
+          const opts = h('div', 'start-opts');
+          opts.append(ctx.box, mode.box);
+          step.appendChild(opts);
+
+          // The agents of this project and of the user; if they cannot be listed, "Same as session" is still there.
+          const agentSel = h('select', 'input');
+          const same = h('option', null, 'Same as session');
+          same.value = '';
+          agentSel.appendChild(same);
+          step.appendChild(field('Agent', agentSel, 'f-start-agent'));
+          const pk = selKey;
+          api('GET', pp(pk, 'agents')).then((r) => {
+            if (panel !== P || !agentSel.isConnected) return;
+            ((r && r.agents) || []).forEach((a) => {
+              const o = h('option', null, agentLabel(a));
+              o.value = a.name;
+              if (a.description) o.title = a.description;
+              agentSel.appendChild(o);
+            });
+          }).catch(() => { /* the list is optional */ });
+
+          goBtn = actionBtn('Start', 'primary', 'start:' + selKey + ':' + card.id, () => doStart({ sessionId: sel.value, mode: mode.value(), context: ctx.value(), agent: agentSel.value }));
           whyEl = h('span', 'foot-note');
           whyEl.setAttribute('role', 'status');
           step.appendChild(h('div', 'start-btns')).append(goBtn, cancel, whyEl);
@@ -2058,11 +2136,11 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     }
 
     // The server turns the card into a thread under the same id; updatePanel then swaps this drawer for the workspace.
-    async function doStart(sessionId, mode) {
+    async function doStart({ sessionId, mode, context, agent }) {
       clearError();
       const pk = selKey;
       await runAction('start:' + pk + ':' + card.id, async () => {
-        try { const started = await api('POST', pp(pk, 'cards/' + encodeURIComponent(card.id) + '/start'), { sessionId, mode }); wrote(); applyCard(started, pk); }
+        try { const started = await api('POST', pp(pk, 'cards/' + encodeURIComponent(card.id) + '/start'), { sessionId, mode, context, agent: agent || undefined }); wrote(); applyCard(started, pk); }
         catch (e) { showError(e.message); }
       });
       poll();
@@ -2214,7 +2292,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     const P = panel = {
       target: card.id, type: 'thread', cardKey: panelKey(card), isDirty: null, view: 'conversation',
       confirm: null, keys: {}, scrollSaved: { about: 0, conversation: 0, trace: 0 }, convAtBottom: true, scrollers: {},
-      narrow: false, flash: null,
+      narrow: false, flash: null, briefOpen: false,
       live: null, actOpen: {}, actState: {}, actBusy: false, actTimer: null,   // activity: see "activity" below
     };
     KINDS.forEach((k) => { delete traceHidden[k]; });
@@ -2564,6 +2642,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
           bm.appendChild(h('strong', null, 'Thread'));
           bm.appendChild(h('span', 'tnum', 'turn ' + (i + 1)));
           if (t.finishedAt && t.startedAt) bm.appendChild(h('span', 'tnum', 'took ' + fmtMs(new Date(t.finishedAt) - new Date(t.startedAt))));
+          // with steps, the tokens ride on the steps line below
+          const tk = turnTokens(t);
+          if (tk && !(t.steps > 0)) { const e = h('span', 'tnum', totalText(tk)); e.title = tokensText(tk); bm.appendChild(e); }
           b.appendChild(bm);
           const act = buildAct(c, i);
           if (act) b.appendChild(act);
@@ -2668,7 +2749,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       toggle.type = 'button';
       toggle.dataset.fid = 'a-' + i;
       toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-      toggle.append(chev(open ? 'd' : 'r'), h('span', 'tnum', stepsText(t.steps) + (t.finishedAt && t.startedAt ? ' · ' + fmtMs(new Date(t.finishedAt) - new Date(t.startedAt)) : '')));
+      const tk = turnTokens(t);
+      toggle.append(chev(open ? 'd' : 'r'), h('span', 'tnum', stepsText(t.steps) + (t.finishedAt && t.startedAt ? ' · ' + fmtMs(new Date(t.finishedAt) - new Date(t.startedAt)) : '') + (tk ? ' · ' + totalText(tk) : '')));
+      if (tk) toggle.title = tokensText(tk);
       toggle.addEventListener('click', () => toggleAct(i));
       wrap.appendChild(toggle);
       if (open) {
@@ -2828,6 +2911,31 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         }
         out.push(ids);
 
+        out.push(h('h3', 'dg-h', 'Details'));
+        const facts = h('div', 'ab-ids');
+        const fact = (k, v) => {
+          const line = h('div', 'line');
+          line.appendChild(h('span', 'v plain', v));
+          const r = h('div', 'ab-row');
+          r.append(h('span', 'k', k), line);
+          facts.appendChild(r);
+        };
+        fact('Context', isBrief(t) ? 'Brief' : 'Full copy');
+        if (t.agent) fact('Agent', t.agent);
+        else if (modelText(t)) fact('Model', modelText(t));
+        const tk = threadTokens(turns);
+        if (tk) fact('Tokens', tokensText(tk));
+        out.push(facts);
+        if (isBrief(t) && t.brief) {
+          const d = h('details', 'ab-brief');
+          d.open = P.briefOpen;
+          d.addEventListener('toggle', () => { P.briefOpen = d.open; });
+          const sm = h('summary', null, 'Brief given to the thread');
+          sm.dataset.fid = 'c-brief';
+          d.append(sm, h('pre', null, t.brief));
+          out.push(d);
+        }
+
         out.push(h('h3', 'dg-h', 'Digest'));
         if (newest < 0) {
           const e = h('div', 'empty-state');
@@ -2963,7 +3071,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       const sess = sessionInfo(t.parentSessionId);
       const k = {
         head: JSON.stringify([c.title, t.runState, t.mode, turns.length, turns[0] && turns[0].startedAt, c.seenByClaude, reportState(c), sess && sess.label, ro]),
-        about: JSON.stringify([t.sessionId, t.parentSessionId, turns, reportState(c), sess]),
+        about: JSON.stringify([t.sessionId, t.parentSessionId, turns, reportState(c), sess, t.context, t.brief, t.agent, t.model, t.effort]),
         trace: JSON.stringify([turns, t.runState]),
         convo: JSON.stringify([turns, t.runState]),
         composer: t.runState + '|' + t.sessionId + '|' + ro,

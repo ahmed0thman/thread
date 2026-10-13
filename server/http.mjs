@@ -128,13 +128,14 @@ const THREAD_ROUTES = new Set(['POST messages', 'POST end', 'POST report-request
 async function handleProject(req, res, projectDir, sub, query) {
   const method = req.method;
   const isState = method === 'GET' && sub === '/state';
+  const isAgents = method === 'GET' && sub === '/agents';
   const isCardCreate = method === 'POST' && sub === '/cards';
   const cm = /^\/cards\/([A-Za-z0-9_-]{1,64})$/.exec(sub);
   const sm = /^\/cards\/([A-Za-z0-9_-]{1,64})\/start$/.exec(sub);
   const tm = /^\/threads\/([A-Za-z0-9_-]{1,64})\/(messages|end|activity|report-request)$/.exec(sub);
   const threadRoute = tm ? `${method} ${tm[2]}` : '';
   const isActivity = threadRoute === 'GET activity';
-  const known = isState || isCardCreate || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
+  const known = isState || isAgents || isCardCreate || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
   if (!known) {
     req.resume();
     send(res, 404, { error: 'not found' });
@@ -142,7 +143,7 @@ async function handleProject(req, res, projectDir, sub, query) {
   }
 
   const present = core.dirExists(projectDir);
-  if (!isState && !isActivity && !present) {
+  if (!isState && !isAgents && !isActivity && !present) {
     req.resume();
     send(res, 409, { error: `project folder not found: ${projectDir}` });
     return;
@@ -152,6 +153,11 @@ async function handleProject(req, res, projectDir, sub, query) {
     // A project whose folder is gone is read-only: no reconcile, no write.
     const state = present ? await core.reconcile(projectDir) : core.readState(projectDir);
     send(res, 200, { projectDir, exists: present, cards: state.cards.map(withViews), sessions: sessionsView(state) });
+    return;
+  }
+
+  if (isAgents) {
+    send(res, 200, { agents: core.listAgents(projectDir) });
     return;
   }
 
@@ -199,8 +205,8 @@ async function handleProject(req, res, projectDir, sub, query) {
   const body = await readJsonBody(req);
   let card;
   if (sm) {
-    const { sessionId, mode } = pick(body, ['sessionId', 'mode']);
-    card = await core.startThreadFromCard(projectDir, sm[1], { sessionId, mode, extraDirs: body.extraDirs });
+    const { sessionId, mode, context, agent } = pick(body, ['sessionId', 'mode', 'context', 'agent']);
+    card = await core.startThreadFromCard(projectDir, sm[1], { sessionId, mode, context, agent, extraDirs: body.extraDirs });
   } else if (tm[2] === 'messages') {
     card = await core.continueThread(projectDir, tm[1], body.message);
   } else if (tm[2] === 'end') {
@@ -302,7 +308,7 @@ function makeHandler(homeDir, token) {
       return;
     }
 
-    if (path === '/api/state' || path === '/api/cards' || path.startsWith('/api/cards/') || path.startsWith('/api/threads/')) {
+    if (path === '/api/state' || path === '/api/agents' || path === '/api/cards' || path.startsWith('/api/cards/') || path.startsWith('/api/threads/')) {
       await handleProject(req, res, homeDir, path.slice('/api'.length), url.searchParams);
       return;
     }

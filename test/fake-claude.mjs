@@ -22,7 +22,7 @@ if (process.env.FAKE_CLAUDE_PIDFILE) {
 }
 
 const SESSION = '11111111-2222-4333-8444-555555555555';
-const OK = '{"type":"result","subtype":"success","is_error":false,"result":"done\\n## Happened\\nx\\n## Decided\\ny\\n## Changed\\nz\\n## Open\\nnone","session_id":"' + SESSION + '"}';
+const OK = '{"type":"result","subtype":"success","is_error":false,"result":"done\\n## Happened\\nx\\n## Decided\\ny\\n## Changed\\nz\\n## Open\\nnone","session_id":"' + SESSION + '","usage":{"input_tokens":12,"cache_read_input_tokens":300,"cache_creation_input_tokens":40,"output_tokens":7}}';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const line = (o) => process.stdout.write((typeof o === 'string' ? o : JSON.stringify(o)) + '\n');
@@ -35,6 +35,10 @@ switch (mode) {
   case 'fail':
     process.stderr.write('boom');
     process.exit(3);
+    break;
+  case 'no-usage':
+    process.stdout.write(OK.replace(/,"usage":\{[^}]*\}/, '') + '\n');
+    process.exit(0);
     break;
   case 'garbage':
     process.stdout.write('not json\n');

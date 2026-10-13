@@ -12,6 +12,13 @@ const NAME_RANK = { none: 0, 'first-message': 1, 'ai-title': 2, title: 3 };
 
 export const collapse = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._[\]-]*$/;
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+// A model name or effort level that is safe to pass to the CLI as one argument; otherwise null.
+export const cleanModel = (v) => (typeof v === 'string' && MODEL_RE.test(v) ? v : null);
+export const cleanEffort = (v) => (EFFORTS.includes(v) ? v : null);
+
 function validTranscriptPath(p) {
   return typeof p === 'string' && p.length > 0 && isAbsolute(p) && p.endsWith('.jsonl');
 }
@@ -83,6 +90,39 @@ async function nameFromTranscript(file) {
   } finally {
     if (fh) await fh.close().catch(() => {});
   }
+}
+
+// The model and effort of the newest assistant line in the last 256 KB of a transcript. Never throws.
+async function modelFromTranscript(file) {
+  const none = { model: null, effort: null };
+  if (!validTranscriptPath(file)) return none;
+  let fh;
+  try {
+    fh = await open(file, 'r');
+    const { size } = await fh.stat();
+    const len = Math.min(size, TRANSCRIPT_CHUNK);
+    const lines = (await readAt(fh, size - len, len)).split('\n');
+    if (size > len) lines.shift(); // partial first line
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('"assistant"')) continue;
+      const o = parseJsonLine(lines[i]);
+      const model = o && o.type === 'assistant' && !o.isSidechain && o.message && o.message.model;
+      if (typeof model !== 'string' || model === '<synthetic>') continue;
+      return { model: cleanModel(model), effort: cleanEffort(o.effort) };
+    }
+    return none;
+  } catch {
+    return none;
+  } finally {
+    if (fh) await fh.close().catch(() => {});
+  }
+}
+
+// The model and effort a session is running with, from its recorded transcript; nulls when unknown.
+export async function sessionModel(projectDirArg, sessionId) {
+  let rec;
+  try { rec = sessionsOf(readState(projectDirArg))[String(sessionId).toLowerCase()]; } catch { rec = undefined; }
+  return modelFromTranscript(rec && rec.transcriptPath);
 }
 
 export function sessionsOf(state) {

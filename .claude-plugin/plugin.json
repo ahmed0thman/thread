@@ -1,7 +1,7 @@
 {
   "name": "thread",
-  "version": "0.6.0",
-  "description": "Side threads that share the session's context and report back on demand, plus a kanban board of tasks and ideas.",
+  "version": "0.7.0",
+  "description": "Side threads that start from a short brief of the session (or a full copy), report back on demand, and can run as a sub-agent, plus a kanban board of tasks and ideas.",
   "author": {
     "name": "Ahmed Hisham"
   },

@@ -106,6 +106,14 @@ function onStreamLine(line) {
   }
 }
 
+// Token counts from the result event; null when it carries none.
+function usageOf(v) {
+  const u = v && v.usage;
+  if (!u || typeof u !== 'object') return null;
+  const n = (x) => (Number.isFinite(x) && x >= 0 ? x : 0);
+  return { input: n(u.input_tokens), cacheRead: n(u.cache_read_input_tokens), cacheWrite: n(u.cache_creation_input_tokens), output: n(u.output_tokens) };
+}
+
 function onStdout(chunk) {
   if (outStream) outStream.write(chunk);
   outTail = (outTail + chunk).slice(-OUT_TAIL);
@@ -173,6 +181,8 @@ async function record(outcome) {
       turn.result = outcome.ok ? outcome.result : null;
       turn.error = outcome.ok ? null : outcome.error;
       turn.steps = steps;
+      const usage = usageOf(resultLine);
+      if (usage) turn.usage = usage;
     }
     if (outcome.ok) {
       if (outcome.sessionId) th.sessionId = outcome.sessionId;
