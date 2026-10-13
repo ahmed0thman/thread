@@ -9,6 +9,10 @@ import { setupThreadEnv, cleanAmbientEnv, writeStateFile, emptyState, threadCard
 import * as core from '../server/core.mjs';
 import { startBoardServer, boardToken, ensureBoard } from '../server/http.mjs';
 
+// Only ever sent as an Origin header to the local board; nothing connects to it.
+const FOREIGN = 'http://other-site.example';
+const PRINT_TOKEN = path.join(ROOT, 'test', 'print-token.mjs');
+
 cleanAmbientEnv();
 delete process.env.THREAD_BOARD_PORT;
 
@@ -328,15 +332,15 @@ test('without a token set, nothing is required', async (t) => {
 test('a write with a foreign Origin answers 403; own origin and no Origin pass', async (t) => {
   const b = await boot(t);
   const post = (origin) => fetch(b.base + '/api/cards', { method: 'POST', headers: { ...JSON_HDR, ...(origin ? { Origin: origin } : {}) }, body: '{"title":"o"}' });
-  assert.equal((await post('http://evil.example')).status, 403);
-  assert.equal((await post(`http://evil.example:${b.port}`)).status, 403);
+  assert.equal((await post(FOREIGN)).status, 403);
+  assert.equal((await post(FOREIGN + ':' + b.port)).status, 403);
   assert.equal((await post(`http://127.0.0.1:${b.port + 1}`)).status, 403);
   assert.equal((await post('null')).status, 403);
   assert.equal(core.readState(b.projectDir).cards.length, 0);
   assert.equal((await post(`http://127.0.0.1:${b.port}`)).status, 201);
   assert.equal((await post(`http://localhost:${b.port}`)).status, 201);
   assert.equal((await post()).status, 201);
-  const del = await fetch(b.base + '/api/cards/c1', { method: 'DELETE', headers: { Origin: 'http://evil.example' } });
+  const del = await fetch(b.base + '/api/cards/c1', { method: 'DELETE', headers: { Origin: FOREIGN } });
   assert.equal(del.status, 403);
   assert.equal(core.readState(b.projectDir).cards.length, 3);
 });
@@ -351,16 +355,14 @@ test('boardToken creates a 0600 file once and returns the same value later and f
   assert.match(a, /^[0-9a-f]{32}$/);
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(boardToken(), a);
-  const script = `import('${path.join(ROOT, 'server', 'http.mjs')}').then((m) => process.stdout.write(m.boardToken()))`;
-  const r = await runNode(['-e', script], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir } });
+  const r = await runNode([PRINT_TOKEN], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir } });
   assert.equal(r.stdout, a);
   assert.deepEqual(fs.readdirSync(e.dataDir).filter((n) => n.includes('.tmp')), []);
 });
 
 test('processes starting together end up with the same token, and an invalid token file is regenerated', async (t) => {
   const e = setupThreadEnv(t);
-  const script = `import('${path.join(ROOT, 'server', 'http.mjs')}').then((m) => process.stdout.write(m.boardToken()))`;
-  const runs = await Promise.all([1, 2, 3, 4, 5].map(() => runNode(['-e', script], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir } })));
+  const runs = await Promise.all([1, 2, 3, 4, 5].map(() => runNode([PRINT_TOKEN], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir } })));
   const tokens = new Set(runs.map((r) => r.stdout));
   assert.equal(tokens.size, 1, [...tokens].join(','));
   assert.match([...tokens][0], /^[0-9a-f]{32}$/);

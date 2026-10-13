@@ -332,6 +332,12 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   animation: slide-in 0.18s ease-out;
 }
 .drawer:focus { outline: none; }
+/* an existing task or idea card fills the view, like a thread */
+.drawer.page { left: 0; width: auto; border-left: 0; box-shadow: none; background: var(--bg); animation: fade-in 0.15s ease-out; }
+.drawer.page .dr-body, .drawer.page .dr-foot { padding-left: max(var(--s4), calc(50% - 380px)); padding-right: max(var(--s4), calc(50% - 380px)); }
+.drawer.page .dr-foot { border-top-color: var(--border-strong); }
+.drawer.page textarea.input { min-height: 240px; }
+.ws-ids { flex: none; display: inline-flex; align-items: center; gap: var(--s2); }
 .dr-head { flex: none; padding: var(--s3) var(--s4) var(--s3); border-bottom: 1px solid var(--border); }
 .dr-head-row { display: flex; align-items: center; gap: var(--s2); min-height: 32px; }
 .dr-head-row .grow { flex: 1 1 auto; }
@@ -593,10 +599,12 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   .board { padding: 0 var(--s3) var(--s3); grid-template-columns: repeat(6, 264px); scroll-snap-type: x proximity; }
   .col { scroll-snap-align: start; }
   .drawer { width: 100vw; border-left: 0; }
+  .drawer.page .dr-body, .drawer.page .dr-foot { padding-left: var(--s3); padding-right: var(--s3); }
   .row2 { grid-template-columns: 1fr; }
   .dr-head, .dr-body, .scroller, .composer, .dr-foot { padding-left: var(--s3); padding-right: var(--s3); }
   .ws-bar { padding: var(--s2) var(--s3); }
   .ws-bar .idchip { order: 1; }
+  .ws-ids .idchip { order: 0; }
   .ws-actions { order: 2; }
   .ws-title { order: 3; flex-basis: 100%; }
   .ws-meta { order: 4; flex-basis: 100%; }
@@ -1778,18 +1786,31 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     (target || elNewBtn).focus({ preventScroll: true });
   }
 
-  function mountDrawer(P) {
+  // page: the form fills the view (no board behind it to click on)
+  function mountDrawer(P, page) {
     const scrim = h('div', 'scrim');
     scrim.addEventListener('click', requestClose);
-    const drawer = h('aside', 'drawer');
+    const drawer = h('aside', page ? 'drawer page' : 'drawer');
     drawer.setAttribute('role', 'dialog');
     drawer.setAttribute('aria-modal', 'true');
     drawer.setAttribute('aria-labelledby', 'drawer-title');
     drawer.tabIndex = -1;
     P.root = drawer;
-    elOverlay.replaceChildren(scrim, drawer);
+    elOverlay.replaceChildren(...(page ? [drawer] : [scrim, drawer]));
     elOverlay.hidden = false;
     elApp.inert = true;
+  }
+
+  function backBtn() {
+    const back = h('button', 'btn back');
+    back.type = 'button';
+    back.title = 'Back to the board (Esc)';
+    back.setAttribute('aria-keyshortcuts', 'Escape');
+    back.append(chev('l'), h('span', null, 'Back to board'));
+    const kb = h('kbd', 'hint', 'Esc'); kb.setAttribute('aria-hidden', 'true');
+    back.appendChild(kb);
+    back.addEventListener('click', requestClose);
+    return back;
   }
 
   function headRow(card, createMode) {
@@ -1871,15 +1892,17 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   function buildTaskPanel(card) {
     const create = !card;
     const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? panelKey(card) : '', confirmDelete: false, starting: false };
-    mountDrawer(P);
+    const page = !create;      // a new card stays a side drawer
+    mountDrawer(P, page);
 
     P.base = create ? { title: '', note: '', status: 'new', kind: 'task' } : { title: card.title, note: card.note || '', status: card.status, kind: card.kind };
     P.baseUpdatedAt = card ? card.updatedAt : '';
 
-    const head = h('div', 'dr-head');
-    const headRowWrap = h('div');
+    const head = h('div', page ? 'ws-bar' : 'dr-head');
+    if (page) head.appendChild(backBtn());
+    const headRowWrap = h('div', page ? 'ws-ids' : null);
     head.appendChild(headRowWrap);
-    const title = h('h2', 'dr-title', create ? 'New card' : card.title);
+    const title = h('h2', page ? 'ws-title' : 'dr-title', create ? 'New card' : card.title);
     title.id = 'drawer-title';
     head.appendChild(title);
     const seenWrap = h('div');
@@ -2135,7 +2158,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       syncBusy();
     }
 
-    // The server turns the card into a thread under the same id; updatePanel then swaps this drawer for the workspace.
+    // The server turns the card into a thread under the same id; updatePanel then swaps this page for the workspace.
     async function doStart({ sessionId, mode, context, agent }) {
       clearError();
       const pk = selKey;
@@ -2178,13 +2201,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     P.update = (c) => {
       P.latestUpdatedAt = c.updatedAt;
       title.textContent = c.title;
-      headRowWrap.replaceChildren(headRow(c, false));
+      headRowWrap.replaceChildren(h('span', 'idchip', c.id), kindMark(c.kind));
       seenWrap.replaceChildren();
-      if (c.seenByClaude === false) {
-        const u = unseenEl('div');
-        u.style.marginTop = '6px';
-        seenWrap.appendChild(u);
-      }
+      if (c.seenByClaude === false) seenWrap.appendChild(unseenEl('div'));
       // follow the server only for fields the user has not touched
       const nb = { title: c.title, note: c.note || '', status: c.status };
       [[fTitle, 'title'], [fNote, 'note'], [fStatus, 'status']].forEach(([f, k]) => {
@@ -2301,14 +2320,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
     // ----- top bar -----
     const bar = h('header', 'ws-bar');
-    const back = h('button', 'btn back');
-    back.type = 'button';
-    back.title = 'Back to the board (Esc)';
-    back.setAttribute('aria-keyshortcuts', 'Escape');
-    back.append(chev('l'), h('span', null, 'Back to board'));
-    const kb = h('kbd', 'hint', 'Esc'); kb.setAttribute('aria-hidden', 'true');
-    back.appendChild(kb);
-    back.addEventListener('click', requestClose);
+    const back = backBtn();
     const chip = h('span', 'idchip', card.id);
     const titleEl = h('h2', 'ws-title');
     titleEl.id = 'ws-title';

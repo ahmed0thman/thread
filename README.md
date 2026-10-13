@@ -239,7 +239,7 @@ Flags can go anywhere in the line. Thread states map to board columns: running i
 - **One board for every project.** Each project has a tab, with a dot when one of its threads is running. A project whose folder was deleted is shown read-only and can be forgotten, which removes its saved cards and logs.
 - **Cards** show their id, kind and title. Thread cards also show their state, the number of turns, the session that started them, a **Not reported** tag when they hold a result the main session has not pulled, the tokens they have used, and their agent when they run as one.
 - **Toolbar:** search by id, title or note; show threads only; filter by the session that started them; add a card. A button in the header switches between light and dark.
-- **Task and idea cards** open in a side panel where you edit the title, note and status. Drag a card to another column to move it. **Start as thread** turns the card into a thread. You choose the session it reports to, **Brief** or **Full copy**, read-only or able to edit files, and an agent from your `.claude/agents/` (or "Same as session"). With Brief, the title is the task and the note is the brief, since nobody writes one on the board. With Full copy, the title and note are the task.
+- **Task and idea cards** open as a full page, like a thread, where you edit the title, note and status. Drag a card to another column to move it. **Start as thread** turns the card into a thread. You choose the session it reports to, **Brief** or **Full copy**, read-only or able to edit files, and an agent from your `.claude/agents/` (or "Same as session"). With Brief, the title is the task and the note is the brief, since nobody writes one on the board. With Full copy, the title and note are the task.
 - **Thread cards** open full-window:
   - **Centre:** the conversation, and a box to send a follow-up. A running turn shows its steps as they happen. A finished turn folds them into one line with its duration and tokens, such as "6 steps · 3m 00s · 48k tokens".
   - **Left:** the thread's session id, the session that started it, a `claude --resume <id>` command that opens the thread as a normal conversation in a terminal, its context (Brief or Full copy), its agent or model and effort, the tokens used, the brief it was given, the latest digest, and every decision across turns. The report command has a copy button. **Report to main session** queues the report: it is delivered with your next message in the session that started the thread, and repeated until that session makes it.
@@ -318,6 +318,7 @@ State is one file per project: `<data dir>/projects/<key>/state.json`, with each
 
 ## What's new
 
+- **0.8.1** Task and idea cards open as a full page, like threads. The plugin has an icon.
 - **0.8.0** Claude picks the sub-agent or model for a thread by how hard the task is. `--model` and `--effort` set them by hand.
 - **0.7.0** Threads start from a brief instead of a copy of the session; `--full` keeps the copy. `--agent` runs a thread as a sub-agent. Token use is recorded per turn and shown on the board.
 - **0.6.0** The board shows a thread's steps live, starts a card as a thread, and can queue a report to the main session.
