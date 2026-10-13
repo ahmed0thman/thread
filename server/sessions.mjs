@@ -13,7 +13,7 @@ const NAME_RANK = { none: 0, 'first-message': 1, 'ai-title': 2, title: 3 };
 export const collapse = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._[\]-]*$/;
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 // A model name or effort level that is safe to pass to the CLI as one argument; otherwise null.
 export const cleanModel = (v) => (typeof v === 'string' && MODEL_RE.test(v) ? v : null);

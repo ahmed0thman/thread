@@ -9,7 +9,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dataDir, envValue, now, projectKey, projectPaths, readState, updateState, withLock } from './state.mjs';
-import { cleanEffort, cleanModel, collapse, sameSession, sessionModel } from './sessions.mjs';
+import { EFFORTS, cleanEffort, cleanModel, collapse, sameSession, sessionModel } from './sessions.mjs';
 
 export * from './state.mjs';
 export * from './sessions.mjs';
@@ -533,7 +533,7 @@ function launchRunner(projectDirArg, card) {
 }
 
 // The checks both ways of starting a thread share. Returns what beginThread stores.
-async function launchOptions(projectDirArg, { sessionId, mode, extraDirs, context = 'brief', brief, agent }) {
+async function launchOptions(projectDirArg, { sessionId, mode, extraDirs, context = 'brief', brief, agent, model, effort }) {
   if (typeof sessionId !== 'string' || !UUID_RE.test(sessionId)) {
     throw new Error('session_id must be a UUID (the main session id)');
   }
@@ -551,9 +551,19 @@ async function launchOptions(projectDirArg, { sessionId, mode, extraDirs, contex
       throw new Error(`Unknown agent "${clip(name, 60)}". ${known.length ? `Available: ${known.join(', ')}.` : 'No agents are defined in .claude/agents.'}`);
     }
   }
-  // An agent brings its own model; otherwise the thread runs as the main session does.
-  const { model, effort } = name ? { model: null, effort: null } : await sessionModel(projectDirArg, sessionId);
-  return { context, brief: text, dirs, agent: name || null, model, effort };
+  const wantModel = typeof model === 'string' ? model.trim() : '';
+  const wantEffort = typeof effort === 'string' ? effort.trim() : '';
+  if (wantModel && !cleanModel(wantModel)) throw new Error(`invalid model "${clip(wantModel, 60)}"`);
+  if (wantEffort && !cleanEffort(wantEffort)) throw new Error(`invalid effort "${clip(wantEffort, 20)}" (use ${EFFORTS.join(', ')})`);
+  if (name && (wantModel || wantEffort)) throw new Error('give an agent, or a model and effort, not both: an agent brings its own');
+  // An agent brings its own model. Otherwise a named model wins over the main session's, and
+  // then the session's effort is not inherited either: not every model takes every level.
+  let runsWith = { model: null, effort: null };
+  if (!name) {
+    const base = wantModel ? { model: wantModel, effort: null } : await sessionModel(projectDirArg, sessionId);
+    runsWith = { model: base.model, effort: wantEffort || base.effort };
+  }
+  return { context, brief: text, dirs, agent: name || null, ...runsWith };
 }
 
 // Gives `card` its thread and launches the first turn. Called inside updateState.
@@ -574,11 +584,11 @@ function beginThread(projectDirArg, card, { sessionId, mode, prompt, ...opts }) 
   launchRunner(projectDirArg, card);
 }
 
-export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs, context, brief, agent } = {}) {
+export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs, context, brief, agent, model, effort } = {}) {
   refuseInsideThread('start');
   const t = typeof title === 'string' ? title.trim() : '';
   const k = typeof task === 'string' ? task.trim() : '';
-  const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief, agent });
+  const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief, agent, model, effort });
   if (!t) throw new Error('title must not be empty');
   if (!k) throw new Error('task must not be empty');
   return updateState(projectDirArg, (state) => {

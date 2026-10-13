@@ -4,7 +4,7 @@ Side threads for Claude Code, with a kanban board.
 
 While Claude is busy on one task, you often think of something else: a question that needs real digging, a doubt about the plan, an idea for later. Asking it in the same session derails the work. Opening a new session loses the context you have built up.
 
-`thread` gives you a third option. A **thread** is a background Claude session with its own tools that works on one task while the main session carries on. Claude gives it a short **brief** of what it needs from your conversation, so it starts cheap. If the task needs everything said so far, a thread can instead be a **full copy** of the session. Nothing it does enters the main session until you ask for its report.
+`thread` gives you a third option. A **thread** is a background Claude session with its own tools that works on one task while the main session carries on. Claude gives it a short **brief** of what it needs from your conversation, so it starts cheap, and picks a sub-agent or model that suits how hard the task is. If the task needs everything said so far, a thread can instead be a **full copy** of the session. Nothing it does enters the main session until you ask for its report.
 
 The plugin also keeps a **board** of tasks, ideas and threads for each project, shown on a local web page where you can read a thread's conversation, see what it did step by step, and send it follow-ups.
 
@@ -20,6 +20,7 @@ The plugin also keeps a **board** of tasks, ideas and threads for each project, 
 - [Security](#security)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
+- [What's new](#whats-new)
 - [Development](#development)
 
 ## Install
@@ -65,11 +66,12 @@ The thread's digest appears under four headings, **Happened**, **Decided**, **Ch
 /thread:board
 ```
 
-By default the thread does not get your whole conversation. Claude writes it a brief from what you typed, which keeps it cheap. Three flags change that:
+By default the thread does not get your whole conversation. Claude writes it a brief from what you typed, which keeps it cheap. Claude also picks what runs the thread by how hard the task is: a cheaper sub-agent or model for simple work, the session's own model for work that needs judgment. Flags change these defaults:
 
 ```text
 /thread:new --full ...           copy the whole session into the thread
-/thread:new --agent worker ...   run the thread as one of your sub-agents
+/thread:new --agent worker ...   run the thread as this sub-agent
+/thread:new --model haiku ...    run the thread on this model
 /thread:new --write ...          let the thread edit files
 ```
 
@@ -168,13 +170,15 @@ A thread can read the project. To let it read somewhere else, name the folder in
 
 Open the board with `/thread:board` and click a thread card. The thread opens full-window: its conversation in the centre with a message box, its ids, digest and decisions on the left, and a step-by-step trace on the right. Type a follow-up there and the thread runs another turn. While a turn runs, the conversation shows what the thread is doing as it happens: its messages and each tool it uses. This is the way to read or continue a thread without putting anything into the main session.
 
+A task or idea card can become a thread from there too. Open the card, press **Start as thread**, and choose the session it reports to, Brief or Full copy, and an agent. When it has finished, **Report to main session** queues its digest for your next message in that session.
+
 ### 8. Several sessions in one project
 
 You have two Claude sessions open in the same project. Session A started thread `c3`. In session B you type `/thread:report c3` by mistake.
 
 Nothing is reported. Claude Code's question popup appears, headed "Wrong session", naming the session that started the thread and the one you are in, with **Cancel (Recommended)** and **Report here**. The digest is handed over only if you choose to report there.
 
-### 9. Keeping a thread cheap, or giving it a different model
+### 9. Keeping a thread cheap: a brief, and a model that fits the task
 
 A thread pays for its context again on every step it takes, so what it starts with matters more than what it writes. In one long session, threads that were full copies re-read 1.35 to 2.86 million input tokens each. A brief thread in the same project used about 91 thousand for a small task.
 
@@ -184,10 +188,17 @@ So the default is the brief. You type what you need, and Claude writes the threa
 /thread:new check that every handoff trigger in section 12 of the plan has a test
 ```
 
-Routine work does not need the main session's model. Name one of the sub-agents in `.claude/agents/` and the thread runs with that agent's model, effort and instructions:
+Routine work does not need the main session's model, and you do not have to say so. Claude is already writing the brief, so it also chooses what runs the thread, at no extra cost:
+
+- If you have sub-agents in `.claude/agents/`, it picks the cheapest one whose description fits the task. The thread then runs with that agent's model, effort and instructions.
+- If you have none, it picks a model: `haiku` for lookups and mechanical work, `sonnet` for routine, well-specified work.
+- For judgment, design or review, when it is unsure, and with `--full`, it keeps the session's own model and effort.
+
+Claude tells you what it chose and why, for example "c7 is running as `worker-high`, the cheapest agent whose description covers reading and listing files". The choice is only as good as your agents' descriptions, so say in each one what it is for. To decide yourself, name the agent or the model:
 
 ```text
 /thread:new --agent haiku-coder list every file that still mentions the old env variable API_HOST
+/thread:new --model opus --effort high review the retry logic for double charges
 ```
 
 Use `--full` only when a brief would lose too much, for example a judgment that depends on a long discussion:
@@ -202,7 +213,7 @@ Each thread's token use is shown on its card and in `/thread:status`, so you can
 
 | Command | What it does |
 |---|---|
-| `/thread:new [--full] [--agent <name>] [--write] <task>` | Start a thread on the task. By default it gets a brief written by Claude and cannot edit files. `--full` copies the whole session instead, `--agent` runs it as one of your sub-agents, `--write` lets it edit files. |
+| `/thread:new [--full] [--agent <name>] [--model <name>] [--effort <level>] [--write] <task>` | Start a thread on the task. By default it gets a brief written by Claude, runs on an agent or model Claude picks for the task, and cannot edit files. `--full` copies the whole session instead, `--agent` or `--model` (with an optional `--effort`) sets what runs it, `--write` lets it edit files. |
 | `/thread:continue <id> <message>` | Send a follow-up to a finished thread. |
 | `/thread:report [id]` | Pull a thread's digest into this session. With no id, picks the one unreported thread this session started. |
 | `/thread:status` | List threads with their state, context, agent or model, turns, tokens used, reported status and who started them. |
@@ -234,7 +245,7 @@ Flags can go anywhere in the line. Thread states map to board columns: running i
 ## How threads work
 
 - **Context.** By default a thread starts a fresh session and knows only the brief and the task. It also loads the project's `CLAUDE.md` on its own, and sees files as they are on disk when it reads them. With `--full` it starts as a copy of the main session at that moment. Either way it does not see anything the main session does afterwards, and neither do its follow-ups: a follow-up resumes the thread's own session. Continue a thread for the same task; start a new one for a new task.
-- **Model and effort.** A thread runs with the same model and effort as the main session, read from the session's transcript when it starts. If they cannot be found, the CLI's defaults apply. With `--agent <name>` the thread runs as that sub-agent, which brings its own model and instructions, on every turn. Agents are the Markdown files in `.claude/agents/` of the project and in `~/.claude/agents/` (top level only; the project's wins on the same name).
+- **Model and effort.** With `/thread:new`, Claude chooses a sub-agent or a model by how hard the task is, unless you name one with `--agent` or `--model`. A thread with neither runs with the same model and effort as the main session, read from the session's transcript when it starts; if they cannot be found, the CLI's defaults apply. A named model does not inherit the session's effort; add `--effort` to set one. An agent brings its own model, effort and instructions, on every turn, and cannot be combined with `--model` or `--effort`. A thread started from the board is not chosen automatically: you pick an agent there, or "Same as session". Agents are the Markdown files in `.claude/agents/` of the project and in `~/.claude/agents/` (top level only; the project's wins on the same name).
 - **Hand-back.** A thread never writes into the main session. Each of its replies ends with the four-heading digest and an ordered step map. `/thread:report` gives the digest to the main session; the step map is only drawn on the board.
 - **Reported status.** A thread counts as reported once the session that started it has pulled its newest result. A follow-up that produces a new result makes it "not reported" again. A follow-up that fails leaves it as it was.
 - **Announcements.** When a thread finishes, the session that started it is told on your next message, not in the middle of a turn.
@@ -280,11 +291,20 @@ State is one file per project: `<data dir>/projects/<key>/state.json`, with each
 |---|---|
 | A thread fails with "claude CLI not found on PATH" | The standalone CLI is not installed or not on `PATH` for Claude Code. Install it and restart. |
 | A full thread fails with "No conversation found with session ID" | The session it was copied from no longer exists, for example after its history was cleared. Start the thread again from the current session. Brief threads do not depend on the old session. |
+| Starting a thread fails with "Unknown agent" | The name is not a file in the project's `.claude/agents/` or in `~/.claude/agents/`. The message lists the names that exist. Built-in and plugin agents cannot run a thread. |
+| Claude picked an agent or model you did not want | Name it yourself with `--agent` or `--model`. If it keeps happening, make the agent's `description` say what it is for and what it is not for; that text is all Claude chooses by. |
+| Starting a thread fails with "give an agent, or a model and effort, not both" | An agent brings its own model and effort. Drop `--model` and `--effort`, or drop `--agent`. |
 | A thread reports that a tool was refused | It needed a permission prompt it could not answer. Allow the tool in your Claude Code permission rules, add it to `THREAD_ALLOW_TOOLS`, or name the folder it needs in the task. |
 | The board says it needs its access link | The link was opened without its token, or from an old bookmark. Run `/thread:board` and open the link it prints. |
 | `/thread:report` lists threads instead of reporting | This session started none or several unreported threads. Pass the id. |
 | A thread shows "running" for a long time | Check its card on the board. A thread whose process died is marked failed the next time the board or a command looks at it. |
 | A finished thread was not announced | Announcements arrive with your next message to the session that started the thread. |
+
+## What's new
+
+- **0.8.0** Claude picks the sub-agent or model for a thread by how hard the task is. `--model` and `--effort` set them by hand.
+- **0.7.0** Threads start from a brief instead of a copy of the session; `--full` keeps the copy. `--agent` runs a thread as a sub-agent. Token use is recorded per turn and shown on the board.
+- **0.6.0** The board shows a thread's steps live, starts a card as a thread, and can queue a report to the main session.
 
 ## Development
 
@@ -296,7 +316,7 @@ hooks/, scripts/    session-start and prompt hooks
 skills/             the slash commands
 server/
   state.mjs         paths, the state file and its lock
-  sessions.mjs      session names
+  sessions.mjs      session names, and the model a session runs on
   core.mjs          cards, threads, the wrong-session guard, project listing
   runner.mjs        the detached process that runs one thread turn
   mcp.mjs           the MCP server and its tools

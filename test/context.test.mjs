@@ -415,3 +415,43 @@ test('thread_start documents the brief, context and agent parameters', async (t)
   assert.ok(!/full copy of this conversation/.test(tool.description));
   assert.equal(tool.inputSchema.required.includes('brief'), false);
 });
+
+// ------------------------------------------------------------ a chosen model and effort
+
+test('a named model replaces the session model and does not inherit its effort; a named effort is kept', async (t) => {
+  const e = setup(t);
+  await parentTranscript(e, [assistantLine('claude-opus-5-5', 'max')]);
+  const a = await start(e, { model: 'haiku' });
+  assert.deepEqual([a.thread.model, a.thread.effort, a.thread.agent], ['haiku', null, null]);
+  const b = await start(e, { model: ' sonnet ', effort: 'low' });
+  assert.deepEqual([b.thread.model, b.thread.effort], ['sonnet', 'low']);
+  const c = await start(e, { effort: 'medium' });
+  assert.deepEqual([c.thread.model, c.thread.effort], ['claude-opus-5-5', 'medium'], 'the session model with another effort');
+  await waitFor(() => core.readState(e.projectDir).cards.every((x) => x.thread.runState === 'idle'));
+  const first = e.readLog().find((r) => valueOf(r.argv, '--model') === 'haiku');
+  assert.ok(first, 'the named model reaches the CLI');
+  assert.equal(first.argv.includes('--effort'), false);
+});
+
+test('a bad model or effort, or an agent together with a model, is refused and creates no card', async (t) => {
+  const e = setup(t);
+  writeAgents(path.join(e.projectDir, '.claude', 'agents'), { 'worker.md': agentFile({ name: 'worker' }) });
+  await assert.rejects(start(e, { model: '--dangerously-skip-permissions' }), /invalid model/);
+  await assert.rejects(start(e, { effort: 'ultra' }), /invalid effort "ultra" \(use low, medium, high, xhigh, max\)/);
+  await assert.rejects(start(e, { agent: 'worker', model: 'haiku' }), /not both/);
+  await assert.rejects(start(e, { agent: 'worker', effort: 'low' }), /not both/);
+  assert.equal(core.readState(e.projectDir).cards.length, 0);
+});
+
+test('thread_start takes model and effort, reports them, and tells Claude how to choose', async (t) => {
+  const e = setup(t);
+  const c = mcp(t, e);
+  await c.init();
+  const r = await c.call('thread_start', { title: 'Lookup', task: 'list the routes', session_id: PARENT_SESSION, model: 'haiku', effort: 'low' });
+  assert.equal(r.isError, false, r.text);
+  assert.match(r.text, /brief context, model haiku, effort low/);
+  const tool = (await c.request('tools/list', {})).result.tools.find((x) => x.name === 'thread_start');
+  assert.deepEqual(tool.inputSchema.properties.effort.enum, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.ok(tool.inputSchema.properties.model);
+  assert.match(tool.description, /by how hard the task is/);
+});

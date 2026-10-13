@@ -28,7 +28,7 @@ const replyError = (id, code, message) => send({ jsonrpc: '2.0', id, error: { co
 
 // ---------- tool definitions ----------
 
-const { STATUSES, MODES, KINDS, CONTEXTS } = core;
+const { STATUSES, MODES, KINDS, EFFORTS, CONTEXTS } = core;
 
 const ID_PROP = { type: 'string', description: 'Card id, for example "c4".' };
 const SESSION_PROP = { type: 'string', description: 'This session\'s id (a UUID), taken from the "[thread plugin]" note added at session start. Falls back to the CLAUDE_CODE_SESSION_ID environment variable if omitted.' };
@@ -46,6 +46,9 @@ const TOOLS = [
       'Pass the session id from the "[thread plugin]" SessionStart note as session_id. ' +
       'The default mode is "read" (the thread may read, search and analyse but not edit files). ' +
       'Use mode "write" only when the user asks for the thread to change files. ' +
+      'Unless the user named an agent or a model, choose who runs the thread by how hard the task is: the cheapest sub-agent from .claude/agents whose description fits, ' +
+      'or, when none is defined, a model ("haiku" for lookups and mechanical work, "sonnet" for routine well-specified work). ' +
+      'Leave agent and model out for judgment, design or review, when unsure, and with context "full"; the thread then runs as this session does. ' +
       'The thread runs headless and cannot answer permission prompts: it can read inside the project and use web search and fetch, ' +
       'but any other folder it must read has to be listed in extra_dirs.',
     inputSchema: {
@@ -55,7 +58,9 @@ const TOOLS = [
         task: { type: 'string', description: 'What the thread should do, written so that it stands alone. Be specific.' },
         context: { type: 'string', enum: CONTEXTS, description: '"brief" (default): a fresh session that knows only brief and task. "full": a copy of this whole conversation; use it only when the task depends on much of what was said, because it costs far more tokens.' },
         brief: { type: 'string', description: 'What the thread needs to know from this conversation; it has not seen it. A good brief gives the goal, the decisions and constraints that apply, exact file paths, what was already tried or ruled out, and the meaning of any project term the task uses. Leave out anything the task does not need and anything in CLAUDE.md. As long as the task needs and no longer. Ignored with context "full".' },
-        agent: { type: 'string', description: 'Optional name of a sub-agent from .claude/agents (project or user) to run the thread as; it brings its own model, effort and instructions. Without it the thread uses the same model and effort as this session.' },
+        agent: { type: 'string', description: 'Optional name of a sub-agent from .claude/agents (project or user) to run the thread as; it brings its own model, effort and instructions. Built-in and plugin agents are not accepted. Do not combine with model or effort.' },
+        model: { type: 'string', description: 'Optional model for the thread when no agent is given: an alias such as "haiku", "sonnet" or "opus", or a full model id. Without agent and model the thread uses the same model and effort as this session.' },
+        effort: { type: 'string', enum: EFFORTS, description: 'Optional effort level for the thread when no agent is given. Defaults to this session\'s effort, or to the model\'s own default when model is given.' },
         session_id: SESSION_PROP,
         mode: { type: 'string', enum: MODES, description: '"read" (default) forbids file edits. "write" lets the thread edit files; use it only when the user asks for that.' },
         extra_dirs: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Absolute paths of folders outside the project that the task needs to read, for example another repository the user named. Only list folders the task actually requires.' },
@@ -339,6 +344,8 @@ const HANDLERS = {
       context: optEnum(args, 'context', CONTEXTS),
       brief: optStr(args, 'brief'),
       agent: optStr(args, 'agent'),
+      model: optStr(args, 'model'),
+      effort: optEnum(args, 'effort', EFFORTS),
     });
     const t = card.thread;
     const extra = t.dirs.length ? `, extra folders: ${t.dirs.join(', ')}` : '';
