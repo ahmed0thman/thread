@@ -9,7 +9,7 @@ Guidance for Claude Code when working in this repository. `README.md` is the use
 ```text
 .claude-plugin/     plugin.json (the version lives only here), marketplace.json, icon.png
 .mcp.json           starts server/mcp.mjs as the plugin's MCP server
-hooks/, scripts/    SessionStart and UserPromptSubmit hooks (scripts/hook.mjs)
+hooks/, scripts/    SessionStart, UserPromptSubmit and Sub-agent hooks (scripts/hook.mjs); the Stop hook's background waiter that wakes an idle session (scripts/waiter.mjs)
 skills/             the slash commands; each SKILL.md tells Claude which tool to call
 server/
   state.mjs         paths, the state file and its lock
@@ -19,10 +19,17 @@ server/
   lanes.mjs         delegation lanes: reads the lane settings from the delegate skills (never writes them)
   runs.mjs          sub-agent runs on a card: recorded by hooks, their transcripts read for the board
   waits.mjs         the questions a session asks the user on the board, and their answers
+  wake.mjs          what wakes an idle session from the board (setting `wake`), and the one-waiter-per-session file
+  fields.mjs        card fields (type, priority, labels, blockedBy, criteria), history workers, workedBy; no imports
   runner.mjs        the detached process that runs one thread turn
   mcp.mjs           the MCP server and its tools
   http.mjs          the board server (loopback only, token, Host and Origin checks)
-  board.html        the board page: one self-contained file, no framework
+  page.mjs          assembleBoardPage(): joins the board pieces into the one page GET / sends; lists them, in order
+  board/            the board page's source pieces; no framework
+    page.html       markup, the tiny theme script, and placeholders inside <style> and <script>; it also opens and
+                    closes the script's `(function () { 'use strict'; ... })();` wrapper around the placeholder
+    css/*.css       the style pieces; their order is CSS_PIECES in server/page.mjs
+    js/*.js         the script pieces (fragments of one scope, not modules); their order is JS_PIECES in server/page.mjs
 test/               node:test suites; fake-claude.mjs stands in for the claude CLI
   fake-delegate/    fake delegate skills and relay for the lane tests
   fixtures/         data and small scripts the tests run; node --test also runs every .mjs here, so a script must exit 0 with no arguments
@@ -38,7 +45,7 @@ node --test
 claude plugin validate .
 ```
 
-A change to `server/board.html` also needs a look in a browser (see "Checking the board page"); the page tests only read its source. So does a CSS-only change: no test sees it.
+A change to a file in `server/board/` also needs a look in a browser (see "Checking the board page"); the page tests only read its source. So does a CSS-only change: no test sees it.
 
 A test never passes an inline script to `node -e`; put the script in `test/fixtures/` (the plugin directory's validator flags it).
 
@@ -51,7 +58,7 @@ A test never passes an inline script to `node -e`; put the script in `test/fixtu
 - **The data directory is owner-only.** A folder the plugin makes there goes through `mkdirPrivate`/`mkdirPrivateSync` and a file it writes gets `mode: PRIVATE_FILE` (both in `server/state.mjs`); `tightenDataDir()` narrows older ones at MCP start. Do not write into the data directory with the default modes.
 - **Stages are not fixed.** Never hard-code `in_progress`, `done` and so on outside the defaults in `server/config.mjs`. Use the project's effective config (`readConfig`) and its roles. A thread card's stage is always derived from its run state.
 - **The board's guarantees:** it listens on `127.0.0.1` only, requires the access token, checks Host and Origin on writes, makes no network calls, and cannot change settings. Do not weaken any of them.
-- **Text that reaches the page is set as text, never as HTML.** `board.html` has no `innerHTML` sinks; keep it that way.
+- **Text that reaches the page is set as text, never as HTML.** The board page (`server/board/`) has no `innerHTML` sinks; keep it that way.
 - **Cross-version tests run released code.** They take it from a git tag or a release commit (`RELEASED_REFS` in `test/helpers.mjs`), never `HEAD`, which stops meaning a release once new work is committed. A missing ref fails the test; only a checkout with no git history skips.
 - **No over-engineering.** Build what was asked. If a request is unclear or turns out to need a design decision, stop and ask.
 - **Secrets:** never print or log environment values, tokens or the contents of `board.token`.
@@ -71,7 +78,7 @@ A test never passes an inline script to `node -e`; put the script in `test/fixtu
 The page is checked with headless Chrome against a demo server, never against the live board:
 
 1. A small script outside the repository sets `THREAD_DATA_DIR` to its own folder, writes a state file with invented data, and calls `startBoardServer(projectDir, { port, token })` from `server/http.mjs`.
-2. Screenshot: `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1 --user-data-dir=<temp> --window-size=1440,900 --virtual-time-budget=4000 --screenshot=<file>.png "http://127.0.0.1:<port>/?t=<token>#/<project key>"`. Add `/<card id>` to open a card. Headless Chrome will not go narrower than about 500 px.
+2. Screenshot: `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1 --user-data-dir=<temp> --window-size=1440,900 --virtual-time-budget=4000 --screenshot=<file>.png "http://127.0.0.1:<port>/?t=<token>#/<project key>"`. The address is a hash: `#/` is the projects home, `#/<project key>` a project's default view (Summary, or Board when it is chat-only), `#/<project key>/<view>` one of `summary`, `board`, `list`, `milestones`, `waiting`, and `#/<project key>/<card id>` a card's page (`cN` or `new`). Headless Chrome will not go narrower than about 500 px; `Emulation.setDeviceMetricsOverride` over the DevTools protocol goes narrower, and `Emulation.setEmulatedMedia` picks light or dark (the system theme decides otherwise).
 3. Clicks and typing need Chrome's DevTools protocol (`--remote-debugging-port`); plain screenshots cannot do them. Say what was not exercised.
 4. Check light and dark, a narrow width, a project with custom stages, and a chat-only project.
 
@@ -85,7 +92,7 @@ Screenshots for `docs/` use invented data only (a fictional shop), and the heade
 4. When the owner asks: commit, push, then `git tag vX.Y.Z && git push origin vX.Y.Z` and `gh release create vX.Y.Z` with notes written for users.
 5. Update the owner's install: `claude plugin marketplace update thread-marketplace`, then `claude plugin update thread@thread-marketplace`. Tell them which sessions still run the old version (`pgrep -fl "server/mcp.mjs"` shows the version folder of each) and that those windows need a reload.
 
-The repository is also submitted to Anthropic's plugin directory, whose validator scans every file in it. What it has flagged before, so do not reintroduce it: an inline `node -e` script in a test (use a file), a remote-looking URL next to a `${...}` placeholder, a missing icon. Keep every non-image file under 256 KiB and the repository under 512 files. `server/board.html` is the largest file, about 240 KiB when this was written (`wc -c server/board.html`; the limit is 262144 bytes): check it after every change to the page and trim before it gets near the limit.
+The repository is also submitted to Anthropic's plugin directory, whose validator scans every file in it. What it has flagged before, so do not reintroduce it: an inline `node -e` script in a test (use a file), a remote-looking URL next to a `${...}` placeholder, a missing icon. Keep every non-image file under 256 KiB and the repository under 512 files. The board page is split into the pieces in `server/board/` for this reason (the server joins them, so the browser still gets one self-contained page): each piece must stay under 256 KiB (`wc -c server/board/page.html server/board/css/* server/board/js/*`; the limit is 262144 bytes per file), and a test holds each to 200 KB so there is room left. `server/board/js/thread.js` is the largest, about 60 KB when this was written: when a piece gets near 150 KB, split it. The pieces are joined in the order listed in `server/page.mjs` (`CSS_PIECES`, `JS_PIECES`) with nothing between them, so the order is part of the page: **a new piece must be added to that list**, and a test fails when a file in `css/` or `js/` is not listed (or a listed one is missing). The script pieces are fragments of one scope, each starting at a line boundary, so a cut may only be made between top-level statements. No script piece may contain `</script` nor a style piece `</style`; a test checks that too.
 
 ## Not yet tested
 

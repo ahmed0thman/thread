@@ -73,8 +73,8 @@ test('listProjects lists two projects newest first with counts and exists', (t) 
   const list = core.listProjects();
   assert.deepEqual(list.map((p) => p.key), [newer.key, older.key]);
   const [n, o] = list;
-  assert.deepEqual({ ...n }, { key: newer.key, projectDir: newer.dir, name: 'newer', exists: false, cards: 1, threads: 0, running: 0, waiting: 0, lastActivity: '2026-06-01T00:00:00.000Z' });
-  assert.deepEqual({ ...o }, { key: older.key, projectDir: older.dir, name: 'older', exists: true, cards: 2, threads: 1, running: 1, waiting: 0, lastActivity: '2026-01-03T00:00:00.000Z' });
+  assert.deepEqual({ ...n }, { key: newer.key, projectDir: newer.dir, name: 'newer', exists: false, cards: 1, threads: 0, running: 0, open: 1, done: 0, waiting: 0, lastActivity: '2026-06-01T00:00:00.000Z' });
+  assert.deepEqual({ ...o }, { key: older.key, projectDir: older.dir, name: 'older', exists: true, cards: 2, threads: 1, running: 1, open: 2, done: 0, waiting: 0, lastActivity: '2026-01-03T00:00:00.000Z' });
   assert.equal(core.projectDirForKey(older.key), older.dir);
   assert.equal(core.projectDirForKey('0123456789ab'), null);
   assert.equal(core.projectDirForKey('../../etc'), null);

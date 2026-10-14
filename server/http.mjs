@@ -1,16 +1,15 @@
 // Board HTTP server: loopback only, no dependencies.
 import http from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { chmodSync, existsSync, linkSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as core from './core.mjs';
 import { listLanesWithRelay } from './lanes.mjs';
+import { assembleBoardPage } from './page.mjs';
 import { markRunStopped, readRunText, runActivity } from './runs.mjs';
 
 const MAX_BODY = 64 * 1024;
 const MAX_PORT_TRIES = 20;
-const BOARD_FILE = new URL('./board.html', import.meta.url);
 const DEFAULT_PORT = 47800;
 const TOKEN_RE = /^[0-9a-f]{32,64}$/;
 const WRITE_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
@@ -127,6 +126,31 @@ function pick(body, keys) {
   return out;
 }
 
+// The project-management fields of a card (see fields.mjs): a string, or a list; null or an empty value removes one.
+// Their values are checked by the core, which names what is wrong.
+function cardFields(body) {
+  const out = {};
+  for (const k of core.FIELD_NAMES) {
+    const v = body[k];
+    if (v === undefined) continue;
+    const list = k === 'labels' || k === 'blockedBy' || k === 'criteria';
+    if (v !== null && (list ? !Array.isArray(v) && typeof v !== 'string' : typeof v !== 'string')) throw new HttpError(400, `${k} must be ${list ? 'a list' : 'a string'}`);
+    out[k] = v;
+  }
+  return out;
+}
+
+const PATCH_KEYS = ['title', 'note', 'status', 'parent', ...core.FIELD_NAMES];
+// What the page's "New" panel sends (issue.js): the same as a patch, and the kind.
+const CREATE_KEYS = [...PATCH_KEYS, 'kind'];
+
+// A key the card calls do not take is a mistake worth telling the sender about (a lane, blocked_by).
+function checkKeys(body, allowed) {
+  for (const k of Object.keys(body)) {
+    if (!allowed.includes(k)) throw new HttpError(400, k === 'blocked_by' ? 'unknown key blocked_by: the key is blockedBy' : `unknown key ${k.slice(0, 40)}; a card takes: ${allowed.join(', ')}`);
+  }
+}
+
 const THREAD_ROUTES = new Set(['POST messages', 'POST end', 'POST report-request', 'DELETE report-request', 'GET activity']);
 
 // One route table for every project. `sub` is the path below the project
@@ -187,8 +211,16 @@ async function handleProject(req, res, projectDir, sub, query) {
   if (isCardCreate) {
     requireJson(req);
     const body = await readJsonBody(req);
+    checkKeys(body, CREATE_KEYS);
     const args = pick(body, ['title', 'note', 'status', 'kind', 'parent']);
-    const card = await core.addCard(projectDir, { ...args, source: 'user' });
+    Object.assign(args, cardFields(body));
+    let card;
+    try {
+      card = await core.addCard(projectDir, { ...args, source: 'user' });
+    } catch (e) {
+      if (e && e.constructor === Error) e.message = e.message.replace(/\bblocked_by\b/g, 'blockedBy');
+      throw e;
+    }
     send(res, 201, viewOf(card));
     return;
   }
@@ -196,16 +228,25 @@ async function handleProject(req, res, projectDir, sub, query) {
   if (cm && method === 'PATCH') {
     requireJson(req);
     const body = await readJsonBody(req);
+    checkKeys(body, PATCH_KEYS);
     const args = pick(body, ['title', 'note', 'status']);
     if (body.parent === null) args.parent = null; // null takes the card out of its milestone, like ''
     else Object.assign(args, pick(body, ['parent']));
-    const card = await core.updateCard(projectDir, cm[1], args, { source: 'user' });
+    Object.assign(args, cardFields(body));
+    let card;
+    try {
+      card = await core.updateCard(projectDir, cm[1], args, { source: 'user' });
+    } catch (e) {
+      // the core names the field as the MCP tool does (blocked_by); this API calls it blockedBy
+      if (e && e.constructor === Error) e.message = e.message.replace(/\bblocked_by\b/g, 'blockedBy');
+      throw e;
+    }
     send(res, 200, viewOf(card));
     return;
   }
   if (cm && method === 'DELETE') {
     req.resume();
-    await core.removeCard(projectDir, cm[1]);
+    await core.removeCard(projectDir, cm[1], { source: 'user' });
     send(res, 200, { ok: true });
     return;
   }
@@ -291,6 +332,8 @@ function projectsView(homeDir) {
       cards: 0,
       threads: 0,
       running: 0,
+      open: 0,
+      done: 0,
       waiting: 0,
       lastActivity: new Date().toISOString(),
     });
@@ -312,12 +355,12 @@ function makeHandler(homeDir, token, stop) {
 
     if (method === 'GET' && path === '/') {
       try {
-        const page = await readFile(BOARD_FILE, 'utf8');
+        const page = await assembleBoardPage();
         const html = page.replace('__THREAD_VERSION__', () => escapeAttribute(core.VERSION));
         send(res, 200, html, { 'Content-Type': 'text/html; charset=utf-8' });
       } catch (e) {
-        log('board.html read failed:', e && e.message);
-        send(res, 503, 'board.html could not be read');
+        log('board page read failed:', e && e.message);
+        send(res, 503, 'the board page could not be read');
       }
       return;
     }
@@ -391,7 +434,8 @@ function makeHandler(homeDir, token, stop) {
 
 // What the board page gets for a card. The status is the stage it is shown in (see
 // core.effectiveStatus), a milestone carries its progress, and a thread gets the parsed
-// hand-back (free text, digest sections, step map) on each turn. Computed per response; never stored.
+// hand-back (free text, digest sections, step map) on each turn. It also carries workedBy, and verified: false for a
+// card with acceptance criteria that sits in the done stage without an approving review. Computed per response; never stored.
 // `cards` are the project's stored cards, for the progress of a milestone.
 function withViews(card, cfg, cards) {
   if (!card) return card;
@@ -402,7 +446,17 @@ function withViews(card, cfg, cards) {
   if (view.parent && !cards.some((c) => c.id === view.parent && c.kind === 'milestone')) delete view.parent;
   if (card.kind === 'milestone') {
     view.progress = core.milestoneProgress(cards, card.id, cfg);
+    return threadView(view);
   }
+  // a card removed since it was named as a blocker is not shown
+  if (view.blockedBy !== undefined) {
+    const live = core.liveBlockers(card, cards);
+    if (live.length) view.blockedBy = live; else delete view.blockedBy;
+  }
+  view.workedBy = core.workedBy(card);
+  // criteria in the done stage without an approving review: the board can move a card there, and so could an older plugin version
+  // (and 0.11.0 turned cards into threads without checking for criteria, so a thread can carry them too)
+  if (core.hasCriteria(card) && view.status === cfg.taskRoles.done && !core.reviewApproved(card, cfg.taskRoles.done)) view.verified = false;
   return threadView(view);
 }
 

@@ -1,0 +1,66 @@
+/* ---------- shapes (markers that never rely on colour alone) ---------- */
+.shape { display: inline-block; width: 10px; height: 10px; flex: none; position: relative; color: var(--k, var(--muted)); }
+.s-circle { border-radius: 50%; background: currentColor; }
+.s-ring { border-radius: 50%; border: 2px solid currentColor; }
+.s-dring { border-radius: 50%; border: 2px dashed currentColor; }
+.s-square { border-radius: 2px; background: currentColor; }
+.s-tri { background: currentColor; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.s-diamond { background: currentColor; transform: rotate(45deg) scale(0.82); }
+.s-hex { background: currentColor; clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0 50%); }
+.s-hdiamond { border: 2px solid currentColor; transform: rotate(45deg) scale(0.82); }
+.s-pulse { border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
+.s-check { width: 6px; height: 10px; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(45deg) translate(-1px, -2px); margin: 0 2px; }
+.s-cross::before, .s-cross::after { content: ""; position: absolute; left: 4px; top: -1px; width: 2px; height: 12px; background: currentColor; border-radius: 1px; }
+.s-cross::before { transform: rotate(45deg); }
+.s-cross::after { transform: rotate(-45deg); }
+
+/* waiting for you: one shape per kind, built like the others */
+.s-wq { width: 11px; height: 8px; margin-bottom: 3px; border-radius: 3px; background: currentColor; }
+.s-wq::after { content: ""; position: absolute; left: 2px; bottom: -3px; border: 3px solid transparent; border-top-color: currentColor; border-left-color: currentColor; }
+.s-wc { border-radius: 50%; border: 2px solid currentColor; }
+.s-wc::after { content: ""; position: absolute; inset: 1px; border-radius: 50%; background: currentColor; }
+.s-wr { width: 8px; height: 8px; margin: 0 2px 2px 0; border-radius: 50%; border: 2px solid currentColor; }
+.s-wr::after { content: ""; position: absolute; left: 6px; top: 7px; width: 2px; height: 5px; background: currentColor; border-radius: 1px; transform: rotate(-45deg); }
+.s-wt { border-radius: 2px; border: 2px solid currentColor; }
+[data-wk="question"] { --k: var(--wq); --kbg: var(--wq-bg); }
+[data-wk="choice"] { --k: var(--wc); --kbg: var(--wc-bg); }
+[data-wk="review"] { --k: var(--wr); --kbg: var(--wr-bg); }
+[data-wk="todo"] { --k: var(--wt); --kbg: var(--wt-bg); }
+
+[data-kind="did"] { --k: var(--did); --kbg: var(--did-bg); }
+[data-kind="found"] { --k: var(--found); --kbg: var(--found-bg); }
+[data-kind="decided"] { --k: var(--decided); --kbg: var(--decided-bg); }
+[data-kind="changed"] { --k: var(--changed); --kbg: var(--changed-bg); }
+[data-kind="open"] { --k: var(--open); --kbg: var(--open-bg); }
+[data-kind="error"] { --k: var(--error); --kbg: var(--error-bg); }
+[data-kind="working"] { --k: var(--run); --kbg: var(--run-bg); }
+[data-run="running"] { --k: var(--run); --kbg: var(--run-bg); }
+[data-run="idle"] { --k: var(--fin); --kbg: var(--fin-bg); }
+[data-run="failed"] { --k: var(--fail); --kbg: var(--fail-bg); }
+[data-run="ended"] { --k: var(--end); --kbg: var(--end-bg); }
+[data-ck="task"] { --k: var(--muted); }
+[data-ck="idea"] { --k: var(--idea); }
+[data-ck="thread"] { --k: var(--thread); }
+[data-ck="milestone"] { --k: var(--milestone); }
+
+.pill, .tag {
+  display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px 1px 6px;
+  border-radius: var(--r1); font-size: 12px; font-weight: 600; line-height: 18px; white-space: nowrap;
+}
+.pill { color: var(--k); background: var(--kbg); }
+.idchip, .refchip {
+  display: inline-block; font: 500 12px/18px var(--mono); padding: 0 6px; border-radius: var(--r1);
+  background: var(--surface-2); color: var(--text); white-space: nowrap;
+}
+.refchip { font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+.tag .shape { width: 9px; height: 9px; color: inherit; }
+.tag.attn { color: var(--warn); background: var(--warn-bg); }
+.tag.quiet { color: var(--muted); font-weight: 400; padding-left: 0; }
+.tag.queued { color: var(--accent); background: var(--accent-bg); }
+.ws-rep .btn { min-width: 150px; }
+.ws-rep .btn.narrow { min-width: 0; }
+.ws-rep { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); }
+.kindmark { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.kindmark .shape { width: 9px; height: 9px; }
+.muted { color: var(--muted); }
+

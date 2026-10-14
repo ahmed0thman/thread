@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="thread-version" content="__THREAD_VERSION__">
+<script>
+// Apply the saved theme, or the system one, before the first paint.
+(function () {
+  var t = null;
+  try { t = localStorage.getItem('thread-board-theme'); } catch (e) { /* storage unavailable */ }
+  if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+<link rel="icon" href="data:,">
+<title>Thread board</title>
+<style>
+/*__BOARD_CSS__*/
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <h1>Thread board<span class="plugin-version" id="plugin-version" title="thread plugin version"></span></h1>
+    <nav class="switcher" id="switcher" aria-label="Project" hidden>
+      <a class="home-link" id="home-link" href="#/" title="All projects">All projects</a>
+      <label class="sel proj-sel"><span class="sr-only">Project</span><select class="input" id="proj-select" aria-label="Switch project"></select></label>
+    </nav>
+    <span class="dir" id="dir"><span class="dir-head" id="dir-head"></span><span class="dir-tail" id="dir-tail"></span></span>
+    <button type="button" class="btn" id="theme-btn"></button>
+    <span class="conn" id="conn" role="status" data-state="connecting"><span class="shape s-ring"></span><span id="conn-text">Connecting</span></span>
+  </header>
+  <nav class="views" id="views" aria-label="Project views" hidden></nav>
+  <div class="toolbar" id="toolbar" role="search" hidden>
+    <div class="search" id="search-wrap">
+      <input class="input" id="search" type="search" placeholder="Search id, title or note" aria-label="Search cards by id, title or note" autocomplete="off" spellcheck="false">
+      <span class="kbd" aria-hidden="true">/</span>
+    </div>
+    <div class="filters" id="filters">
+      <button type="button" class="btn ghost" id="threads-only" aria-pressed="false">Threads only</button>
+      <button type="button" class="btn wait-pill" id="waiting-btn" aria-pressed="false" aria-keyshortcuts="w" hidden><span>Waiting for you</span><span class="wait-n tnum" id="waiting-n">0</span><kbd class="hint" aria-hidden="true">W</kbd></button>
+      <span class="wait-legend" id="wait-legend" role="group" aria-label="Kinds of items waiting for you" hidden></span>
+      <label class="sel" id="session-wrap" hidden><span>Session</span><select class="input" id="session-filter" aria-label="Filter threads by the session that started them"></select></label>
+      <label class="sel" id="milestone-wrap" hidden><span>Milestone</span><select class="input" id="milestone-filter" aria-label="Filter cards by milestone"></select></label>
+      <span class="list-filters" id="list-filters" role="group" aria-label="List filters" hidden>
+        <label class="sel" hidden><span>Type</span><select class="input" id="ltype-filter" aria-label="Filter cards by type"></select></label>
+        <label class="sel" hidden><span>Priority</span><select class="input" id="lprio-filter" aria-label="Filter cards by priority"></select></label>
+        <label class="sel" hidden><span>Label</span><select class="input" id="llabel-filter" aria-label="Filter cards by label"></select></label>
+        <button type="button" class="btn" id="lblocked" aria-pressed="false" title="Only cards that wait on another card (blocked by)">Blocked</button>
+        <button type="button" class="btn" id="lunverified" aria-pressed="false" title="Only cards in the done stage whose acceptance criteria nobody approved">Done, not verified</button>
+      </span>
+      <span class="toolbar-note" id="filter-note" aria-live="polite"></span>
+    </div>
+    <button type="button" class="btn primary" id="new-btn" aria-keyshortcuts="n">New card <kbd class="hint" aria-hidden="true">N</kbd></button>
+  </div>
+  <p class="mode-note" id="old-note" role="status" hidden>This board is served by a session on an older plugin version, so your stages and milestones are not shown. Run <code>/thread:board</code> in an updated session, then reload this page.</p>
+  <p class="mode-note" id="version-note" role="status" hidden><span id="version-text"></span> <button type="button" class="btn small" id="version-reload">Reload</button></p>
+  <p class="mode-note" id="mode-note" role="status" hidden>The task board is off for this project (chat-only), so only threads are shown. Run <code>/thread:setup</code> to turn it on.</p>
+  <div class="callout warn notice" id="notice" role="status" hidden></div>
+  <main class="board" id="board" aria-label="Board columns" hidden></main>
+  <main class="pane" id="pane" aria-label="Project" hidden></main>
+</div>
+
+<div class="gate" id="gate" role="alert" hidden>
+  <div class="gate-card">
+    <h1>The board needs its access link</h1>
+    <p>This page does not have a valid access token, so the board server turned it away. Nothing is wrong with your cards.</p>
+    <p>In Claude Code, run <code>/thread:board</code> and open the link it prints.</p>
+    <div class="gate-row">
+      <button type="button" class="btn primary" id="gate-retry">Retry</button>
+      <span class="foot-note" id="gate-msg" role="status"></span>
+    </div>
+  </div>
+</div>
+
+<div class="banner" id="banner" role="alert" hidden>
+  <div class="banner-text" id="banner-text"></div>
+  <button type="button" class="btn small" id="banner-close">Dismiss</button>
+</div>
+<div class="overlay" id="overlay" hidden></div>
+
+<script>
+(function () {
+  'use strict';
+
+/*__BOARD_JS__*/
+})();
+</script>
+</body>
+</html>

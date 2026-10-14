@@ -1,0 +1,85 @@
+/* ---------- the Summary view ---------- */
+.sum { max-width: 1280px; }
+.sum .grow { flex: 1 1 0; }
+.sum-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: var(--s3); margin-bottom: var(--s4); }
+.sum-tile {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: var(--s3) var(--s4);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r3); color: inherit; text-decoration: none;
+}
+.sum-tile-n { font: 400 28px/1.2 var(--serif); }
+.sum-tile-label { font-size: 12.5px; color: var(--muted); }
+.sum-tile.hot { background: var(--danger-bg); border-color: var(--danger); }
+.sum-tile.hot .sum-tile-n, .sum-tile.hot .sum-tile-label { color: var(--danger); }
+.sum-tile.hot .sum-tile-n { font-weight: 600; }
+.sum-tile.is-link:hover { box-shadow: var(--shadow-sm); border-color: var(--border-strong); }
+.sum-tile.is-link .sum-tile-label::after { content: " \2192"; }
+.sum-tile:focus-visible { outline-offset: 2px; }
+
+.sum-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4); align-items: start; }
+.sum-col { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+.sum-panel { min-width: 0; padding: var(--s4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r3); }
+.sum-title { margin: 0; font: 400 17px/1.3 var(--serif); }
+.sum-sub { margin: 2px 0 var(--s3); font-size: 12.5px; }
+.sum-title + .sum-none, .sum-title + ul, .sum-title + .sum-svg { margin-top: var(--s3); }
+.sum-none { margin: 0; }
+.sum-more { display: inline-block; margin: var(--s2) 0 0; font-size: 12.5px; }
+p.sum-more { color: var(--muted); }
+.sum-about { margin-top: var(--s4); background: transparent; border-style: dashed; }
+.sum-about .sum-title { font-size: 15px; margin-bottom: var(--s2); }
+.sum-notes { margin: 0; padding-left: 1.2em; font-size: 12.5px; display: flex; flex-direction: column; gap: 2px; }
+.sum-empty { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s3); padding: var(--s5); margin-bottom: var(--s4); background: var(--surface); border: 1px dashed var(--border-strong); border-radius: var(--r3); }
+.sum-empty p { margin: 0; }
+
+/* created and done per week */
+.sum-svg { display: block; width: 100%; max-width: 560px; height: auto; overflow: visible; }
+.sum-svg text { font: 11px var(--sans); fill: var(--muted); }
+.sum-svg text.val { fill: var(--text); font-size: 10.5px; font-weight: 600; }
+.sum-svg line.grid { stroke: var(--border); stroke-dasharray: 2 3; }
+.sum-svg line.axis { stroke: var(--border-strong); }
+.sum-svg .bar-created { fill: var(--did-bg); stroke: var(--did); stroke-width: 1.5; }
+.sum-svg .bar-done { fill: var(--fin); }
+.sum-legend { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); margin-top: var(--s2); font-size: 12.5px; }
+.sum-key { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.swatch.created { background: var(--did-bg); border: 1.5px solid var(--did); }
+.swatch.done { background: var(--fin); }
+
+/* work by worker */
+.sum-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
+.sum-row { display: grid; grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr); gap: var(--s3); align-items: center; }
+.sum-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12.5px var(--mono); }
+.sum-bars { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.sum-line { display: grid; grid-template-columns: 3.4em minmax(0, 1fr) 3.6em; gap: var(--s2); align-items: center; font-size: 12px; }
+.sum-val { text-align: right; }
+.sum-track { height: 10px; border-radius: 3px; background: var(--col); overflow: hidden; }
+.sum-track i { display: block; height: 100%; min-width: 2px; border-radius: 3px; }
+.fill-done { background: var(--fin); }
+.fill-tokens { background: repeating-linear-gradient(135deg, var(--thread) 0 4px, transparent 4px 7px); box-shadow: inset 0 0 0 1.5px var(--thread); }
+
+/* waiting for you */
+.sum-waits, .sum-ms-list, .sum-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.sum-wait-item, .sum-ms-item {
+  display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: var(--s2) var(--s3);
+  background: var(--col); border: 1px solid transparent; border-radius: var(--r2); color: inherit; text-decoration: none;
+}
+.sum-wait-item:hover, .sum-ms-item:hover { border-color: var(--border-strong); }
+.sum-wait-item:focus-visible, .sum-ms-item:focus-visible { outline-offset: 2px; }
+.sum-wait-top, .sum-ms-top { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+.sum-wait-top time { flex: none; font-size: 12px; color: var(--muted); }
+.sum-wait-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.sum-ms-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.sum-ms-item .ms-prog .ms-bar { max-width: 320px; }
+
+/* time in a stage */
+.sum-stages li { display: flex; align-items: baseline; gap: var(--s3); padding: 4px 0; border-bottom: 1px solid var(--border); }
+.sum-stages li:last-child { border-bottom: 0; }
+.sum-stage-n { min-width: 4.5em; text-align: right; font-size: 12px; }
+
+/* one column: the panels in the order they are meant to be read, not the order of the two columns */
+@media (max-width: 900px) {
+  .sum-cols { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .sum-col { display: contents; }
+  .sum-panel { margin-bottom: var(--s4); }
+  .sum-flow { order: 1; } .sum-who { order: 2; } .sum-wait { order: 3; } .sum-ms { order: 4; } .sum-stage { order: 5; }
+  .sum-about { margin-top: 0; }
+}

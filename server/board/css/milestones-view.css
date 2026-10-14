@@ -1,0 +1,28 @@
+/* ---------- the Milestones view ---------- */
+.ms-items { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: var(--s3); align-items: start; }
+.ms-item {
+  display: flex; flex-direction: column; gap: var(--s3); min-width: 0; padding: var(--s4);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r3);
+}
+.ms-item-head { display: flex; align-items: center; gap: var(--s2); min-width: 0; color: inherit; text-decoration: none; border-radius: var(--r1); }
+.ms-item-head:hover .ms-item-title { text-decoration: underline; }
+.ms-item-head:focus-visible { outline-offset: 3px; }
+.ms-item-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 17px/1.3 var(--serif); }
+.ms-item .ms-prog .ms-bar { max-width: none; }
+.ms-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2); margin: 0; }
+.ms-counts > div { padding: 4px var(--s3); background: var(--col); border-radius: var(--r2); }
+.ms-counts dt { font-size: 12px; color: var(--muted); }
+.ms-counts dd { margin: 0; font: 400 18px/1.3 var(--serif); }
+.ms-open-title { margin: 0; font-size: 12px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.ms-open { list-style: none; margin: -4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.ms-open-link {
+  display: flex; align-items: center; gap: var(--s2); min-width: 0; padding: 4px var(--s2); margin: 0 calc(-1 * var(--s2));
+  color: inherit; text-decoration: none; border-radius: var(--r1);
+}
+.ms-open-link:hover { background: var(--surface-2); }
+.ms-open-link:focus-visible { outline-offset: -2px; }
+.ms-open-link .idchip { flex: none; }
+.ms-open-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ms-open-stage { flex: none; font-size: 12px; }
+.ms-open .btn { margin-left: calc(-1 * var(--s2)); color: var(--muted); }
+.ms-allDone { margin: 0; font-size: 12.5px; }

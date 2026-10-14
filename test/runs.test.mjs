@@ -338,7 +338,7 @@ for (const ref of RELEASED_REFS) test(`the plugin version at ${ref} keeps runs a
   const c = core.readState(e.projectDir).cards.find((x) => x.id === 'c1');
   assert.equal(c.title, 'Renamed by the older version', 'the older version did write');
   assert.deepEqual(c.runs, [run]);
-  assert.deepEqual(c.history, history, 'the older version adds no entry, and drops none');
+  assert.deepEqual(c.history.slice(0, history.length), history, 'the older version drops none of the entries (from 0.11.0 on it adds its own)');
 });
 
 // ---------------------------------------------------------------- the board's route

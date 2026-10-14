@@ -11,13 +11,15 @@ import { fileURLToPath } from 'node:url';
 import { dataDir, envValue, now, projectKey, projectPaths, readState, updateState, withLock } from './state.mjs';
 import { EFFORTS, cleanEffort, cleanModel, collapse, sameSession, sessionModel } from './sessions.mjs';
 import { ChatOnlyError, DEFAULT_STAGES, readConfig } from './config.mjs';
-import { openWaits } from './waits.mjs';
+import { openWaits, reviewApproved } from './waits.mjs';
+import { FIELD_NAMES, addHistory, cleanFields, cleanWorker, hasCriteria, liveBlockers } from './fields.mjs';
 import { RESUME, laneSnapshot, requireRunnableLane, unusableLane } from './lanes.mjs';
 
 export * from './state.mjs';
 export * from './sessions.mjs';
 export * from './config.mjs';
 export * from './waits.mjs';
+export * from './fields.mjs';
 
 // The default stage ids. A project's own stages come from readConfig.
 export const STATUSES = DEFAULT_STAGES.map((s) => s.id);
@@ -61,9 +63,17 @@ function listedProject(key) {
     let threads = 0;
     let running = 0;
     let waiting = 0;
+    let open = 0;
+    let done = 0;
+    const cfg = readConfig(s.projectDir);
     for (const c of s.cards) {
       if (!c || typeof c !== 'object') continue;
       waiting += openWaits(c).length;
+      // open: not in the done stage, milestones left out; a chat-only board shows threads only
+      if (c.kind !== 'milestone' && (cfg.mode !== 'chat' || c.kind === 'thread')) {
+        if (effectiveStatus(c, cfg) === (isThread(c) ? cfg.roles.done : cfg.taskRoles.done)) done += 1;
+        else open += 1;
+      }
       const t = Date.parse(c.updatedAt);
       if (Number.isFinite(t) && !(t <= newest)) newest = t;
       if (c.kind === 'thread') {
@@ -80,8 +90,10 @@ function listedProject(key) {
       cards: s.cards.length,
       threads,
       running,
-      // items waiting for the user; chat-only projects do not show them
-      waiting: readConfig(s.projectDir).mode === 'chat' ? 0 : waiting,
+      // cards not done (milestones left out), cards done, and items waiting for the user; chat-only projects do not show waiting items
+      open,
+      done,
+      waiting: cfg.mode === 'chat' ? 0 : waiting,
       lastActivity: new Date(Number.isFinite(newest) ? newest : st.mtimeMs).toISOString(),
     };
   } catch {
@@ -254,16 +266,53 @@ export const tail = (s, n = 500) => collapse(s).slice(-n);
 
 // ---------------------------------------------------------------- board cards
 
-// What happened to a task or idea card: created, moved, edited, by the user or by Claude. Newest last, at most
-// MAX_HISTORY entries. An older plugin version ignores the field and keeps it.
-export const MAX_HISTORY = 50;
-function addHistory(card, by, entry, at = now()) {
-  if (!Array.isArray(card.history)) card.history = [];
-  card.history.push({ at, by: by === 'user' ? 'user' : 'claude', ...entry });
-  if (card.history.length > MAX_HISTORY) card.history.splice(0, card.history.length - MAX_HISTORY);
+const FIELD_LABEL = { type: 'type', priority: 'priority', labels: 'labels', blockedBy: 'blocked by', criteria: 'criteria' };
+
+// Each blocker must be another card of the project, and not a milestone.
+function checkBlockers(state, card, ids) {
+  for (const id of ids) {
+    if (id === card.id) throw new Error(`${id} cannot be blocked by itself`);
+    const b = state.cards.find((c) => c.id === id);
+    if (!b) throw new Error(`blocked_by: card not found: ${id}`);
+    if (b.kind === 'milestone') throw new Error(`blocked_by: ${id} is a milestone; a card is blocked by tasks, ideas or threads`);
+  }
 }
 
-export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent, lane } = {}) {
+// Sets the cleaned fields (see cleanFields) on `card`: null removes one, undefined leaves it. A milestone takes none, and a
+// thread takes no blockers or criteria. Returns the labels of the fields that changed.
+function setFields(state, card, fields) {
+  const changed = [];
+  for (const k of FIELD_NAMES) {
+    const v = fields[k];
+    if (v === undefined) continue;
+    if (v !== null) {
+      if (card.kind === 'milestone') throw new Error(`a milestone cannot have ${FIELD_LABEL[k]}`);
+      if (isThread(card) && (k === 'blockedBy' || k === 'criteria')) throw new Error(`a thread cannot have ${FIELD_LABEL[k]}`);
+      if (k === 'blockedBy') checkBlockers(state, card, v);
+    }
+    if (v === null) {
+      if (card[k] !== undefined) { delete card[k]; changed.push(FIELD_LABEL[k]); }
+    } else if (JSON.stringify(card[k]) !== JSON.stringify(v)) { card[k] = v; changed.push(FIELD_LABEL[k]); }
+  }
+  return changed;
+}
+
+// Moving a card that has acceptance criteria to the done stage needs the owner's approval of a review item. Only Claude's own
+// changes are held to it; the board's are not (its views show such a card as not verified).
+function gateDone(card, cfg, to) {
+  if (to !== cfg.taskRoles.done || !hasCriteria(card) || reviewApproved(card, cfg.taskRoles.done)) return;
+  throw new Error(`${card.id} has acceptance criteria: raise a review item with wait_add (kind review) and move it to ${to} after the owner approves.`);
+}
+
+// Claude may add acceptance criteria to a card but not take them away or reword them: they are the owner's test of the work.
+// The existing lines must stay as they are, in order; only the board (source user) may change them freely.
+function guardCriteria(card, next) {
+  if (next === undefined || !hasCriteria(card)) return;
+  const kept = Array.isArray(next) && next.length >= card.criteria.length && card.criteria.every((c, i) => c === next[i]);
+  if (!kept) throw new Error(`${card.id}'s acceptance criteria can only be changed by the owner on the board; you may add lines.`);
+}
+
+export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent, lane, type, priority, labels, blockedBy, criteria, worker } = {}) {
   const cfg = readConfig(projectDirArg);
   requireTasks(cfg);
   const t = typeof title === 'string' ? title.trim() : '';
@@ -276,6 +325,8 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
   const parentId = cleanParent(parent);
   const laneName = cleanLane(lane);
   if (laneName) checkLaneKind(kind);
+  const fields = cleanFields({ type, priority, labels, blockedBy, criteria });
+  const by = cleanWorker(worker);
   return updateState(projectDirArg, (state) => {
     if (parentId) checkParent(state, parentId, kind);
     state.seq += 1;
@@ -293,13 +344,15 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
     };
     if (parentId) card.parent = parentId;
     if (laneName) card.lane = laneName;
-    addHistory(card, source, { type: 'created', to: status }, ts);
+    setFields(state, card, fields);
+    if (source === 'claude') gateDone(card, cfg, status);
+    addHistory(card, source, { type: 'created', to: status }, ts, by);
     state.cards.push(card);
     return card;
   });
 }
 
-export async function updateCard(projectDirArg, id, { title, note, status, parent, lane } = {}, { source = 'claude' } = {}) {
+export async function updateCard(projectDirArg, id, { title, note, status, parent, lane, type, priority, labels, blockedBy, criteria, worker } = {}, { source = 'claude' } = {}) {
   const cfg = readConfig(projectDirArg);
   if (title !== undefined) {
     if (typeof title !== 'string' || !title.trim()) throw new Error('title must not be empty');
@@ -308,6 +361,8 @@ export async function updateCard(projectDirArg, id, { title, note, status, paren
   if (status !== undefined && cfg.mode !== 'chat') checkStatus(cfg, status);
   const parentId = cleanParent(parent);
   const laneName = cleanLane(lane);
+  const cleaned = cleanFields({ type, priority, labels, blockedBy, criteria });
+  const by = cleanWorker(worker);
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, id);
     if (!isThread(card)) requireTasks(cfg);
@@ -323,30 +378,49 @@ export async function updateCard(projectDirArg, id, { title, note, status, paren
     if (laneName) {
       if (card.lane !== laneName) { checkLaneKind(card.kind); card.lane = laneName; changed = true; fields.push('lane'); }
     } else if (laneName === null && card.lane !== undefined) { delete card.lane; changed = true; fields.push('lane'); }
+    if (source === 'claude') guardCriteria(card, cleaned.criteria);
+    const setNow = setFields(state, card, cleaned);
+    if (setNow.length) { changed = true; fields.push(...setNow); }
     if (title !== undefined && title.trim() !== card.title) { card.title = title.trim(); changed = true; fields.push('title'); }
     if (note !== undefined && String(note) !== card.note) { card.note = String(note ?? ''); changed = true; fields.push('note'); }
     const from = card.status;
     // A thread's stored stage is set by its run state only: a status it may be sent (its own, or the one it is shown in) is no change.
-    if (status !== undefined && !isThread(card) && status !== card.status) { card.status = status; changed = true; }
+    if (status !== undefined && !isThread(card) && status !== card.status) {
+      if (source === 'claude') gateDone(card, cfg, status);   // after the fields above, so criteria set in the same call count
+      card.status = status;
+      changed = true;
+    }
+    const last = Array.isArray(card.history) ? card.history[card.history.length - 1] : null;
+    if (!changed && by && !isThread(card) && !(last && last.worker === by)) {
+      // nothing else changed: the call only says who did the work (once, not again for the worker the latest entry already names)
+      addHistory(card, source, { type: 'worked' }, now(), by);
+    }
     if (changed) {
       const ts = now();
       card.updatedAt = ts;
       if (source === 'user') card.seenByClaude = false;
       // a thread's own page shows its turns, not this
       if (!isThread(card)) {
-        if (card.status !== from) addHistory(card, source, { type: 'moved', from, to: card.status }, ts);
-        if (fields.length) addHistory(card, source, { type: 'edited', fields }, ts);
+        // The card's own record of leaving the done stage: the capped history cannot be trusted to keep the move (see leftDoneAt).
+        if (card.status !== from && from === cfg.taskRoles.done) card.leftDoneAt = ts;
+        if (card.status !== from) addHistory(card, source, { type: 'moved', from, to: card.status }, ts, by);
+        if (fields.length) addHistory(card, source, { type: 'edited', fields }, ts, by);
       }
     }
     return card;
   });
 }
 
-export async function removeCard(projectDirArg, id) {
+export async function removeCard(projectDirArg, id, { source = 'claude' } = {}) {
   const cfg = readConfig(projectDirArg);
   await updateState(projectDirArg, (state) => {
     const card = findCard(state, id);
     if (!isThread(card)) requireTasks(cfg);
+    // Removing a card with acceptance criteria that is neither done nor approved would also remove the owner's test of it.
+    // A thread can carry them too: 0.11.0 turned cards into threads without checking.
+    if (source === 'claude' && hasCriteria(card) && effectiveStatus(card, cfg) !== cfg.taskRoles.done && !reviewApproved(card, cfg.taskRoles.done)) {
+      throw new Error(`${card.id} has acceptance criteria and is not done or approved, so only the owner can remove it, on the board.`);
+    }
     if (isThread(card) && card.thread.runState === 'running' && isAlive(card.thread.pid)) {
       throw new Error(`thread ${id} is still running; end it before removing the card`);
     }
@@ -768,6 +842,14 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
   });
 }
 
+// A thread takes no acceptance criteria or blockers (setFields refuses them), so a card that has some cannot become one. The
+// Blocked by list counts whole, finished blockers included (a thread card cannot hold the field at all); only a blocker whose
+// card was removed is not counted, as the board does not show it either.
+function refuseThreadFields(card, cards) {
+  const has = [hasCriteria(card) ? 'acceptance criteria' : '', liveBlockers(card, cards).length ? 'a Blocked by list' : ''].filter(Boolean);
+  if (has.length) throw new Error(`A card with acceptance criteria or a Blocked by list cannot be started as a thread; clear them first (${card.id} has ${has.join(' and ')}).`);
+}
+
 // Turns a task or idea card into a thread in place: same id, title, note and source.
 // Nobody writes a brief on the board, so in brief mode the card's note is the brief.
 // A card that has a lane runs on it; the lane is read from the card, never from the caller.
@@ -775,6 +857,7 @@ export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mo
   refuseInsideThread('start');
   requireTasks(readConfig(projectDirArg));
   const existing = readState(projectDirArg).cards.find((c) => c.id === cardId);
+  if (existing && existing.kind !== 'thread' && existing.kind !== 'milestone') refuseThreadFields(existing, readState(projectDirArg).cards);
   const cardLane = existing && existing.kind !== 'thread' && existing.kind !== 'milestone' && typeof existing.lane === 'string' ? existing.lane : '';
   const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief: existing && existing.note, agent, lane: cardLane });
   return updateState(projectDirArg, (state) => {
@@ -782,6 +865,7 @@ export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mo
     if (card.kind === 'thread') throw new Error(`card ${cardId} is already a thread`);
     if (card.kind === 'milestone') throw new Error(`card ${cardId} is a milestone and cannot be started as a thread`);
     if ((typeof card.lane === 'string' ? card.lane : '') !== cardLane) throw new Error(`card ${cardId} changed while it was starting; try again`);
+    refuseThreadFields(card, state.cards);
     const text = typeof card.note === 'string' ? card.note.trim() : '';
     card.kind = 'thread';
     // In brief mode the note already travels as the brief, so the task is the title alone.

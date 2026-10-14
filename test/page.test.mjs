@@ -1,13 +1,71 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import vm from 'node:vm';
 import fs from 'node:fs';
 import path from 'node:path';
-import vm from 'node:vm';
+import os from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { SERVER_DIR, FakeEl } from './helpers.mjs';
+import { assembleBoardPage, CSS_PIECES, JS_PIECES } from '../server/page.mjs';
 
-const html = fs.readFileSync(path.join(SERVER_DIR, 'board.html'), 'utf8');
+const html = await assembleBoardPage();
 
-test('every inline script in board.html compiles', () => {
+const BOARD_DIR = path.join(SERVER_DIR, 'board');
+const PIECES = ['page.html', ...CSS_PIECES, ...JS_PIECES];
+const PIECE_LIMIT = 204800;   // 200 KB, under the plugin directory's 256 KiB file limit with room to grow
+
+test('the board page pieces each stay under 200 KB', () => {
+  for (const name of PIECES) {
+    const size = fs.statSync(path.join(BOARD_DIR, name)).size;
+    assert.ok(size < PIECE_LIMIT, `${name} is ${size} bytes, the limit is ${PIECE_LIMIT}`);
+  }
+});
+
+test('the style and script pieces cannot end their own tag', () => {
+  const read = (name) => fs.readFileSync(path.join(BOARD_DIR, name), 'utf8');
+  for (const name of JS_PIECES) assert.doesNotMatch(read(name), /<\/script/i, name);
+  for (const name of CSS_PIECES) assert.doesNotMatch(read(name), /<\/style/i, name);
+});
+
+test('every file in the style and script folders is listed in page.mjs, and every listed file exists', () => {
+  for (const [dir, listed] of [['css', CSS_PIECES], ['js', JS_PIECES]]) {
+    const onDisk = fs.readdirSync(path.join(BOARD_DIR, dir)).map((f) => `${dir}/${f}`).sort();
+    assert.deepEqual(onDisk, [...listed].sort(), `${dir}: the files in the folder and the list in page.mjs differ`);
+    assert.equal(new Set(listed).size, listed.length, `${dir}: a piece is listed twice`);
+  }
+});
+
+test('the assembled page has no placeholder left and keeps the version marker', () => {
+  assert.doesNotMatch(html, /__BOARD_(CSS|JS)__/);
+  assert.ok(html.includes('__THREAD_VERSION__'), 'the server fills the version in');
+  assert.equal((html.match(/<style>/g) || []).length, 1);
+  assert.equal((html.match(/<script>/g) || []).length, 2);
+});
+
+test('a lost placeholder or a missing piece fails the assembly instead of serving a page without style or script', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'thread-pieces-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  for (const name of PIECES) {
+    fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+    fs.copyFileSync(path.join(BOARD_DIR, name), path.join(dir, name));
+  }
+  const url = pathToFileURL(dir + path.sep);
+  assert.equal(await assembleBoardPage(url), html);
+  const page = fs.readFileSync(path.join(dir, 'page.html'), 'utf8');
+  fs.writeFileSync(path.join(dir, 'page.html'), page.replace('/*__BOARD_JS__*/', ''));
+  await assert.rejects(assembleBoardPage(url), /__BOARD_JS__/);
+  fs.writeFileSync(path.join(dir, 'page.html'), page);
+  for (const name of [CSS_PIECES[0], CSS_PIECES.at(-1), JS_PIECES[0], JS_PIECES.at(-1)]) {
+    const file = path.join(dir, name);
+    const text = fs.readFileSync(file);
+    fs.rmSync(file);
+    await assert.rejects(assembleBoardPage(url), /ENOENT/, name);
+    fs.writeFileSync(file, text);
+  }
+  assert.equal(await assembleBoardPage(url), html);
+});
+
+test('every inline script in the board page compiles', () => {
   const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
   assert.ok(blocks.length > 0, 'no inline script found');
   blocks.forEach((code, i) => {
@@ -19,11 +77,12 @@ test('every inline script in board.html compiles', () => {
   });
 });
 
-test('board.html builds the page without innerHTML-style sinks and loads nothing from the network', () => {
+test('the board page builds the page without innerHTML-style sinks and loads nothing from the network', () => {
   for (const sink of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write']) {
-    assert.ok(!html.includes(sink), `board.html uses ${sink}`);
+    assert.ok(!html.includes(sink), `the board page uses ${sink}`);
   }
-  assert.doesNotMatch(html, /https?:\/\//);
+  // the SVG namespace names the kind of element createElementNS makes; it is never fetched
+  assert.doesNotMatch(html.replaceAll('http://www.w3.org/2000/svg', ''), /https?:\/\//);
 });
 
 function versionPage() {
@@ -125,7 +184,7 @@ test('missing versions and failed version requests hide the mismatch note', asyn
 
 test('the poll loop asks for the server version every few seconds and stops once the access page shows', async () => {
   const m = /\/\/ ---- tick[^\n]*\n([\s\S]*?)\/\/ ---- end tick ----/.exec(html);
-  assert.ok(m, 'the tick block is missing from board.html');
+  assert.ok(m, 'the tick block is missing from the board page');
   const run = async (state) => {
     const calls = [];
     const g = { halted: false, projects: [], projectsAt: Date.now(), versionAt: 0, lanesAt: 0, selKey: 'k', PROJECTS_MS: 5000, POLL_MS: 2000, loopTimer: 1, ...state };
@@ -150,7 +209,7 @@ test('the poll loop asks for the server version every few seconds and stops once
 // The pure token and agent helpers sit between two marker comments so they can be run without a DOM.
 function pageHelpers() {
   const m = /\/\/ ---- tokens and agents[^\n]*\n([\s\S]*?)\/\/ ---- end tokens and agents ----/.exec(html);
-  assert.ok(m, 'the helper block is missing from board.html');
+  assert.ok(m, 'the helper block is missing from the board page');
   return vm.runInNewContext(`${m[1]}; ({ fmtTokens, turnTokens, threadTokens, tokensText, totalText, agentLabel, modelText, isBrief })`);
 }
 
@@ -206,7 +265,7 @@ test('the start step sends context and agent, and asks for the agent list when i
 // The pure milestone and stage helpers sit between two marker comments too.
 function milestoneHelpers() {
   const m = /\/\/ ---- milestones and stages[^\n]*\n([\s\S]*?)\/\/ ---- end milestones and stages ----/.exec(html);
-  assert.ok(m, 'the milestone helper block is missing from board.html');
+  assert.ok(m, 'the milestone helper block is missing from the board page');
   return vm.runInNewContext(`${m[1]}; ({ NO_MS, isThread, clip, chatStages, matches, childrenOf, progressOf, groupByStage, milestoneReport })`);
 }
 
@@ -290,7 +349,7 @@ test('the new-card form and thread pages send parent, and a cleared one is sent 
 // The gear menu's choice of actions sits between two marker comments, so it runs on its own.
 function gearActions() {
   const m = /\/\/ ---- gear menu actions[^\n]*\n([\s\S]*?)\/\/ ---- end gear menu actions ----/.exec(html);
-  assert.ok(m, 'the gear menu block is missing from board.html');
+  assert.ok(m, 'the gear menu block is missing from the board page');
   return vm.runInNewContext(`${m[1]}; cardActions`);
 }
 const reportOf = (c) => (!c.thread || c.thread.lastResult == null ? '' : c.thread.reported ? 'yes' : c.thread.reportRequestedAt ? 'queued' : 'not');
@@ -329,6 +388,22 @@ test('gear menu: a task or idea can move to every other stage, join a milestone,
   const none = plain(cardActions(card('c3', 'idea', 'Loyalty', 'todo', { parent: 'gone' }), ctx({ choices: [['c1', 'Launch']] })));
   assert.equal(none[1].items.find((a) => a.checked).value, '', 'a missing milestone counts as none');
   assert.deepEqual(plain(cardActions(t, ctx())).map((a) => a.group || (a.sep ? '-' : a.id)), ['Move to', '-', 'start', 'delete'], 'no milestone to pick, no milestone group');
+});
+
+test('gear menu: criteria or blockers disable Start as thread with a reason for tasks and ideas', () => {
+  const cardActions = gearActions();
+  for (const kind of ['task', 'idea']) {
+    for (const fields of [{ criteria: ['Tests pass'] }, { blockedBy: ['c9'] }, { criteria: ['Tests pass'], blockedBy: ['c9'] }]) {
+      const start = flat(cardActions(card('c2', kind, 'Card', 'todo', fields), ctx())).find((a) => a.id === 'start');
+      assert.equal(start.disabled, true);
+      assert.equal(start.why, 'A card with acceptance criteria or a Blocked by list cannot be started as a thread; clear them first.');
+    }
+    for (const fields of [{}, { criteria: [], blockedBy: [] }]) {
+      const start = flat(cardActions(card('c2', kind, 'Card', 'todo', fields), ctx())).find((a) => a.id === 'start');
+      assert.equal(start.disabled, false);
+      assert.equal(start.why, '');
+    }
+  }
 });
 
 test('gear menu: a milestone offers Copy report and Delete, and a read-only board only what does not write', () => {
@@ -412,7 +487,7 @@ function menuPage(over = {}) {
   const actions = /\/\/ ---- gear menu actions[^\n]*\n([\s\S]*?)\/\/ ---- end gear menu actions ----/.exec(html);
   const menuSrc = /\/\/ ---- gear menu \(page\.test[^\n]*\n([\s\S]*?)\/\/ ---- end gear menu ----/.exec(html);
   const milestones = /\/\/ ---- milestones and stages[^\n]*\n([\s\S]*?)\/\/ ---- end milestones and stages ----/.exec(html);
-  assert.ok(actions && menuSrc && milestones, 'the gear menu blocks are missing from board.html');
+  assert.ok(actions && menuSrc && milestones, 'the gear menu blocks are missing from the board page');
   const doc = { listeners: {}, activeElement: null, documentElement: { clientWidth: 1280 }, addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }, createElement(tag) { return new FakeEl(doc, tag); } };
   doc.body = new FakeEl(doc, 'body');
   const calls = [];
@@ -457,6 +532,25 @@ ${menuSrc[1]}
   const docFire = (type, target) => { const e = { type, target, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }; (doc.listeners[type] || []).forEach((fn) => fn(e)); return e; };
   return { page, doc, state, calls, put, items, item, docFire, newBtn, board };
 }
+
+test('gear menu (fake DOM): blocked thread starts do nothing and become available when the fields are cleared', () => {
+  for (const fields of [{ criteria: ['Tests pass'] }, { blockedBy: ['c9'] }]) {
+    const t = menuPage();
+    const c = card('c2', 'task', 'Card', 'todo', fields);
+    t.put(c).click();
+    assert.equal(t.item('start').getAttribute('aria-disabled'), 'true');
+    assert.equal(t.item('start').title, 'A card with acceptance criteria or a Blocked by list cannot be started as a thread; clear them first.');
+    t.item('start').click();
+    assert.deepEqual(t.calls, []);
+    assert.equal(t.page.startFor, '');
+    t.put({ ...c, criteria: [], blockedBy: [] });
+    t.page.syncMenu();
+    assert.equal(t.item('start').getAttribute('aria-disabled'), null);
+    t.item('start').click();
+    assert.equal(t.page.startFor, 'c2');
+    assert.deepEqual(t.calls, [['open', 'c2', true]]);
+  }
+});
 
 test('gear menu (fake DOM): a press on the gear cancels the next drag once, and a stale press does not', () => {
   const t = menuPage();
@@ -655,7 +749,7 @@ const LANES = {
 function lanePage(lanes = null) {
   const m = /\/\/ ---- delegation lanes[^\n]*\n([\s\S]*?)\/\/ ---- end delegation lanes ----/.exec(html);
   const t = /\/\/ ---- tokens and agents[^\n]*\n([\s\S]*?)\/\/ ---- end tokens and agents ----/.exec(html);
-  assert.ok(m && t, 'the lanes block is missing from board.html');
+  assert.ok(m && t, 'the lanes block is missing from the board page');
   const doc = { createElement: (tag) => new FakeEl(doc, tag) };
   doc.body = new FakeEl(doc, 'body');
   const env = {
@@ -766,7 +860,6 @@ test('the page wires lanes in: read on the slow cycle and when a project shows, 
   assert.match(html, /f\.milestone \+ '\|' \+ f\.waiting \+ '\|' \+ lanesSig/, 'the board is drawn again when the lanes change');
   assert.match(html, /if \(card\.lane \|\| \(card\.thread && card\.thread\.lane\)\) ctx\.push\(laneSig\(card\)\)/, 'so is a card page');
   assert.doesNotMatch(html, /\blane\s*:\s*(fMs|fTitle|fNote|fStatus)|patch\.lane|bodyObj\.lane/, 'no write sends a lane');
-  assert.ok(Buffer.byteLength(html) < 256 * 1024);
 });
 
 const SNAP = (over = {}) => ({ name: 'code-codex', implementer: 'codex', model: 'gpt-fake', effort: 'high', variant: null, readOnly: false, source: 'global', session: 'codex-sess-1', ...over });
@@ -907,7 +1000,7 @@ test('start step: it says what runs, offers only read access for agy, and warns 
 
 function runsBlock() {
   const m = /\/\/ ---- sub-agent runs[^\n]*\n([\s\S]*?)\/\/ ---- end sub-agent runs ----/.exec(html);
-  assert.ok(m, 'the sub-agent runs block is missing from board.html');
+  assert.ok(m, 'the sub-agent runs block is missing from the board page');
   return vm.runInNewContext(`${m[1]}; ({ TOOL_VERB, runTitle, runPillState, runSteps, historyRows, quietNote, shownEvents })`);
 }
 
@@ -1060,7 +1153,6 @@ test('the card workspace: tasks and ideas open it, a milestone keeps its page, a
   assert.match(html, /workspaceShell\(P, \{ lead: h\('span', 'ws-ids'\)/);
   assert.match(html, /'cards\/' \+ encodeURIComponent\(c\.id\) \+ '\/runs\/' \+ run\.n \+ '\/activity\?offset=' \+ d\.offset/, 'the page names a card and a run, never a path');
   assert.doesNotMatch(html, /transcript/i, 'the page knows nothing of transcript paths');
-  assert.ok(Buffer.byteLength(html) < 256 * 1024);
 });
 
 test('run views: the step count is the run\'s own, the newest events are kept with a marker, and a reset starts the list over', async () => {
@@ -1165,7 +1257,7 @@ test('run views: the full prompt and report come from the run\'s route when the 
 
 function paneMemory() {
   const m = /\/\/ ---- pane memory[^\n]*\n([\s\S]*?)\/\/ ---- end pane memory ----/.exec(html);
-  assert.ok(m, 'the pane memory block is missing from board.html');
+  assert.ok(m, 'the pane memory block is missing from the board page');
   return vm.runInNewContext(`${m[1]}; ({ THREAD_PANES_KEY, CARD_PANES_KEY, loadCollapsed, saveCollapsedTo, revealCardPane })`);
 }
 

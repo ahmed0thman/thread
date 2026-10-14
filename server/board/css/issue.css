@@ -1,0 +1,75 @@
+/* ---------- drawer (task, idea and new-card forms) ---------- */
+.overlay { position: fixed; inset: 0; z-index: 40; }
+.scrim { position: absolute; inset: 0; background: var(--scrim); animation: fade-in 0.15s ease-out; }
+.drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; width: min(520px, 100vw);
+  display: flex; flex-direction: column; background: var(--surface); color: var(--text);
+  border-left: 1px solid var(--border); box-shadow: var(--shadow-md);
+  animation: slide-in 0.18s ease-out;
+}
+.drawer:focus { outline: none; }
+/* an existing task or idea card fills the view, like a thread */
+.drawer.page { left: 0; width: auto; border-left: 0; box-shadow: none; background: var(--bg); animation: fade-in 0.15s ease-out; }
+.drawer.page .dr-head, .drawer.page .dr-body, .drawer.page .dr-foot { padding-left: max(var(--s4), calc(50% - 380px)); padding-right: max(var(--s4), calc(50% - 380px)); }
+.drawer.page .dr-head { border-bottom: 0; padding-top: var(--s5); }
+.drawer.page .dr-body { gap: var(--s6); padding-top: var(--s5); padding-bottom: var(--s6); }
+.drawer.page textarea.input { min-height: 240px; }
+.drawer.page.is-ms textarea.input { min-height: 96px; }   /* a milestone's cards are the main content */
+.ws-ids { flex: none; display: inline-flex; align-items: center; gap: var(--s2); }
+.dr-head { flex: none; padding: var(--s4) var(--s5) var(--s3); border-bottom: 1px solid var(--border); }
+.dr-head-row { display: flex; align-items: center; gap: var(--s2); min-height: 32px; }
+.dr-head-row .grow { flex: 1 1 auto; }
+.dr-title { margin: var(--s2) 0 0; font: 400 20px/1.3 var(--serif); overflow-wrap: anywhere; }
+.drawer.page .ws-title { font-size: 22px; }
+.dr-body { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: var(--s4) var(--s5); display: flex; flex-direction: column; gap: var(--s4); }
+.dr-foot {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2);
+  padding: var(--s3) var(--s5); border-top: 1px solid var(--border); background: var(--surface);
+  max-height: 70vh; overflow-y: auto;
+}
+.dr-foot .grow { flex: 1 1 auto; }
+.foot-note { font-size: 12.5px; color: var(--muted); }
+.confirm-text { font-weight: 500; }
+.start-step { flex: 1 1 100%; display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.start-step p { margin: 0; }
+.start-mode { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.start-opts { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s5); }
+.start-opts > * { flex: 1 1 190px; }
+.radio { display: flex; align-items: center; gap: var(--s2); cursor: pointer; }
+.radio input { margin: 0; accent-color: var(--accent); }
+.start-btns { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12.5px; font-weight: 500; color: var(--muted); }
+.field .err { font-size: 12.5px; color: var(--danger); }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+.meta-grid { display: grid; grid-template-columns: max-content 1fr; gap: 6px var(--s4); margin: 0; font-size: 12.5px; }
+.meta-grid dt { color: var(--muted); }
+.meta-grid dd { margin: 0; min-width: 0; }
+
+/* notes and callouts: a quiet fill and a bar in the kind colour */
+.callout, .mode-note, .dg-block, .wait-item {
+  background: var(--surface-2); border-left: 3px solid var(--k, var(--border-strong)); border-radius: var(--r2);
+}
+.callout {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s2) var(--s3); font-size: 13.5px;
+}
+.callout .grow { flex: 1 1 200px; min-width: 0; }
+.callout.warn { --k: var(--warn); }
+.callout.danger { --k: var(--danger); display: block; }
+.callout.danger .callout-title { font-weight: 500; color: var(--danger); margin-bottom: 2px; }
+.callout.danger .callout-body { overflow-wrap: anywhere; white-space: pre-wrap; font-family: var(--mono); font-size: 12px; }
+
+
+/* card fields: type, priority, labels, blockers, acceptance criteria, and the not-verified note */
+.fx { display: flex; flex-direction: column; gap: var(--s4); }
+.field .fl { font-size: 12.5px; font-weight: 500; color: var(--muted); }
+.blk-list, .crit-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.blk-list:empty, .crit-list:empty { display: none; }
+.blk-list li:not(:has(a)) { display: flex; align-items: center; gap: var(--s2); font-size: 12.5px; }
+.blk-row .blk-stage { flex: none; margin-left: auto; padding-left: var(--s2); font-size: 12.5px; color: var(--muted); }
+.crit-row { display: flex; align-items: center; gap: var(--s2); }
+.crit-row .input { flex: 1 1 auto; min-width: 0; }
+.crit-row .crit-rm { flex: none; width: 32px; padding: 0; font-size: 16px; line-height: 1; }
+.crit-add { display: flex; }
+.verify-note .tag { flex: none; }

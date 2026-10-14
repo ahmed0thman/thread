@@ -1,10 +1,11 @@
 // "Waiting for you": things Claude needs from the user, kept as items in `card.waits`. Claude adds them with the
 // wait_add tool, the user answers them on the board, and the answer reaches the session that asked with that
 // session's next message (the UserPromptSubmit hook). An item is never deleted, only closed. An older plugin
-// version ignores the field and keeps it. Imports only state.mjs, sessions.mjs and config.mjs.
+// version ignores the field and keeps it. Imports only state.mjs, sessions.mjs, config.mjs and fields.mjs.
 import { now, readState, updateState } from './state.mjs';
 import { collapse, sameSession } from './sessions.mjs';
 import { ChatOnlyError, readConfig } from './config.mjs';
+import { addHistory, cleanWorker, leftDoneAt } from './fields.mjs';
 
 export const WAIT_KINDS = ['question', 'choice', 'todo', 'review'];
 export const WAIT_STATES = ['open', 'answered', 'withdrawn'];
@@ -32,6 +33,29 @@ export function waitsOf(card) {
   return card && Array.isArray(card.waits) ? card.waits.filter((w) => isObject(w) && typeof w.id === 'string' && WAIT_KINDS.includes(w.kind)) : [];
 }
 export const openWaits = (card) => waitsOf(card).filter((w) => w.state === 'open');
+
+const approves = (w) => w.state === 'answered' && isObject(w.answer) && w.answer.verdict === 'approve';
+
+/**
+ * True when the card's criteria were approved: no review item is open, and the latest closed one (answered or withdrawn,
+ * by the time it was closed; a tie goes to the one that is no approval) is answered with the verdict "approve". A withdrawn
+ * one is no approval, and an item answered in the chat holds no verdict. Only items closed after the card last left `doneStage` count (see leftDoneAt), so a card
+ * that was reopened needs a new approval; without a stage, or when it never left it, all of them count.
+ */
+export function reviewApproved(card, doneStage) {
+  const reviews = waitsOf(card).filter((w) => w.kind === 'review');
+  if (reviews.some((w) => w.state === 'open')) return false;
+  const since = leftDoneAt(card, doneStage);
+  let latest = null, latestAt = 0;
+  for (const w of reviews) {
+    if (w.state !== 'answered' && w.state !== 'withdrawn') continue;
+    const at = Date.parse(w.state === 'answered' ? w.answeredAt : w.withdrawnAt) || 0;
+    if (at <= since) continue;
+    // a tie goes to the non-approval, so a withdrawal closed in the same millisecond as an approval is never read as one
+    if (!latest || at > latestAt || (at === latestAt && !approves(w))) { latest = w; latestAt = at; }
+  }
+  return !!latest && approves(latest);
+}
 
 function findWait(state, id) {
   const m = typeof id === 'string' ? WAIT_ID_RE.exec(id.trim()) : null;
@@ -64,7 +88,7 @@ function cleanChoices(choices) {
 }
 
 /** Add an item to a card, for the session `sessionId`. Returns { card, item }. */
-export async function addWait(projectDirArg, { card: cardId, kind, text, choices, multi, sessionId } = {}) {
+export async function addWait(projectDirArg, { card: cardId, kind, text, choices, multi, sessionId, worker } = {}) {
   // A side thread answers to the main session, which is the one that talks to the user.
   if (process.env.THREAD_DEPTH) throw new WaitError('a side thread cannot ask the user for something; tell the main session in your report');
   if (readConfig(projectDirArg).mode === 'chat') throw new ChatOnlyError();
@@ -75,6 +99,8 @@ export async function addWait(projectDirArg, { card: cardId, kind, text, choices
   const options = kind === 'choice' ? cleanChoices(choices) : null;
   if (typeof cardId !== 'string' || !cardId.trim()) throw new WaitError('card must be a card id');
   if (typeof sessionId !== 'string' || !sessionId) throw new WaitError('no session id');
+  let by;
+  try { by = cleanWorker(worker); } catch (e) { throw new WaitError(e.message); }
   return updateState(projectDirArg, (state) => {
     const card = state.cards.find((c) => c.id === cardId.trim());
     if (!card) throw new WaitError(`card not found: ${cardId.trim()}`, 404);
@@ -90,7 +116,8 @@ export async function addWait(projectDirArg, { card: cardId, kind, text, choices
     if (!Array.isArray(card.waits)) card.waits = [];
     card.waits.push(item);
     card.waitSeq = n;
-    // card.updatedAt and seenByClaude stay as they are: this is not an edit of the card.
+    // card.updatedAt and seenByClaude stay as they are: this is not an edit of the card. The history notes it only to say who did the work.
+    if (by) addHistory(card, 'claude', { type: 'waiting', wait: item.id, kind }, item.askedAt, by);
     return { card, item };
   });
 }

@@ -32,7 +32,7 @@ export const REPLY_WITH_MAP = [
 
 /** Remove environment that would change behaviour when the suite runs inside a Claude session. */
 export function cleanAmbientEnv() {
-  for (const k of ['THREAD_DEPTH', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PROJECT_DIR', 'CLAUDE_PLUGIN_DATA', 'THREAD_PROJECT_DIR', 'THREAD_NO_HTTP', 'THREAD_TIMEOUT_MS', 'FAKE_CLAUDE_MODE', 'FAKE_CLAUDE_DELAY_MS', 'THREAD_DELEGATE_DIR', 'FAKE_DELEGATE_MODE', 'FAKE_DELEGATE_LOG', 'FAKE_DELEGATE_SANDBOX', 'FAKE_RELAY_MODE', 'FAKE_RELAY_LOG', 'FAKE_RELAY_VIOLATION', 'FAKE_RELAY_TOUCHED', 'FAKE_RELAY_STDERR_TAIL', 'FAKE_RELAY_EVENTS', 'FAKE_RELAY_EVENTS_FILE']) {
+  for (const k of ['THREAD_DEPTH', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_PID', 'CLAUDE_PROJECT_DIR', 'CLAUDE_PLUGIN_DATA', 'THREAD_PROJECT_DIR', 'THREAD_NO_HTTP', 'THREAD_TIMEOUT_MS', 'FAKE_CLAUDE_MODE', 'FAKE_CLAUDE_DELAY_MS', 'THREAD_DELEGATE_DIR', 'FAKE_DELEGATE_MODE', 'FAKE_DELEGATE_LOG', 'FAKE_DELEGATE_SANDBOX', 'FAKE_RELAY_MODE', 'FAKE_RELAY_LOG', 'FAKE_RELAY_VIOLATION', 'FAKE_RELAY_TOUCHED', 'FAKE_RELAY_STDERR_TAIL', 'FAKE_RELAY_EVENTS', 'FAKE_RELAY_EVENTS_FILE']) {
     delete process.env[k];
   }
 }
@@ -331,8 +331,8 @@ export class FakeEl {
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 }
 
-// The released versions the cross-version tests run. 0.10.0 has no tag yet, so it is pinned by its commit; use the tag `v0.10.0` once it exists.
-export const RELEASED_REFS = ['v0.9.1', '3b61221'];
+// The released versions the cross-version tests run: 0.9.1, 0.10.0 (tag v0.10.0, commit 3b61221) and 0.11.0.
+export const RELEASED_REFS = ['v0.9.1', '3b61221', 'v0.11.0'];
 
 /**
  * The server folder of an older plugin version, taken from a git ref (a tag, or a commit id) into a temp folder that is

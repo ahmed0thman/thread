@@ -1,4 +1,4 @@
-// Board settings: chat-only or task mode, the stages and which stage the plugin itself uses.
+// Board settings: chat-only or task mode, the stages and which stage the plugin itself uses, and whether the board may wake the session.
 // Two optional files with the same shape, <data dir>/config.json and <project data>/config.json.
 // Imports only state.mjs.
 import { randomBytes } from 'node:crypto';
@@ -81,6 +81,10 @@ export function validateConfig(obj) {
     if (!CONFIG_MODES.includes(obj.mode)) throw new Error(`mode must be one of: ${CONFIG_MODES.join(', ')}`);
     out.mode = obj.mode;
   }
+  if (obj.wake !== undefined) {
+    if (typeof obj.wake !== 'boolean') throw new Error('wake must be true or false');
+    out.wake = obj.wake;
+  }
   if (obj.stages !== undefined) out.stages = cleanStages(obj.stages);
   if (obj.roles !== undefined) {
     if (!out.stages) throw new Error('roles belong to the stages of the same config file: give stages as well');
@@ -128,7 +132,7 @@ function readFile(path) {
 }
 
 // The effective config of a project: defaults, then the global file, then the project file.
-// stages and roles come together from the same file; mode is chosen on its own. In chat-only mode `stages` and `roles`
+// stages and roles come together from the same file; mode and wake are each chosen on their own. In chat-only mode `stages` and `roles`
 // are the fixed chat-only ones; the task board's own stay in `taskStages` and `taskRoles`.
 export function readConfig(projectDirArg) {
   const paths = configPaths(projectDirArg);
@@ -137,19 +141,22 @@ export function readConfig(projectDirArg) {
   const pick = (has) => layers.find((s) => has(files[s].config)) || 'default';
   const modeFrom = pick((c) => c.mode !== undefined);
   const stagesFrom = pick((c) => c.stages !== undefined);
+  const wakeFrom = pick((c) => c.wake !== undefined);
   const stagesFile = stagesFrom === 'default' ? {} : files[stagesFrom].config;
   const stages = stagesFile.stages || DEFAULT_STAGES;
+  const wake = wakeFrom === 'default' ? false : files[wakeFrom].config.wake;
   const mode = modeFrom === 'default' ? 'tasks' : files[modeFrom].config.mode;
   const taskStages = stages.map((s) => ({ ...s }));
   const taskRoles = fillRoles(stagesFile.roles, stages, stages.map((s) => s.id).join() === DEFAULT_STAGES.map((s) => s.id).join());
   const chat = mode === 'chat';
   return {
     mode,
+    wake,
     stages: chat ? CHAT_STAGES.map((s) => ({ ...s })) : taskStages,
     roles: chat ? { ...CHAT_ROLES } : taskRoles,
     taskStages,
     taskRoles,
-    source: { mode: modeFrom, stages: stagesFrom },
+    source: { mode: modeFrom, stages: stagesFrom, wake: wakeFrom },
     exists: { global: files.global.exists, project: files.project.exists },
     invalid: { global: files.global.invalid, project: files.project.invalid },
     configured: files.global.exists || files.project.exists,
@@ -179,7 +186,7 @@ export async function saveConfig(projectDirArg, scope, patch) {
   if (file.invalid) throw new Error(`the ${scope} config file is not valid (${file.invalid}); correct it by hand or reset it first`);
   const current = file.config || {};
   const merged = { ...current };
-  for (const key of ['mode', 'stages', 'roles']) {
+  for (const key of ['mode', 'wake', 'stages', 'roles']) {
     if (patch[key] === null) delete merged[key];
     else if (patch[key] !== undefined) merged[key] = patch[key];
   }

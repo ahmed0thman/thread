@@ -1,16 +1,15 @@
 // The board page's "Waiting for you": the red pill and its filter, the tag on a card, the section on a card's page, the gear
-// entry and the keys. board.html's own code runs in a vm against a small fake DOM and a scripted server.
+// entry and the keys. the board page's own code runs in a vm against a small fake DOM and a scripted server.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 import vm from 'node:vm';
-import { SERVER_DIR, FakeEl } from './helpers.mjs';
+import { FakeEl } from './helpers.mjs';
+import { assembleBoardPage } from '../server/page.mjs';
 
-const html = fs.readFileSync(path.join(SERVER_DIR, 'board.html'), 'utf8');
+const html = await assembleBoardPage();
 const block = (name, end) => {
   const m = new RegExp(`// ---- ${name}[^\\n]*\\n([\\s\\S]*?)// ---- end ${end || name} ----`).exec(html);
-  assert.ok(m, `the "${name}" block is missing from board.html`);
+  assert.ok(m, `the "${name}" block is missing from the board page`);
   return m[1];
 };
 const plain = (x) => JSON.parse(JSON.stringify(x));
@@ -24,13 +23,15 @@ const wait = (id, kind, extra = {}) => ({ id, kind, text: `Text of ${id}`, asked
 function waitsPage(over = {}) {
   const doc = { activeElement: null, createElement: (tag) => new FakeEl(doc, tag) };
   doc.body = new FakeEl(doc, 'body');
-  const state = { current: { cards: [] }, chat: false, ro: false, selKey: 'k1', projects: [], rendered: 0, errors: [], posts: [], copies: [], applied: [], answers: [], busy: {} };
+  const state = { current: { cards: [] }, chat: false, ro: false, selKey: 'k1', projects: [], rendered: 0, view: 'board', goViews: [], errors: [], posts: [], copies: [], applied: [], answers: [], busy: {} };
   const mk = (tag, cls) => { const e = doc.createElement(tag); if (cls) e.className = cls; return e; };
   const env = {
     document: doc,
     get current() { return state.current; },
     get selKey() { return state.selKey; },
     get projects() { return state.projects; },
+    get viewSel() { return state.view; },
+    goView: (v) => { state.goViews.push(v); },
     READONLY_WHY: 'read-only',
     isChat: () => state.chat,
     isRO: () => state.ro,
@@ -115,6 +116,25 @@ test('the pill toggles the filter, which is remembered as a pressed state, and t
   assert.match(env.elWaiting.title, /Show only the cards with items waiting for you/);
 });
 
+test('the key is the filter on the board; on the Waiting view it goes back to the board, and on any other view it goes to Waiting', () => {
+  const { page, env, state, setCards } = waitsPage();
+  setCards([task('c1', { waits: [wait('c1.w1', 'question')] })]);
+  state.view = 'summary';
+  page.toggleWaiting();
+  state.view = 'waiting';
+  page.toggleWaiting();
+  assert.deepEqual(state.goViews, ['waiting', 'board']);
+  assert.equal(page.waitingOn(), false, 'the pill state is left alone');
+  assert.equal(state.rendered, 0);
+  page.updateWaitingPill();
+  assert.equal(env.elWaiting.hidden, true, 'the Waiting view is the filter, so the pill is not shown');
+  assert.equal(env.elWaitLegend.hidden, false, 'the legend still says what the icons are');
+  state.view = 'board';
+  page.updateWaitingPill();
+  assert.equal(env.elWaiting.hidden, false);
+  assert.equal(env.elWaitLegend.hidden, true);
+});
+
 test('with nothing waiting the key and the pill do nothing, and a filter that is on is taken off', () => {
   const { page, state, setCards } = waitsPage();
   setCards([task('c1')]);
@@ -175,7 +195,7 @@ test('the waiting filter joins search, threads only, session and milestone with 
 test('the filter state is kept per project with the others, and the board is drawn again when it changes', () => {
   assert.match(html, /filterMemo\[selKey\] = \{[^}]*waiting: waitingOn\(\) \}/);
   assert.match(html, /elWaiting\.setAttribute\('aria-pressed', m\.waiting \? 'true' : 'false'\)/);
-  assert.match(html, /waiting: waitingOn\(\) && !isChat\(\)/, 'a chat-only board ignores it');
+  assert.match(html, /waiting: \(waitingOn\(\) \|\| viewSel === 'waiting'\) && !isChat\(\)/, 'a chat-only board ignores it; the Waiting view is the filter always on');
   assert.match(html, /f\.milestone \+ '\|' \+ f\.waiting/, 'part of the key that decides a redraw');
   assert.match(html, /setWaitingOn\(false\);\n\s+renderBoard\(true\);/, 'Clear filters takes it off too');
 });
@@ -217,7 +237,7 @@ test('a card with no open item has no tag, and the tag is wired into the card an
   assert.match(html, /waiting for you on its cards' : ' waiting for you'\)/, 'the card\'s accessible name says it');
 });
 
-test('the tab of a project shows a red count beside the running dot, the selected one from the page\'s own state', () => {
+test('the waiting count of a project: the selected one from the page\'s own state, the others from the project list', () => {
   const { page, state, setCards } = waitsPage();
   state.projects = [{ key: 'k1', waiting: 9 }, { key: 'k2', waiting: 2 }];
   state.current = null;
@@ -229,37 +249,26 @@ test('the tab of a project shows a red count beside the running dot, the selecte
   assert.equal(page.tabWaiting({ key: 'k1', waiting: 9 }), 0);
 });
 
-function tabsPage() {
-  const doc = { activeElement: null, createElement: (tag) => new FakeEl(doc, tag), createDocumentFragment: () => new FakeEl(doc, 'frag') };
-  doc.body = new FakeEl(doc, 'body');
-  const tabs = new FakeEl(doc, 'div'), wrap = new FakeEl(doc, 'nav');
-  tabs.scrollLeft = 0; tabs.clientWidth = 1000;
-  doc.body.append(wrap, tabs);
-  const env = {
-    document: doc, elTabs: tabs, elTabsWrap: wrap, selKey: 'k1', projects: [], current: null,
-    h(tag, cls, text) { const e = doc.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== null) e.textContent = text; return e; },
-    shape(cls) { const s = doc.createElement('span'); s.className = 'shape ' + cls; return s; },
-    parentName: () => '', tabWaiting: (p) => p.waiting || 0,
-  };
-  const page = vm.runInNewContext(`${block('project tabs', 'project tabs')}\n({ tabSig, renderTabs })`, vm.createContext(env));
-  return { page, env, tabs };
+function switcherPage() {
+  const env = { selKey: 'k1', projects: [], current: null, parentName: (dir) => dir.split('/').slice(-2)[0], tabWaiting: (p) => p.waiting || 0, fillSelect() {}, elProjSelect: {}, projectByKey: () => null };
+  const page = vm.runInNewContext(`${block('project switcher', 'project switcher')}\n({ switchOptions })`, vm.createContext(env));
+  return { page, env };
 }
 
-test('a tab shows the number of items waiting, hides it at 0, and the tab bar is drawn again when it changes', () => {
-  const { page, env, tabs } = tabsPage();
-  env.projects = [{ key: 'k1', name: 'shop', projectDir: '/x/shop', exists: true, cards: 4, running: 1, waiting: 3 }, { key: 'k2', name: 'blog', projectDir: '/x/blog', exists: true, cards: 2, running: 0, waiting: 0 }];
-  const sig0 = page.tabSig();
-  page.renderTabs(false);
-  const [shop, blog] = tabs.children[0].children;
-  const badge = shop.querySelector('.wait-badge');
-  assert.equal(badge.textContent, '3');
-  assert.equal(badge.getAttribute('aria-hidden'), 'true');
-  assert.match(shop.textContent, /, 3 waiting for you/, 'a screen reader hears it');
-  assert.equal(shop.querySelector('.s-pulse') !== null, true, 'the running dot is still there');
-  assert.equal(blog.querySelector('.wait-badge'), null);
-  env.projects[1].waiting = 1;
-  assert.notEqual(page.tabSig(), sig0, 'a change of the count redraws the tabs');
-  assert.match(blog.textContent, /^blog/);
+test('the project switcher names the parent folder of two projects with one name, a missing folder and the items waiting', () => {
+  const { page, env } = switcherPage();
+  env.projects = [
+    { key: 'k1', name: 'shop', projectDir: '/x/a/shop', exists: true, waiting: 3 },
+    { key: 'k2', name: 'shop', projectDir: '/x/b/shop', exists: true, waiting: 0 },
+    { key: 'k3', name: 'blog', projectDir: '/x/blog', exists: false, waiting: 1 },
+  ];
+  assert.deepEqual(plain(page.switchOptions()), [
+    ['k1', 'shop (a) · 3 waiting'],
+    ['k2', 'shop (b)'],
+    ['k3', 'blog (folder missing) · 1 waiting'],
+  ]);
+  env.projects = [];
+  assert.deepEqual(plain(page.switchOptions()), []);
 });
 
 // ----- the section on a card's page

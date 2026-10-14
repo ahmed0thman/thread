@@ -225,7 +225,7 @@ test('GET /api/p/<key>/lanes serves the lanes behind the token, and nothing on t
   assert.equal(data.lanes[0].name, 'code-codex');
   assert.equal((await fetch(`${b.base}/api/p/nonesuch00000/lanes`, { headers: { 'X-Thread-Token': b.token } })).status, 404);
   assert.equal((await fetch(url, { method: 'POST', headers: { 'X-Thread-Token': b.token, 'content-type': 'application/json' }, body: '{}' })).status, 404, 'read-only route');
-  // a lane in a write body is ignored: the board has no way to set one
+  // a lane in a write body does not reach the card: the board has no way to set one (a new card ignores it, PATCH refuses the key)
   const H = { 'X-Thread-Token': b.token, 'content-type': 'application/json' };
   const made = await (await fetch(`${b.base}/api/p/${b.key}/cards`, { method: 'POST', headers: H, body: JSON.stringify({ title: 'Via board', lane: 'code-codex' }) })).json();
   assert.equal(made.lane, undefined);

@@ -3,6 +3,7 @@
 import * as core from './core.mjs';
 import { accessText, listLanes, relayPath, requireLane } from './lanes.mjs';
 import { existsSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 
 const SERVER_INFO = { name: 'thread', version: core.VERSION };
 const DEFAULT_PROTOCOL = '2025-06-18';
@@ -37,6 +38,16 @@ const SESSION_PROP = { type: 'string', description: 'This session\'s id (a UUID)
 const STATUS_NOTE = 'one of the board\'s stage ids (board_list shows them)';
 const PARENT_PROP = { type: 'string', description: 'Optional: the id of a milestone card this card belongs to.' };
 const LANE_PROP = { type: 'string', description: 'Optional: the name of a delegation lane (a coding CLI, model and effort set up with the delegate skills) to label this task or idea with. Starting the card as a thread then runs it on that lane. lane_list shows the names. Needs the delegate skills, and a project lane needs its config approved.' };
+const WORKER_PROP = { type: 'string', description: 'Optional: who did the work you are recording, so the card shows it: "main" (this session), "agent:<type>" (a sub-agent you handed it to), "thread:<card id>" (a side thread) or "lane:<name>" (a delegation lane).' };
+// board_add and board_update take these; on board_update an empty value (an empty string, an empty list) removes the field.
+const CARD_FIELD_PROPS = {
+  type: { type: 'string', enum: [...core.TYPES, ''], description: '"bug" for a defect, "task" (the default) for anything else. Not for milestones.' },
+  priority: { type: 'string', enum: [...core.PRIORITIES, ''], description: '"high", "normal" (the default) or "low". Not for milestones.' },
+  labels: { type: 'array', items: { type: 'string' }, maxItems: 8, description: 'Up to 8 short labels, each 1 to 24 characters (they are lowercased). Not for milestones.' },
+  blocked_by: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'The ids of up to 10 cards that must be finished first, for example ["c4"]. A card cannot be blocked by itself or by a milestone, and a card that has this list cannot be started as a thread. Not for milestones or threads.' },
+  criteria: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'Up to 10 acceptance criteria, each up to 200 characters. A card with criteria cannot be moved to the done stage until the owner has approved a review item on it: raise one with wait_add (kind "review"). Once a card has criteria you can only add lines to them. A card with criteria cannot be started as a thread. Not for milestones or threads.' },
+  worker: WORKER_PROP,
+};
 const CONFIRM_PROP = { type: 'string', description: 'The confirm code from a "CONFIRMATION REQUIRED" answer. Pass it only after the user agreed to continue.' };
 
 const TOOLS = [
@@ -118,7 +129,7 @@ const TOOLS = [
   },
   {
     name: 'board_add',
-    description: 'Add a card (task, idea or milestone) to the project board that the user sees on a local web page. A milestone groups other cards: give them its id as parent. Refused when the project is chat-only.',
+    description: 'Add a card (task, idea or milestone) to the project board that the user sees on a local web page. A milestone groups other cards: give them its id as parent. A task or idea can also have a type (bug), a priority, labels, cards it is blocked by and acceptance criteria. Refused when the project is chat-only. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -128,13 +139,14 @@ const TOOLS = [
         kind: { type: 'string', enum: KINDS, description: 'Defaults to "task".' },
         parent: PARENT_PROP,
         lane: LANE_PROP,
+        ...CARD_FIELD_PROPS,
       },
       required: ['title'],
     },
   },
   {
     name: 'board_update',
-    description: 'Change a board card\'s title, note, status, milestone or lane. Thread cards follow their thread and should not be moved by hand.',
+    description: 'Change a board card\'s title, note, status, milestone, lane, type, priority, labels, blocked_by or criteria. An empty value (an empty list, or an empty string) removes that field, except criteria: once a card has acceptance criteria you may add lines but not remove or change them (only the owner can, on the board). A card with criteria cannot be moved to the done stage until the owner approves a review item on it (wait_add, kind "review"); a card moved back out of done needs a new approval. Thread cards follow their thread and should not be moved by hand. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -144,13 +156,14 @@ const TOOLS = [
         status: { type: 'string', description: `New column: ${STATUS_NOTE}.` },
         parent: { type: 'string', description: 'The id of the milestone card this card belongs to, or an empty string to take it out of its milestone.' },
         lane: { type: 'string', description: 'The name of a delegation lane to label this task or idea with, or an empty string to remove its lane. Milestones and threads cannot have one.' },
+        ...CARD_FIELD_PROPS,
       },
       required: ['id'],
     },
   },
   {
     name: 'board_remove',
-    description: 'Delete a board card. A thread that is still running cannot be removed; end it first.',
+    description: 'Delete a board card. A thread that is still running cannot be removed; end it first. A card with acceptance criteria that is neither done nor approved cannot be removed by Claude; the owner removes it on the board.',
     inputSchema: {
       type: 'object',
       properties: { id: ID_PROP },
@@ -160,6 +173,7 @@ const TOOLS = [
   {
     name: 'board_list',
     description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane shows it in braces, as {lane: name}; a milestone shows how many of its cards are done; a card with items waiting for the user shows "(2 waiting)" (wait_list reads them). ' +
+      'After the title come the marks of its fields, when it has them: "(bug)", "!high" or "!low", "#label" for each label, "{blocked by c4, c7}" for the blockers that are not done yet, "[criteria 3]" for its acceptance criteria, and "(done, not verified)" for a done card whose criteria were never approved. ' +
       'With parent, list only that milestone and its cards, after a summary line: the report for a milestone. Cards the user added or edited since the last listing are flagged "(new from user)". Listing marks them as seen.',
     inputSchema: { type: 'object', properties: { parent: { type: 'string', description: 'Optional: a milestone card id; list only that milestone and the cards under it.' } }, required: [] },
   },
@@ -168,7 +182,8 @@ const TOOLS = [
     description: 'Record something you need from the user on the card for that work, so the board shows it under "Waiting for you" with a red count and a tag on the card. Add an item when you finished work the user must check (kind "review"), have a question (kind "question", or "choice" with 2 to 8 options), or need the user to do something themselves (kind "todo"). ' +
       'If there is no card for the work yet, add one first with board_add. In the chat give one line only, for example "Waiting on you: c37.w2", not the whole question again. ' +
       'The user answers on the board. The answer reaches this session, and only the session that asked, with the user\'s next message here; nothing arrives by itself. If the user answers in the chat instead, call wait_close with answered_in_chat. ' +
-      'It does not move the card. Refused on a milestone, inside a side thread and when the project is chat-only.',
+      'It does not move the card. Refused on a milestone, inside a side thread and when the project is chat-only. ' +
+      'Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -177,6 +192,7 @@ const TOOLS = [
         text: { type: 'string', description: 'What you need, written so it stands alone. Up to 2000 characters.' },
         choices: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8, description: 'Only for kind "choice": 2 to 8 options, each up to 120 characters.' },
         multi: { type: 'boolean', description: 'Only for kind "choice": true lets the user pick several options, false (default) exactly one.' },
+        worker: WORKER_PROP,
         session_id: SESSION_PROP,
       },
       required: ['card', 'kind', 'text'],
@@ -226,12 +242,15 @@ const TOOLS = [
   },
   {
     name: 'config_set',
-    description: 'Change the plugin settings in the global config (every project) or this project\'s config. Use it only when the user asks to set up or change the plugin (the /thread:setup skill does). Cards are never changed. Returns the new effective settings.',
+    description: 'Change the plugin settings in the global config (every project) or this project\'s config. Use it only when the user asks to set up or change the plugin (the /thread:setup skill does). Cards are never changed. Returns the new effective settings. ' +
+      'Turning waking on (wake: true) makes the board able to start turns in an idle session, so it is never saved on the first call: the tool answers "CONFIRMATION REQUIRED" with a confirm_code and saves nothing. Set wake: true only when the user asked for it, show the user what it does, and call again with the same arguments and the confirm_code only after the user agrees. wake: false and null need no confirmation.',
     inputSchema: {
       type: 'object',
       properties: {
         scope: { type: 'string', enum: CONFIG_SCOPES, description: '"global" applies to every project that has no setting of its own; "project" only to this one.' },
         mode: { type: ['string', 'null'], enum: [...CONFIG_MODES, null], description: '"tasks" (threads and the task board) or "chat" (threads only). null removes it from this scope.' },
+        wake: { type: ['boolean', 'null'], description: 'true lets an answer or a "Report to main session" click on the board wake an idle session at once, instead of waiting for the next message; false is the default. null removes it from this scope. true needs the user\'s agreement: see confirm_code.' },
+        confirm_code: CONFIRM_PROP,
         stages: {
           type: ['array', 'null'],
           minItems: 2,
@@ -291,6 +310,12 @@ function clean(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj)) if (v !== undefined) out[k] = v;
   return out;
+}
+
+// The project-management fields and the worker of a board_add or board_update call, as core takes them. The values are
+// checked there; null and empty values pass through, because they remove a field.
+function cardFieldArgs(args) {
+  return clean({ type: args.type, priority: args.priority, labels: args.labels, blockedBy: args.blocked_by, criteria: args.criteria, worker: optStr(args, 'worker') });
 }
 
 // The calling session: the session_id argument, else the environment, else unknown.
@@ -359,6 +384,23 @@ function milestoneTag(cards, c) {
 // ` {lane: name}` for a task or idea with a delegation lane, else ''.
 function laneTag(c) {
   return c.lane && c.kind !== 'thread' && c.kind !== 'milestone' ? ` {lane: ${core.clip(c.lane, 40)}}` : '';
+}
+
+// The compact marks after a card's title in board_list, in this order and only when present: (bug) !high or !low #label
+// {blocked by c4, c7} [criteria N] (done, not verified). `cards` are all the cards, with their shown stage in `status`.
+function fieldMarks(c, cards, cfg) {
+  const marks = [];
+  if (c.type === 'bug') marks.push('(bug)');
+  if (c.priority === 'high' || c.priority === 'low') marks.push(`!${c.priority}`);
+  if (Array.isArray(c.labels)) for (const l of c.labels) if (typeof l === 'string' && l) marks.push(`#${core.clip(l, 24)}`);
+  // only the blockers that are not done yet: a card whose blockers are all done is not blocked
+  const blockers = core.liveBlockers(c, cards).filter((id) => cards.find((x) => x.id === id).status !== cfg.taskRoles.done);
+  if (blockers.length) marks.push(`{blocked by ${blockers.join(', ')}}`);
+  if (c.kind !== 'milestone' && core.hasCriteria(c)) {
+    marks.push(`[criteria ${c.criteria.length}]`);
+    if (c.status === cfg.taskRoles.done && !core.reviewApproved(c, cfg.taskRoles.done)) marks.push('(done, not verified)');
+  }
+  return marks.length ? ` ${marks.join(' ')}` : '';
 }
 
 function threadLine(c, state, caller) {
@@ -467,6 +509,7 @@ function configText(cfg) {
   return [
     `Set up: ${cfg.configured ? 'yes' : 'no (no config file exists; the defaults are in use)'}`,
     `Mode: ${chat ? 'chat (threads only; the task board is off)' : 'tasks (threads and the task board)'} — from ${from(cfg.source.mode)}`,
+    `Wake the session from the board: ${cfg.wake ? 'on (an answer or a report click on the board wakes an idle session)' : 'off (they reach the session with the next message)'} — from ${from(cfg.source.wake)}`,
     ...board,
     `Global config file: ${file('global')}`,
     `Project config file: ${file('project')}`,
@@ -530,6 +573,33 @@ function watchBoard(projectDir) {
 }
 
 // ---------- tool handlers ----------
+
+// Turning waking on needs the user's yes, like the wrong-session guard: the first call gets a code and saves nothing, a second
+// call with the code saves. The code lives in this server process, belongs to one scope, works once and expires.
+const WAKE_CONFIRM_TTL_MS = 10 * 60 * 1000;
+let wakeConfirm = null;
+
+function wakeConfirmText(scope, code) {
+  return [
+    'CONFIRMATION REQUIRED. Nothing was saved.',
+    '',
+    `Waking lets the thread board start a turn in an idle session by itself: when the user answers a waiting item that session asked, or clicks "Report to main session" for one of its threads, the session wakes and acts on it as if the user had typed it. That costs tokens while the user is away, it runs without permission prompts in a session that skips them, and anyone who has the board link could start a turn that way. It applies to ${scope === 'global' ? 'every project that has no setting of its own' : 'this project'}.`,
+    '',
+    'Do not decide for the user. Show them the paragraph above in your own words and ask whether to turn waking on. Do this only when they asked for it.',
+    `Only if they agree, call config_set again with the same arguments and confirm_code "${code}". If they decline, do not call it again with wake: true.`,
+  ].join('\n');
+}
+
+// null when this call may go ahead; otherwise the answer to give instead.
+function wakeGuard(scope, code) {
+  const given = typeof code === 'string' ? code.trim().toLowerCase() : '';
+  if (wakeConfirm && given && wakeConfirm.code === given && wakeConfirm.scope === scope && wakeConfirm.expiresAt > Date.now()) {
+    wakeConfirm = null;
+    return null;
+  }
+  wakeConfirm = { code: randomBytes(4).toString('hex'), scope, expiresAt: Date.now() + WAKE_CONFIRM_TTL_MS };
+  return wakeConfirmText(scope, wakeConfirm.code);
+}
 
 const HANDLERS = {
   async thread_start(args) {
@@ -647,6 +717,7 @@ const HANDLERS = {
       kind: optEnum(args, 'kind', KINDS),
       parent: optStr(args, 'parent'),
       lane,
+      ...cardFieldArgs(args),
       source: 'claude',
     }));
     const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : '');
@@ -670,6 +741,7 @@ const HANDLERS = {
       status: optStr(args, 'status'),
       parent: optStr(args, 'parent'),
       lane,
+      ...cardFieldArgs(args),
     }), { source: 'claude' });
     const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : '');
     return `Updated ${card.id} "${core.clip(card.title, 80)}" (${card.status}${m}).`;
@@ -677,7 +749,7 @@ const HANDLERS = {
 
   async board_remove(args) {
     const id = reqStr(args, 'id');
-    await core.removeCard(core.projectDir(), id);
+    await core.removeCard(core.projectDir(), id, { source: 'claude' });
     return `Removed ${id}.`;
   },
 
@@ -722,7 +794,7 @@ const HANDLERS = {
         const waiting = chat ? 0 : core.openWaits(c).length;   // not shown on a chat-only board
         const wait = waiting ? ` (${waiting} waiting)` : '';
         const note = c.note ? ` — ${core.clip(c.note, 200)}` : '';
-        lines.push(`- ${c.id} [${kind}] ${core.clip(c.title, 120)}${milestoneTag(all, c)}${laneTag(c)}${done}${wait}${flag}${note}`);
+        lines.push(`- ${c.id} [${kind}] ${core.clip(c.title, 120)}${fieldMarks(c, all, cfg)}${milestoneTag(all, c)}${laneTag(c)}${done}${wait}${flag}${note}`);
       }
     }
     if (unseen.size) lines.push('', `${unseen.size} card(s) new from the user.`);
@@ -738,6 +810,7 @@ const HANDLERS = {
       choices: args.choices === null ? undefined : args.choices,
       multi: args.multi === null ? undefined : args.multi,
       sessionId,
+      worker: optStr(args, 'worker'),
     });
     return `Added ${item.id} [${item.kind}] on ${card.id} "${core.clip(card.title, 60)}". The board shows it under "Waiting for you". In the chat, say only "Waiting on you: ${item.id}". The answer reaches this session with the user's next message here.`;
   },
@@ -784,15 +857,20 @@ const HANDLERS = {
     if (!scope) throw new ToolError('argument "scope" is required (global or project)');
     if (process.env.THREAD_DEPTH) throw new ToolError('a side thread cannot change the plugin settings');
     const mode = args.mode === null ? null : optEnum(args, 'mode', CONFIG_MODES);
-    const { stages, roles, reset } = args;
+    const { stages, roles, reset, wake } = args;
+    if (wake !== undefined && wake !== null && typeof wake !== 'boolean') throw new ToolError('argument "wake" must be true, false or null');
     if (reset !== undefined && typeof reset !== 'boolean') throw new ToolError('argument "reset" must be true or false');
     let cfg;
     if (reset === true) {
-      if (mode !== undefined || stages !== undefined || roles !== undefined) throw new ToolError('reset deletes the config file; give no other setting with it');
+      if (mode !== undefined || wake !== undefined || stages !== undefined || roles !== undefined) throw new ToolError('reset deletes the config file; give no other setting with it');
       cfg = await core.resetConfig(pd, scope);
     } else {
-      if (mode === undefined && stages === undefined && roles === undefined) throw new ToolError('nothing to change: give mode, stages, roles or reset');
-      cfg = await core.saveConfig(pd, scope, { mode, stages, roles });
+      if (mode === undefined && wake === undefined && stages === undefined && roles === undefined) throw new ToolError('nothing to change: give mode, wake, stages, roles or reset');
+      if (wake === true) {
+        const ask = wakeGuard(scope, optStr(args, 'confirm_code'));
+        if (ask) return ask;
+      }
+      cfg = await core.saveConfig(pd, scope, { mode, wake, stages, roles });
     }
     const gone = core.readState(pd).cards.filter((c) => c.kind !== 'thread' && !cfg.taskStages.some((st) => st.id === c.status)).length;
     const cards = gone

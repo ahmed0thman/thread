@@ -1,0 +1,34 @@
+@media (max-width: 760px) {
+  :root { --gut: var(--s3); }
+  .sel select.input { max-width: 42vw; }
+  .search { flex-basis: 100%; max-width: none; }
+  .toolbar-note { order: 3; flex-basis: 100%; }
+  .top { flex-wrap: wrap; row-gap: var(--s2); }
+  .top h1 { margin-right: auto; }
+  .switcher { order: 3; flex: 1 1 100%; }
+  .proj-sel { flex: 1 1 0; min-width: 0; }
+  .proj-sel select.input { width: 100%; max-width: none; }
+  .dir { order: 4; flex: 1 1 100%; }
+  .dir.none { display: none; }
+  .board { grid-template-columns: repeat(var(--cols, 6), 264px); scroll-snap-type: x proximity; }
+  .col { scroll-snap-align: start; }
+  .drawer { width: 100vw; border-left: 0; }
+  .menu-item { min-height: 36px; }
+  .drawer.page .dr-head, .drawer.page .dr-body, .drawer.page .dr-foot { padding-left: var(--s3); padding-right: var(--s3); }
+  .row2 { grid-template-columns: 1fr; }
+  .dr-head, .dr-body, .scroller, .composer, .dr-foot { padding-left: var(--s3); padding-right: var(--s3); }
+  .ws-bar { padding: var(--s2) var(--s3); }
+  .ws-bar .idchip { order: 1; }
+  .ws-ids .idchip { order: 0; }
+  .ws-actions { order: 2; }
+  .ws-title { order: 3; flex-basis: 100%; }
+  .ws-meta { order: 4; flex-basis: 100%; }
+  .ws-bar kbd.hint { display: none; }
+  .decisions li { grid-template-columns: 1fr; gap: 2px; }
+  .decisions .tn { justify-self: start; padding: 0 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  .s-pulse { opacity: 1; }
+  .btn.busy::after { border-top-color: var(--muted); }
+}

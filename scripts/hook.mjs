@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const MAX_CONTEXT = 600; // the notices; report requests are kept whole
 const MAX_TOTAL = 1500;
+const WOKEN_LEAD = 'This turn was started by the thread board, not typed by the user.';
 
 function readStdin(ms) {
   return new Promise((resolve) => {
@@ -145,6 +146,12 @@ async function main() {
     if (!core || !projectDir) return;
     const { reconcile, pendingAnnouncements, pendingReportRequests, readState } = core;
 
+    // A turn is starting, so the session is no longer idle: the background waiter (scripts/waiter.mjs) stops. The next Stop starts a new one.
+    // It also says whether this is the turn the waiter woke the session for: it recorded that a moment ago. What the prompt says proves
+    // nothing, since a user can type the waiter's own words.
+    let woken = false;
+    try { woken = await (await import(new URL('../server/wake.mjs', import.meta.url).href)).stopWaiter(projectDir, sessionId); } catch { /* best effort */ }
+
     await reconcile(projectDir);
     const announced = await pendingAnnouncements(projectDir, sessionId);
     const requested = await pendingReportRequests(projectDir, sessionId);
@@ -156,7 +163,11 @@ async function main() {
     let answered = [];
     try { answered = await core.deliverWaitAnswers(projectDir, sessionId); } catch { /* the other notices still go out */ }
 
-    if (!announced.length && !unseen.length && !requested.length && !answered.length) return;
+    if (!announced.length && !unseen.length && !requested.length && !answered.length) {
+      // Woken by the board but nothing is left to carry (it was delivered meanwhile): say so, so the turn does not go looking.
+      if (woken) await emit('UserPromptSubmit', `${WOKEN_LEAD} What the user did there has already reached you; there is nothing more to act on. Say nothing about it and stop.`);
+      return;
+    }
 
     const lines = [];
     for (const c of announced) {
@@ -173,10 +184,21 @@ async function main() {
     if (notices.length > MAX_CONTEXT) notices = notices.slice(0, MAX_CONTEXT - 1) + '…';
     // The user asked for these by clicking, so they come first and are not cut by the notices' cap.
     const asks = requested.map((c) => `The user clicked "Report to main session" on the board for thread ${c.id} "${core.clip(c.title, 50)}". Call thread_report with id "${c.id}" now and give them the digest.`);
-    let text = [...asks, notices].filter(Boolean).join('\n');
-    if (text.length > MAX_TOTAL) text = text.slice(0, MAX_TOTAL - 1) + '…';
-    // The answers go first and outside the cap above (each line is clipped on its own, and at most a few per prompt), so they are never cut off.
-    text = [...answered.map(({ item }) => core.deliveryLine(item)), text].filter(Boolean).join('\n');
+    const cap = (t) => (t.length > MAX_TOTAL ? t.slice(0, MAX_TOTAL - 1) + '…' : t);
+    // The answers go first and outside the cap (each line is clipped on its own, and at most a few per prompt), so they are never cut off.
+    const replies = answered.map(({ item }) => core.deliveryLine(item));
+    let text;
+    if (!woken) {
+      text = [...replies, cap([...asks, notices].filter(Boolean).join('\n'))].filter(Boolean).join('\n');
+    } else {
+      // Only what the user did on the board (the answers and the report clicks) is to be acted on as if they had typed it. Any other
+      // notice that happens to ride on this turn is information, as on any other turn.
+      const act = [...replies, cap(asks.join('\n'))].filter(Boolean);
+      const head = act.length
+        ? `${WOKEN_LEAD} They acted there while you were idle, so act on these lines now, as if they had typed them:\n${act.join('\n')}`
+        : `${WOKEN_LEAD} What the user did there has already reached you; there is nothing to act on from it.`;
+      text = notices ? `${head}\nOther notices, for information only; act on them only if the user asks or the work calls for it:\n${notices}` : head;
+    }
     await emit('UserPromptSubmit', text);
   }
 }
