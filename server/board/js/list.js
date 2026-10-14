@@ -19,8 +19,9 @@
     config.stages.forEach((s, i) => { stageIdx[s.id] = i; stageName[s.id] = s.label; });
     const milestones = {}, byId = {};
     cards.forEach((c) => { byId[c.id] = c; if (c.kind === 'milestone') milestones[c.id] = c; });
-    // blocked: at least one blocker that is not in the done stage (a blocker that is gone does not count), as on the board's face
-    const unfinished = (c) => (Array.isArray(c.blockedBy) ? c.blockedBy.filter((id) => typeof id === 'string' && id && byId[id] && byId[id].status !== config.roles.done) : []);
+    // blocked: at least one blocker that is not finished, i.e. not in the done stage or a later one (a blocker that is gone does not
+    // count), as on the board's face
+    const unfinished = (c) => (Array.isArray(c.blockedBy) ? c.blockedBy.filter((id) => typeof id === 'string' && id && byId[id] && !finishedIn(byId[id], config)) : []);
     return cards.map((c) => {
       const milestone = c.kind !== 'milestone' && c.parent && milestones[c.parent] ? milestones[c.parent] : null;
       const workers = Array.isArray(c.workedBy) ? c.workedBy.filter((w) => typeof w === 'string' && w) : [];
@@ -30,11 +31,13 @@
         num: parseInt(String(c.id).replace(/\D/g, ''), 10) || 0,
         card: c,
         type: rowType(c),
+        bug: c.kind !== 'milestone' && c.type === 'bug',   // an idea or a thread keeps its bug mark beside its own type
         title: String(c.title || ''),
         status: c.status,
         stageLabel: stageName[c.status] || String(c.status),
         stageIdx: c.kind === 'milestone' || !(c.status in stageIdx) ? null : stageIdx[c.status],
-        progress: c.kind === 'milestone' ? progressOf(cards, c.id, config.roles.done) : null,
+        progress: c.kind === 'milestone' ? progressOf(cards, c.id, config) : null,
+        msState: c.kind === 'milestone' ? msStateOf(c, cards, config) : null,
         priority: PRIORITY_RANK[c.priority] ? c.priority : 'normal',
         labels: Array.isArray(c.labels) ? c.labels.filter((l) => typeof l === 'string' && l) : [],
         milestoneId: milestone ? milestone.id : '',
@@ -52,7 +55,7 @@
   // What a row draws, as plain data. The List's pane key is made of these, so a change no row shows (a note, a history entry, a card of
   // another project) leaves the table alone.
   function listRowSig(r) {
-    return [r.id, r.type, r.title, r.status, r.stageLabel, r.progress, r.priority, r.labels, r.milestoneId, r.milestoneTitle, r.lastWorker, r.moreWorkers, r.waits, r.updated, r.blockedBy, r.unverified];
+    return [r.id, r.type, r.bug, r.title, r.status, r.stageLabel, r.progress, r.msState, r.priority, r.labels, r.milestoneId, r.milestoneTitle, r.lastWorker, r.moreWorkers, r.waits, r.updated, r.blockedBy, r.unverified];
   }
   // The columns. `first` is the direction of the first click; `key` is what a row is compared by (null sorts last in either direction).
   // Priority and Waiting start with the most important at the top and Updated with the newest; the stage is in the order of the board's columns.
@@ -74,6 +77,9 @@
     const spec = LIST_COLS.find((c) => c.id === col) || LIST_COLS.find((c) => c.id === LIST_DEFAULT_SORT.col);
     const sign = dir === 'asc' ? 1 : -1;
     return rows.slice().sort((x, y) => {
+      // a milestone has no stage: in the Stage column the milestones come after every stage, open first, then empty, then done
+      if (col === 'stage' && (x.msState !== null) !== (y.msState !== null)) return x.msState === null ? -1 : 1;
+      if (col === 'stage' && x.msState !== null && x.msState !== y.msState) return MS_ORDER[x.msState] - MS_ORDER[y.msState];
       const a = spec.key(x), b = spec.key(y);
       if (a === null || b === null) {
         if (a === b) return sign * (x.num - y.num);
@@ -177,7 +183,9 @@
     const cell = (cls, ...kids) => { const td = h('td', cls); td.append(...kids); tr.appendChild(td); return td; };
 
     cell('c-id', h('span', 'idchip', r.id));
-    cell('c-type', typeMark(r.type));
+    const typeKids = [typeMark(r.type)];
+    if (r.bug && r.type !== 'bug') typeKids.push(bugMark({ bug: true }));
+    cell('c-type', ...typeKids);
     const title = cell('c-title');
     const t = h('div', 'l-title', r.title);
     t.title = r.title;
@@ -188,7 +196,12 @@
       if (r.unverified) marks.appendChild(unverifiedMark());
       title.appendChild(marks);
     }
-    if (r.progress) cell('c-stage tnum', h('span', 'muted', r.progress.total ? r.progress.done + '/' + r.progress.total + ' done' : 'No cards yet'));
+    if (r.progress) {
+      // a milestone has no stage: its state and how far its cards are, such as "Open · 5/14"
+      const st = h('span', null, MS_STATE_LABEL[r.msState] + (r.progress.total ? ' · ' + r.progress.done + '/' + r.progress.total : ''));
+      st.title = MS_STATE_HINT[r.msState] || '';
+      cell('c-stage tnum', st);
+    }
     else cell('c-stage', h('span', null, r.stageLabel));
     cell('c-priority', priorityCell(r.priority));
     const labels = cell('c-labels');

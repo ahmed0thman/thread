@@ -319,19 +319,20 @@ test('board_list groups by stage label, tags cards with their milestone, shows p
 
   const list = (await c.call('board_list')).text;
   const tag = '[Ship the new onboarding flow …]';
-  assert.match(list, /^New \(4\)$/m);
+  assert.match(list, /^New \(2\)$/m, 'the milestones are not in the stage groups');
   assert.match(list, /^In progress \(1\)$/m);
   assert.match(list, /^Done \(1\)$/m);
   assert.ok(list.includes(`- c3 [task] Build screens ${tag}`), list);
   assert.ok(list.includes(`- c2 [task] Write copy ${tag}`), list);
-  assert.ok(list.includes('- c1 [milestone] Ship the new onboarding flow for everyone this quarter (1/2 done) — The big one'), list);
-  assert.ok(list.includes('- c5 [milestone] Other milestone (0/1 done)'), list);
+  assert.ok(list.includes('- c1 [milestone:open] Ship the new onboarding flow for everyone this quarter (1/2 done) — The big one'), list);
+  assert.ok(list.includes('- c5 [milestone:open] Other milestone (0/1 done)'), list);
+  assert.match(list, /^Milestones \(2\)$/m, 'milestones have their own section');
   assert.match(list, /^- c4 \[task\] Unrelated$/m);
   assert.match(list, /\nStages, as id: label \[what the plugin uses it for\]:\n- idea: Idea\n- new: New \[start\]\n- in_progress: In progress \[working\]\n- review: Review \[review\]\n- blocked: Blocked \[blocked\]\n- done: Done \[done\]$/);
 
   const report = (await c.call('board_list', { parent: 'c1' })).text;
   const lines = report.split('\n');
-  assert.equal(lines[0], 'Milestone c1 "Ship the new onboarding flow for everyone this quarter": 1 of 2 done.');
+  assert.equal(lines[0], 'Milestone c1 "Ship the new onboarding flow for everyone this quarter": open, 1 of 2 done.');
   assert.ok(report.includes('- c2 [task] Write copy') && report.includes('- c3 [task] Build screens'));
   assert.ok(!report.includes('Unrelated') && !report.includes('Elsewhere') && !report.includes('Other milestone'));
   assert.ok(report.includes('(1/2 done)'));

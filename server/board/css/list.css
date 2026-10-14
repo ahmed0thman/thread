@@ -25,6 +25,7 @@
 .lrow:hover { background: var(--col); }
 .lrow:focus-visible { outline-offset: -2px; }
 .c-id, .c-type, .c-priority, .c-stage, .c-waiting, .c-updated { white-space: nowrap; }
+.c-type .fmark { margin-left: 6px; vertical-align: middle; }   /* the bug mark an idea or a thread keeps beside its type */
 .c-title { width: 100%; min-width: 220px; max-width: 0; }
 .l-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .l-marks { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }

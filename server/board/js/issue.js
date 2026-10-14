@@ -14,14 +14,16 @@
   // The card fields' controls: type, priority, labels, blocked by and acceptance criteria. values() reads them the way fieldValues
   // reads a card, set(vals) writes them, show(keys) offers only those fields (a new card turns into a milestone, which takes none).
   // onChange runs after a criterion was added or removed (typing is seen by the form itself).
-  function fieldsEditor(keys, onChange) {
+  function fieldsEditor(keys, onChange, withIdea) {
     const root = h('div', 'fx');
     const fType = h('select', 'input');
-    fillSelect(fType, [['task', 'Task'], ['bug', 'Bug']], 'task');
+    // an existing task or idea can switch between the three; a new card chooses its kind in its own select
+    fillSelect(fType, [['task', 'Task'], ['bug', 'Bug']].concat(withIdea ? [['idea', 'Idea']] : []), 'task');
     const fPrio = h('select', 'input');
     fillSelect(fPrio, [['high', 'High'], ['normal', 'Normal'], ['low', 'Low']], 'normal');
     const row = h('div', 'row2');
-    row.append(field('Type', fType, 'f-type'), field('Priority', fPrio, 'f-priority'));
+    const wType = field('Type', fType, 'f-type'), wPrio = field('Priority', fPrio, 'f-priority');
+    row.append(wType, wPrio);
 
     const fLabels = h('input', 'input');
     fLabels.type = 'text';
@@ -122,7 +124,9 @@
       set(vals) { FIELD_KEYS.forEach((k) => api.setKey(k, vals[k])); },
       show(ks) {
         const has = (k) => ks.includes(k);
-        row.hidden = !(has('type') || has('priority'));
+        wType.hidden = !has('type');
+        wPrio.hidden = !has('priority');
+        row.hidden = wType.hidden && wPrio.hidden;
         wLabels.hidden = !has('labels');
         wBlock.hidden = !has('blockedBy');
         wCrit.hidden = !has('criteria');
@@ -154,7 +158,9 @@
       runsView = attachRuns(P, S);
     } else mountDrawer(P, page);
 
-    P.base = create ? { title: '', note: '', status: cfg().roles.start, kind: 'task', parent: '', fields: fieldValues(null) } : { title: card.title, note: card.note || '', status: card.status, kind: card.kind, parent: card.parent || '', fields: fieldValues(card) };
+    // the Type select of an existing card says Task, Bug or Idea (see typeChoice), so its field values carry that choice; base.type is the stored type field
+    const cardValues = (c) => Object.assign(fieldValues(c), { type: typeChoice(c) });
+    P.base = create ? { title: '', note: '', status: cfg().roles.start, kind: 'task', parent: '', fields: fieldValues(null) } : { title: card.title, note: card.note || '', status: card.status, kind: card.kind, type: fieldValues(card).type, parent: card.parent || '', fields: isMs ? fieldValues(card) : cardValues(card) };
     P.baseUpdatedAt = card ? card.updatedAt : '';
 
     const head = ws ? null : h('div', page ? 'ws-bar' : 'dr-head');
@@ -193,8 +199,9 @@
     const fNote = h('textarea', 'input');
     fNote.rows = 7;
     fNote.value = P.base.note;
-    const fStatus = h('select', 'input');
-    fillSelect(fStatus, stagePairs(), P.base.status);
+    // a milestone has no stage: its state follows its cards
+    const fStatus = isMs ? null : h('select', 'input');
+    if (fStatus) fillSelect(fStatus, stagePairs(), P.base.status);
     body.appendChild(fTitleWrap);
     body.appendChild(field('Note', fNote, 'f-note'));
     // the milestone this card belongs to (none for a milestone itself); hidden while no milestone exists
@@ -202,27 +209,34 @@
     const fMs = isMs ? null : h('select', 'input');
     if (fMs) fillSelect(fMs, milestonePairs(), P.base.parent);
     const msField = fMs ? field('Milestone', fMs, 'f-milestone') : null;
-    function syncMsField() { if (msField) msField.hidden = (fKind ? fKind.value === 'milestone' : false) || milestonePairs().length < 2; }
+    let wStatus = null;
+    function syncMsField() {
+      if (msField) msField.hidden = (fKind ? fKind.value === 'milestone' : false) || milestonePairs().length < 2;
+      if (wStatus) wStatus.hidden = fKind.value === 'milestone';
+    }
     if (create) {
+      // one select for what the card is, in the List's words: Bug is a task with type bug, so the form has no second Type field
       fKind = h('select', 'input');
-      ['task', 'idea', 'milestone'].forEach((k) => { const o = h('option', null, k); o.value = k; fKind.appendChild(o); });
+      fillSelect(fKind, [['task', 'Task'], ['bug', 'Bug'], ['idea', 'Idea'], ['milestone', 'Milestone']], P.base.kind);
       fKind.addEventListener('change', () => { if (fKind.value === 'milestone') fMs.value = ''; syncMsField(); if (FX) FX.show(fxKeys()); });
       const row = h('div', 'row2');
-      row.append(field('Status', fStatus, 'f-status'), field('Kind', fKind, 'f-kind'));
+      wStatus = field('Status', fStatus, 'f-status');
+      row.append(wStatus, field('Type', fKind, 'f-kind'));
       body.appendChild(row);
-    } else {
+    } else if (fStatus) {
       body.appendChild(field('Status', fStatus, 'f-status'));
     }
     // a card in the done stage with acceptance criteria and no approved review (the server says so with verified: false)
     const verifyNote = h('div', 'callout warn verify-note');
     verifyNote.hidden = true;
-    verifyNote.append(h('span', 'tag attn', 'Done, not verified'), h('span', 'grow', 'Claude may not move it to done until you approve a review item; you moved it yourself.'));
+    verifyNote.append(h('span', 'tag attn', 'Done, not verified'), h('span', 'grow', 'Claude may not move it to done or a later stage until you approve a review item; you moved it yourself.'));
     if (!create) body.appendChild(verifyNote);
     if (msField) body.appendChild(msField);
     syncMsField();
     // the fields of a task or idea: type, priority, labels, blockers and criteria; a new card offers the first three, a milestone none
-    const fxKeys = () => (create ? fieldKeys(fKind.value, true) : fieldKeys(card.kind, false));
-    const FX = isMs ? null : fieldsEditor(fxKeys(), () => onTouched());
+    const newKind = () => (fKind.value === 'bug' ? 'task' : fKind.value);
+    const fxKeys = () => (create ? fieldKeys(newKind(), true).filter((k) => k !== 'type') : fieldKeys(card.kind, false));
+    const FX = isMs ? null : fieldsEditor(fxKeys(), () => onTouched(), !create);
     if (FX) { body.appendChild(FX.root); FX.set(P.base.fields); FX.show(fxKeys()); }
 
     // a milestone's page lists its cards, grouped by stage, and copies that list as a report
@@ -246,7 +260,7 @@
     } else P.root.append(head, body, foot);
 
     P.isDirty = () => {
-      if (fTitle.value !== P.base.title || fNote.value !== P.base.note || fStatus.value !== P.base.status) return true;
+      if (fTitle.value !== P.base.title || fNote.value !== P.base.note || (fStatus && fStatus.value !== P.base.status)) return true;
       if (fMs && fMs.value !== P.base.parent) return true;
       if (FX && Object.keys(fieldsPatch(P.base.fields, FX.values(), fxKeys())).length) return true;
       return create ? fKind.value !== P.base.kind : false;
@@ -292,7 +306,9 @@
       await runAction(key, async () => {
         try {
           if (create) {
-            const bodyObj = { title: newTitle, status: fStatus.value, kind: fKind.value };
+            const bodyObj = { title: newTitle, kind: newKind() };
+            if (fKind.value !== 'milestone') bodyObj.status = fStatus.value;   // a milestone has no stage
+            if (fKind.value === 'bug') bodyObj.type = 'bug';
             if (fKind.value !== 'milestone' && fMs.value) bodyObj.parent = fMs.value;
             if (fNote.value.trim()) bodyObj.note = fNote.value.trim();
             if (FX) Object.assign(bodyObj, fieldsPatch(P.base.fields, FX.values(), fxKeys()));
@@ -308,13 +324,24 @@
             const patch = {};
             if (newTitle !== P.base.title) patch.title = newTitle;
             if (fNote.value !== P.base.note) patch.note = fNote.value;
-            if (fStatus.value !== P.base.status) patch.status = fStatus.value;
+            if (fStatus && fStatus.value !== P.base.status) patch.status = fStatus.value;
             if (fMs && fMs.value !== P.base.parent) patch.parent = fMs.value;   // '' takes the card out of its milestone
-            if (FX) Object.assign(patch, fieldsPatch(P.base.fields, FX.values(), fxKeys()));
-            if (!Object.keys(patch).length) { msgEl.textContent = 'No changes to save.'; return; }
+            if (FX) {
+              const fp = fieldsPatch(P.base.fields, FX.values(), fxKeys());
+              // the Type select is the card's kind and type together
+              if (fp.type !== undefined) { const tp = typePatch(fp.type, P.base.kind, P.base.type); delete fp.type; Object.assign(fp, tp); }
+              Object.assign(patch, fp);
+            }
+            if (!Object.keys(patch).length) {
+              // A Type choice that the card already is (its kind changed elsewhere to match) sends nothing: it is the baseline now, so the form is clean.
+              if (FX) P.base.fields.type = FX.values().type;
+              msgEl.textContent = 'No changes to save.';
+              syncStart();
+              return;
+            }
             const saved = await api('PATCH', pp(pk, 'cards/' + encodeURIComponent(card.id)), patch);
             wrote();
-            P.base = { title: saved.title, note: saved.note || '', status: saved.status, kind: saved.kind, parent: saved.parent || '', fields: fieldValues(saved) };
+            P.base = { title: saved.title, note: saved.note || '', status: saved.status, kind: saved.kind, type: fieldValues(saved).type, parent: saved.parent || '', fields: isMs ? fieldValues(saved) : cardValues(saved) };
             if (FX) FX.set(P.base.fields);
             P.baseUpdatedAt = saved.updatedAt;
             P.latestUpdatedAt = saved.updatedAt;
@@ -329,7 +356,8 @@
     }
 
     function resetFields() {
-      fTitle.value = P.base.title; fNote.value = P.base.note; fStatus.value = P.base.status;
+      fTitle.value = P.base.title; fNote.value = P.base.note;
+      if (fStatus) fStatus.value = P.base.status;
       if (fMs) fMs.value = P.base.parent;
       if (fKind) fKind.value = P.base.kind;
       if (FX) { FX.set(P.base.fields); FX.show(fxKeys()); }
@@ -343,6 +371,7 @@
     // The Start as thread button, or its Start button once the step is open: both wait for saved fields.
     let startBtn = null, goBtn = null, whyEl = null, startWhyEl = null;
     function syncStart() {
+      if (create) return;   // a new card has no saved card to start from
       const savedCard = findCard(P.target) || card;
       const lp = laneStartPlan(savedCard);
       const cardWhy = cardThreadStartWhy(savedCard);
@@ -375,6 +404,7 @@
 
     function renderFoot(focusFirst) {
       foot.replaceChildren();
+      if (isRemote()) P.starting = P.confirmDelete = false;
       startBtn = goBtn = whyEl = startWhyEl = null;
       if (P.starting) {
         const step = h('div', 'start-step');
@@ -459,6 +489,7 @@
         return;
       }
       const ro = isRO();
+      const away = isRemote();   // through the tunnel there is no Start as thread and no Delete
       const saveBtn = actionBtn(create ? 'Create card' : 'Save', 'primary', create ? 'create:' + selKey : 'save:' + selKey + ':' + card.id, save);
       if (focusFirst) setTimeout(() => saveBtn.focus(), 0);
       saveBtn.title = ro ? READONLY_WHY : 'Save (Ctrl or Cmd + Enter)';
@@ -466,15 +497,17 @@
       foot.append(saveBtn, plainBtn('Cancel', null, cancel), msgEl);
       foot.appendChild(h('span', 'grow'));
       if (!create) {
-        if (!isMs) {      // a milestone cannot be a thread
+        if (!isMs && !away) {      // a milestone cannot be a thread
           startBtn = plainBtn('Start as thread', null, () => { P.starting = true; renderFoot(true); });
           startWhyEl = h('span', 'foot-note');
           startWhyEl.setAttribute('role', 'status');
           foot.append(startBtn, startWhyEl);
         }
-        const del = plainBtn('Delete', 'danger', () => { P.confirmDelete = true; renderFoot(true); });
-        if (ro) { del.disabled = true; del.title = READONLY_WHY; }
-        foot.appendChild(del);
+        if (!away) {
+          const del = plainBtn('Delete', 'danger', () => { P.confirmDelete = true; renderFoot(true); });
+          if (ro) { del.disabled = true; del.title = READONLY_WHY; }
+          foot.appendChild(del);
+        }
         syncStart();
       }
       syncBusy();
@@ -520,7 +553,7 @@
       P.latestUpdatedAt = c.updatedAt;
       if (W) W.update(c);
       title.textContent = c.title;
-      const fm = faceModel(c, { cards: current.cards, done: cfg().roles.done, label });
+      const fm = faceModel(c, { cards: current.cards, finished: (b) => finishedIn(b, cfg()), label });
       headRowWrap.replaceChildren(h('span', 'idchip', c.id), kindMark(c.kind), ...[bugMark(fm), priorityMark(fm)].filter(Boolean));
       seenWrap.replaceChildren();
       if (c.seenByClaude === false) seenWrap.appendChild(unseenEl(ws ? 'span' : 'div'));
@@ -544,9 +577,13 @@
       syncMsField();
       if (FX) {
         // the fields follow the server too, one by one, where the user has not touched them
-        const nv = fieldValues(c), cur = FX.values();
+        const nv = cardValues(c), cur = FX.values();
         FIELD_KEYS.forEach((k) => {
-          if (!sameField(cur[k], P.base.fields[k])) return;
+          if (!sameField(cur[k], P.base.fields[k])) {
+            // the user changed it: keep their choice, but when the server now says the same (a kind changed elsewhere), that is the baseline
+            if (sameField(nv[k], cur[k])) P.base.fields[k] = nv[k];
+            return;
+          }
           if (!sameField(nv[k], cur[k])) FX.setKey(k, nv[k]);
           P.base.fields[k] = nv[k];
         });
@@ -557,6 +594,7 @@
       metaWorked.replaceChildren(...(wc ? [wc] : []));
       if (workedDt) workedDt.hidden = metaWorked.hidden = !wc;
       P.base.kind = c.kind;
+      P.base.type = fieldValues(c).type;
       if (!P.isDirty()) P.baseUpdatedAt = c.updatedAt;
       metaKind.textContent = c.kind;
       metaBy.textContent = c.source === 'user' ? 'You' : 'Claude';
@@ -580,8 +618,8 @@
       const kids = childrenOf(current.cards, m.id);
       msSection.replaceChildren();
       const head = h('div', 'ms-cards-head');
-      head.append(h('h3', 'ms-h', 'Cards in this milestone'), progressEl(progressFor(m)));
-      const cp = copyBtn(milestoneReport(m, current.cards, conf.stages, conf.roles.done), 'milestone report', 'Copy report');
+      head.append(h('h3', 'ms-h', 'Cards in this milestone'), msStateTag(msStateOf(m, current.cards, conf)), progressEl(progressFor(m)));
+      const cp = copyBtn(milestoneReport(m, current.cards, conf), 'milestone report', 'Copy report');
       cp.dataset.fid = 'ms-copy';
       head.appendChild(cp);
       msSection.appendChild(head);

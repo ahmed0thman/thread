@@ -26,9 +26,11 @@
     while (edges[i] > t) i--;
     return i;
   }
-  // When a card reached the done stage: its last move into it; a thread, the end of its last turn; else the time it was last updated.
+  // When a card was completed: the last time it entered the finished stages (the done stage or a later one) from a stage that is not
+  // finished, or was created in one. A move from Done to Released is no completion; reopening a card and finishing it again gives a
+  // new date. A thread: the end of its last turn. Without such an entry (the history keeps 50): the time it was last updated.
   // null when none of them is a usable time.
-  function doneAt(c, doneId) {
+  function completedAt(c, config) {
     if (c.kind === 'thread' && c.thread && Array.isArray(c.thread.turns)) {
       for (let i = c.thread.turns.length - 1; i >= 0; i--) {
         const t = c.thread.turns[i] && atMs(c.thread.turns[i].finishedAt);
@@ -37,7 +39,8 @@
     } else if (Array.isArray(c.history)) {
       let at = null;
       c.history.forEach((e) => {
-        const t = e && e.type === 'moved' && e.to === doneId ? atMs(e.at) : null;
+        const enters = e && ((e.type === 'moved' && stageFinishedIn(config, e.to) && !stageFinishedIn(config, e.from)) || (e.type === 'created' && stageFinishedIn(config, e.to)));
+        const t = enters ? atMs(e.at) : null;
         if (t !== null && (at === null || t > at)) at = t;
       });
       if (at !== null) return at;
@@ -78,9 +81,10 @@
     const roles = config.roles;
     const list = (Array.isArray(cards) ? cards : []).filter((c) => c && typeof c === 'object');
     const work = list.filter((c) => c.kind !== 'milestone');
-    const open = work.filter((c) => c.status !== roles.done);
-    const doneCards = work.filter((c) => c.status === roles.done);
-    const doneTimes = new Map(doneCards.map((c) => [c, doneAt(c, roles.done)]));
+    // finished: the done stage or a later one (see finishedIn); a card's date is when it was completed (see completedAt)
+    const open = work.filter((c) => !finishedIn(c, config));
+    const doneCards = work.filter((c) => finishedIn(c, config));
+    const doneTimes = new Map(doneCards.map((c) => [c, completedAt(c, config)]));
     const stageOf = (id) => config.stages.find((s) => s.id === id);
 
     const waits = [];
@@ -116,10 +120,11 @@
 
     const spent = new Map();
     work.forEach((c) => stageTimes(c).forEach(([stage, ms]) => { if (!spent.has(stage)) spent.set(stage, []); spent.get(stage).push(ms); }));
-    const stages = config.stages.filter((s) => s.id !== roles.done && spent.has(s.id))
+    const stages = config.stages.filter((s) => !stageFinishedIn(config, s.id) && spent.has(s.id))
       .map((s) => ({ id: s.id, label: s.label, n: spent.get(s.id).length, median: median(spent.get(s.id)) }));
 
-    const milestones = list.filter((c) => c.kind === 'milestone').map((m) => ({ id: m.id, title: String(m.title || m.id), ...progressOf(list, m.id, roles.done) }));
+    // the order the Milestones view lists them in, before the panel keeps its first few
+    const milestones = milestonesOrdered(list.filter((c) => c.kind === 'milestone'), list, config).map((m) => ({ id: m.id, title: String(m.title || m.id), state: msStateOf(m, list, config), ...progressOf(list, m.id, config) }));
     const working = stageOf(roles.working);
     return {
       empty: list.length === 0,
@@ -217,9 +222,9 @@
     const tiles = h('div', 'sum-tiles');
     const t = m.tiles;
     tiles.append(
-      sumTile('Open', t.open, false, '', 'Cards that are not in the done stage'),
+      sumTile('Open', t.open, false, '', 'Cards that are not in the done stage or a later one'),
       sumTile(t.workingLabel, t.working, false, '', 'Cards in the ' + t.workingLabel + ' stage'),
-      sumTile('Done, last ' + SUM_DONE_DAYS + ' days', t.doneRecent, false, '', 'Cards that reached the done stage in the last ' + SUM_DONE_DAYS + ' days'),
+      sumTile('Done, last ' + SUM_DONE_DAYS + ' days', t.doneRecent, false, '', 'Cards completed (moved into the done stage or a later one) in the last ' + SUM_DONE_DAYS + ' days'),
       sumTile('Open bugs', t.bugs, true, '', 'Open cards of type bug'),
       sumTile('Waiting for you', t.waiting, true, t.waiting > 0 ? hashFor(selKey, 'waiting') : '', 'Items Claude is waiting on you for'),
     );
@@ -319,7 +324,7 @@
         a.href = hashFor(selKey, x.id);
         bindCardLink(a, x.id);
         const top = h('span', 'sum-ms-top');
-        top.append(h('span', 'idchip', x.id), h('span', 'sum-ms-title', x.title));
+        top.append(h('span', 'idchip', x.id), h('span', 'sum-ms-title', x.title), msStateTag(x.state));
         a.append(top, progressEl({ done: x.done, total: x.total }));
         li.appendChild(a);
         ul.appendChild(li);
@@ -354,7 +359,7 @@
     const ul = h('ul', 'sum-notes muted');
     [
       'A card keeps the last 50 entries of its history. An older card may show only when it was created, and a move that fell out of the history is not counted.',
-      'A card counts as done on the day of its last move into the done stage; if that move is not in the history, on the day it was last updated.',
+      'A card counts as done on the day it last moved into the done stage or a later one from an earlier stage; if that move is not in the history, on the day it was last updated.',
       'Work by the main session shows only where Claude recorded a worker. Tokens come from sub-agent runs and thread turns, not from the main session.',
       'Weeks start on Monday in this browser’s time zone.',
     ].forEach((t) => ul.appendChild(h('li', null, t)));

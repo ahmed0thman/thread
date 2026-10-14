@@ -27,7 +27,7 @@ const CUSTOM = {
 
 const lib = vm.runInNewContext(
   `${block('milestones and stages')}\n${block('list model')}\n${block('milestone view model')}\n`
-  + '({ rowType, workerText, listRows, LIST_COLS, LIST_DEFAULT_SORT, sortRows, nextSort, listFilter, listFiltering, listChoices, milestoneStats, milestonesShown, listRowSig, NO_MS })',
+  + '({ rowType, workerText, listRows, LIST_COLS, LIST_DEFAULT_SORT, sortRows, nextSort, listFilter, listFiltering, listChoices, milestoneStats, milestonesShown, milestonesOrdered, msStateOf, listRowSig, NO_MS })',
   {},
 );
 
@@ -82,7 +82,7 @@ test('a row has the stage label from the config, the priority, the labels, the m
   assert.equal(r.progress, null);
 });
 
-test('a milestone row has its progress, no stage position, no waits and no milestone of its own', () => {
+test('a milestone row has its progress and state, no waits and no milestone of its own', () => {
   const cards = [
     card('c1', { kind: 'milestone', title: 'Launch', parent: 'c9', waits: [wait('w')] }),
     card('c2', { parent: 'c1', status: 'done' }), card('c3', { parent: 'c1' }), card('c4', { parent: 'c1', status: 'in_progress' }),
@@ -90,6 +90,7 @@ test('a milestone row has its progress, no stage position, no waits and no miles
   const m = plain(rows(cards))[0];
   assert.equal(m.type, 'milestone');
   assert.deepEqual(m.progress, { done: 1, total: 3 });
+  assert.equal(m.msState, 'open');
   assert.equal(m.stageIdx, null);
   assert.equal(m.waits, 0);
   assert.equal(m.milestoneId, '');
@@ -175,6 +176,18 @@ test('the stage sorts in the order of the board columns, also for stages of your
   const own = [card('c1', { status: 'shipped' }), card('c2', { status: 'testing' }), card('c3', { status: 'backlog' }), card('c4', { status: 'doing' })];
   assert.deepEqual(order(own, 'stage', 'asc', CUSTOM), ['c3', 'c4', 'c2', 'c1']);
   assert.equal(plain(rows(own, CUSTOM))[0].stageLabel, 'Shipped');
+});
+
+test('in the Stage column the milestones come after every stage, open first, then empty, then done, whichever way it is sorted', () => {
+  const cards = [
+    card('c1', { kind: 'milestone', title: 'Done one' }), card('c2', { parent: 'c1', status: 'done' }),
+    card('c3', { kind: 'milestone', title: 'Empty one' }),
+    card('c4', { kind: 'milestone', title: 'Open one' }), card('c5', { parent: 'c4', status: 'new' }),
+    card('c6', { status: 'idea', kind: 'idea' }), card('c7', { status: 'done' }),
+  ];
+  assert.deepEqual(order(cards, 'stage', 'asc'), ['c6', 'c5', 'c2', 'c7', 'c4', 'c3', 'c1']);
+  assert.deepEqual(order(cards, 'stage', 'desc'), ['c7', 'c2', 'c5', 'c6', 'c4', 'c3', 'c1']);
+  assert.deepEqual(plain(rows(cards)).filter((r) => r.type === 'milestone').map((r) => [r.id, r.msState]), [['c1', 'done'], ['c3', 'empty'], ['c4', 'open']]);
 });
 
 test('waiting sorts by the number of open items, the most first; the type sorts task, bug, idea, thread, milestone', () => {
@@ -296,6 +309,10 @@ test('blocked means one blocker that is not in the done stage: the mark, the Blo
   assert.deepEqual(ids(lib.listFilter(rs, { blocked: true })), ['c1', 'c3']);
   assert.deepEqual(plain(rs.find((r) => r.id === 'c3').blockedBy), ['c4'], 'only the open one is named');
   assert.deepEqual(plain(rs.find((r) => r.id === 'c2').blockedBy), []);
+  // a blocker in a stage after the done stage is finished too
+  const stages = [...CONFIG.stages, { id: 'released', label: 'Released' }];
+  const later = [card('c1', { blockedBy: ['c2'] }), card('c2', { status: 'released' }), card('c3', { blockedBy: ['c4'] }), card('c4', { status: 'blocked' })];
+  assert.deepEqual(ids(lib.listFilter(rows(later, { ...CONFIG, stages }), { blocked: true })), ['c3'], 'a blocker in Released holds nothing up');
   // a custom done stage
   const custom = [card('c1', { status: 'doing', blockedBy: ['c2'] }), card('c2', { status: 'shipped' }), card('c3', { status: 'doing', blockedBy: ['c4'] }), card('c4', { status: 'testing' })];
   assert.deepEqual(ids(lib.listFilter(rows(custom, CUSTOM), { blocked: true })), ['c3']);
@@ -407,13 +424,43 @@ test('a milestone counts its cards by the role of their stage and lists the ones
     card('c8', { status: 'new' }),
   ];
   const st = lib.milestoneStats(cards, cards[0], CONFIG);
-  assert.equal(st.total, 6);
+  assert.equal(st.total, 5, 'the idea (c7) does not count until it is a task');
   assert.equal(st.done, 1);
   assert.equal(st.working, 2, 'working and review');
-  assert.equal(st.todo, 3, 'new, blocked and the idea stage');
-  assert.deepEqual(idsOf(st.open), ['c7', 'c5', 'c3', 'c4', 'c6']);
-  assert.deepEqual(idsOf(st.shown), ['c7', 'c5', 'c3', 'c4', 'c6']);
+  assert.equal(st.todo, 2, 'new and blocked');
+  assert.deepEqual(idsOf(st.open), ['c5', 'c3', 'c4', 'c6']);
+  assert.deepEqual(idsOf(st.shown), ['c5', 'c3', 'c4', 'c6']);
   assert.equal(st.more, 0);
+  // the same card as a task is counted again
+  const asTask = lib.milestoneStats(cards.map((c) => (c.id === 'c7' ? { ...c, kind: 'task' } : c)), cards[0], CONFIG);
+  assert.deepEqual([asTask.total, asTask.todo], [6, 3]);
+});
+
+test('a card in a stage after the done stage counts as done in the Milestones view', () => {
+  const stages = [...CONFIG.stages, { id: 'released', label: 'Released' }];
+  const config = { ...CONFIG, stages };
+  const cards = [card('c1', { kind: 'milestone' }), card('c2', { parent: 'c1', status: 'released' }), card('c3', { parent: 'c1', status: 'done' }), card('c4', { parent: 'c1', status: 'blocked' })];
+  const st = lib.milestoneStats(cards, cards[0], config);
+  assert.deepEqual([st.total, st.done, st.todo, st.working], [3, 2, 1, 0]);
+  assert.deepEqual(idsOf(st.open), ['c4']);
+});
+
+test('the Milestones view lists open milestones first, then empty ones, then done ones, each group in its own order', () => {
+  const cards = [
+    card('c1', { kind: 'milestone', title: 'A done one' }), card('c2', { parent: 'c1', status: 'done' }),
+    card('c3', { kind: 'milestone', title: 'An empty one' }), card('c4', { parent: 'c3', kind: 'idea' }),
+    card('c5', { kind: 'milestone', title: 'An open one' }), card('c6', { parent: 'c5' }),
+    card('c7', { kind: 'milestone', title: 'Another done one' }), card('c8', { parent: 'c7', status: 'done' }),
+    card('c9', { kind: 'milestone', title: 'Another open one' }), card('c10', { parent: 'c9', status: 'in_progress' }),
+    card('c11', { kind: 'milestone', title: 'Another empty one' }),
+  ];
+  const ms = cards.filter((c) => c.kind === 'milestone');
+  assert.deepEqual(idsOf(lib.milestonesOrdered(ms, cards, CONFIG)), ['c5', 'c9', 'c3', 'c11', 'c1', 'c7']);
+  assert.deepEqual(ms.map((m) => lib.msStateOf(m, cards, CONFIG)), ['done', 'empty', 'open', 'done', 'open', 'empty']);
+  // the page works the state out from the cards it holds, so it agrees with the progress beside it even when the server's msState is stale
+  assert.equal(lib.msStateOf({ ...ms[0], msState: 'open' }, cards, CONFIG), 'done', 'a stale server state is not used');
+  const moved = cards.map((c) => (c.id === 'c2' ? { ...c, status: 'new' } : c));   // a child changed here, the milestone card not yet
+  assert.equal(lib.msStateOf({ ...ms[0], msState: 'done' }, moved, CONFIG), 'open');
 });
 
 test('at most five open cards are listed, and the rest are counted', () => {
@@ -459,8 +506,8 @@ function tablePage() {
   const start = html.indexOf('  const TYPE_SHAPE');
   const end = html.indexOf('  function clearListFilters');
   assert.ok(start > 0 && end > start);
-  const src = `${block('list model')}\n${html.slice(start, end)}\n({ buildListRow, buildListHead, LIST_COLS })`;
-  const page = vm.runInNewContext(src, vm.createContext({ ...env, progressOf: () => ({ done: 0, total: 0 }), openWaitsOf: () => [] , matches: () => true }));
+  const src = `${block('list model')}\n${block('card field marks')}\n${html.slice(start, end)}\n({ buildListRow, buildListHead, LIST_COLS })`;
+  const page = vm.runInNewContext(src, vm.createContext({ ...env, progressOf: () => ({ done: 0, total: 0 }), msStateOf: () => 'empty', MS_STATE_LABEL: { empty: 'Empty', open: 'Open', done: 'Done' }, MS_ORDER: { open: 0, empty: 1, done: 2 }, MS_STATE_HINT: {}, openWaitsOf: () => [] , matches: () => true }));
   return { page, state, doc };
 }
 
@@ -522,6 +569,17 @@ test('a row can be focused, opens its card on a click and on Enter, and marks a 
   assert.deepEqual(t.state.opened, [['c4', 'TR'], ['c4', 'TR']]);
 });
 
+test('an idea or a thread of type bug keeps a bug mark beside its own type in the row; a bug and a plain idea have none extra', () => {
+  const t = tablePage();
+  const rowOf = (extra) => t.page.buildListRow(lib.listRows([card('c1', extra)], CONFIG)[0]);
+  const idea = rowOf({ kind: 'idea', type: 'bug', status: 'idea' });
+  assert.equal(idea.querySelector('.type-mark .tm-word').textContent, 'Idea');
+  assert.ok(idea.querySelector('.c-type .fm-bug .shape.s-beetle'), 'the bug mark of the face');
+  assert.equal(rowOf({ kind: 'idea', status: 'idea' }).querySelector('.fm-bug'), null);
+  assert.equal(rowOf({ type: 'bug' }).querySelector('.c-type .fm-bug'), null, 'a bug is already marked as one by its type');
+  assert.equal(rowOf({ kind: 'task' }).querySelector('.fm-bug'), null);
+});
+
 test('a card of an older version draws a plain row: no marks, normal priority, empty cells', () => {
   const t = tablePage();
   const tr = t.page.buildListRow(lib.listRows([{ id: 'c1', kind: 'task', title: 'Old', note: '', status: 'new' }], CONFIG)[0]);
@@ -532,12 +590,16 @@ test('a card of an older version draws a plain row: no marks, normal priority, e
   assert.equal(tr.querySelector('time'), null);
 });
 
-test('a milestone row shows its progress where the stage would be, and text from a card is set as text', () => {
+test('a milestone row shows its state and progress where the stage would be, and text from a card is set as text', () => {
   const t = tablePage();
-  const page = vm.runInNewContext(`${block('list model')}\n({ listRows })`, { progressOf: () => ({ done: 2, total: 5 }), openWaitsOf: () => [], matches: () => true });
+  const page = vm.runInNewContext(`${block('list model')}\n({ listRows })`, { progressOf: () => ({ done: 2, total: 5 }), msStateOf: () => 'open', openWaitsOf: () => [], matches: () => true });
   const m = page.listRows([card('c1', { kind: 'milestone', title: '<img src=x onerror=alert(1)>' })], CONFIG)[0];
   const tr = t.page.buildListRow(m);
-  assert.match(tr.querySelector('.c-stage').textContent, /2\/5 done/);
+  assert.equal(tr.querySelector('.c-stage').textContent, 'Open · 2/5');
+  const done = t.page.buildListRow({ ...m, msState: 'done', progress: { done: 3, total: 3 } });
+  assert.equal(done.querySelector('.c-stage').textContent, 'Done · 3/3');
+  const none = t.page.buildListRow({ ...m, msState: 'empty', progress: { done: 0, total: 0 } });
+  assert.equal(none.querySelector('.c-stage').textContent, 'Empty');
   assert.match(tr.textContent, /Milestone/);
   assert.equal(tr.querySelector('.l-title').textContent, '<img src=x onerror=alert(1)>');
   assert.equal(tr.querySelector('img'), null);
@@ -559,6 +621,8 @@ function milestonesPage(cards) {
     h(tag, cls, text) { const e = doc.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== null) e.textContent = text; return e; },
     plainBtn: (text) => { const b = doc.createElement('button'); b.textContent = text; return b; },
     progressEl: (p) => { const e = doc.createElement('div'); e.textContent = p.done + '/' + p.total; return e; },
+    msStateTag: (state) => { const e = doc.createElement('span'); e.className = 'tag ms-st'; e.textContent = state; return e; },
+    waitTag: () => null,
     goView: () => {}, milestoneSel: '',
   };
   const start = html.indexOf('  function milestonesPaneKey');
@@ -583,7 +647,7 @@ test('a card or milestone link in the Milestones view opens the card page on a p
   }
   assert.equal(t.opened.length, 2);
   // the key follows what is drawn
-  assert.match(t.page.milestonesPaneKey(), /^\["milestones","k1",\[\["c1","Launch",2,1,0,1,0,\[\["c2","Open one","New"\]\]\]\]\]$/);
+  assert.match(t.page.milestonesPaneKey(), /^\["milestones","k1",\[\["c1","Launch","open","",2,1,0,1,0,\[\["c2","Open one","New"\]\]\]\]\]$/);
 });
 
 test('closing a card page opened from a link in the Milestones or the Summary puts focus back on that link', () => {

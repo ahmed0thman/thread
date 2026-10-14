@@ -23,7 +23,7 @@ test('the card page disables both start buttons for saved criteria or blockers a
     let saved = { id: 'c1', kind };
     const startBtn = {}, goBtn = {}, whyEl = {}, startWhyEl = {};
     const sync = vm.runInNewContext(src, {
-      P: { target: 'c1', isDirty: () => false }, card: { id: 'c1', kind },
+      create: false, P: { target: 'c1', isDirty: () => false }, card: { id: 'c1', kind },
       findCard: () => saved, laneStartPlan: () => null, isRO: () => false,
       startBtn, goBtn, whyEl, startWhyEl, setOff: (b, off) => { b.disabled = off; },
     });
@@ -51,11 +51,11 @@ test('the card page disables both start buttons for saved criteria or blockers a
   assert.match(html, /foot\.append\(startBtn, startWhyEl\)/, 'the reason is beside the card-page button');
 });
 
-const model = vm.runInNewContext(`${block('card fields')}\n({ FIELD_KEYS, fieldValues, parseLabels, parseBlockers, parseCriteria, fieldsPatch, fieldKeys, workerTitle, faceModel, fieldFacts, criteriaText })`, {});
+const model = vm.runInNewContext(`${block('card fields')}\n({ FIELD_KEYS, fieldValues, parseLabels, parseBlockers, parseCriteria, fieldsPatch, fieldKeys, workerTitle, faceModel, fieldFacts, criteriaText, typeChoice, typePatch })`, {});
 
 const NEW = { kind: 'task', id: 'c1', title: 'T', status: 'new' };
 const STAGES = { c2: 'In progress', c3: 'New', c4: 'Done' };
-const ctxOf = (cards) => ({ cards, done: 'done', label: (s) => ({ in_progress: 'In progress', new: 'New', done: 'Done' })[s] || s });
+const ctxOf = (cards) => ({ cards, finished: (c) => c.status === 'done', label: (s) => ({ in_progress: 'In progress', new: 'New', done: 'Done' })[s] || s });
 const cardsOf = (...pairs) => pairs.map(([id, status, kind = 'task']) => ({ id, status, kind, title: id }));
 
 // ---------------------------------------------------------------- the form model
@@ -155,6 +155,14 @@ test('a card is not blocked once every blocker is done, and a blocker that is go
   assert.deepEqual(plain(model.faceModel({ ...NEW, blockedBy: ['c2', 'c3'] }, ctxOf(others))).blocked, []);
   assert.equal(model.faceModel({ ...NEW, blockedBy: ['c2', 'c3'] }, ctxOf(others)).blockedTitle, '');
   assert.deepEqual(plain(model.faceModel({ ...NEW, blockedBy: ['c9'] }, ctxOf(others))).blocked, []);
+});
+
+test('a blocker in any finished stage (the done stage or a later one) holds nothing up; the face asks the page which stages are finished', () => {
+  const others = cardsOf(['c2', 'released'], ['c3', 'new']);
+  const ctx = { ...ctxOf(others), finished: (c) => c.status === 'done' || c.status === 'released' };
+  assert.deepEqual(plain(model.faceModel({ ...NEW, blockedBy: ['c2', 'c3'] }, ctx)).blocked, ['c3']);
+  assert.deepEqual(plain(model.faceModel({ ...NEW, blockedBy: ['c2'] }, ctx)).blocked, []);
+  assert.match(html, /finished: \(b\) => finishedIn\(b, cfg\(\)\)/, 'the board and the card page give the real rule');
 });
 
 test('only a card that says verified: false is marked, and a milestone or a thread shows what it can have', () => {
@@ -378,4 +386,61 @@ test('the history names the worker of an entry, shows what a worker did and what
   ]);
   // an entry without a worker reads as before
   assert.deepEqual(plain(historyRows({ source: 'user', createdAt: 'T0', history: [{ at: 'T1', by: 'claude', type: 'moved', from: 'new', to: 'review' }] }, labelOf)).map((r) => r.text), ['Claude moved it from New to Review', 'You created it']);
+});
+
+// ---------------------------------------------------------------- the Type select of a task or idea page: Task, Bug or Idea
+
+test('the Type select is one choice for a task or idea: Idea is the kind, Bug is a task with the type field', () => {
+  assert.equal(model.typeChoice({ kind: 'task' }), 'task');
+  assert.equal(model.typeChoice({ kind: 'task', type: 'bug' }), 'bug');
+  assert.equal(model.typeChoice({ kind: 'idea' }), 'idea');
+  assert.equal(model.typeChoice({ kind: 'idea', type: 'bug' }), 'idea', 'a stored bug idea shows as an idea');
+  assert.equal(model.typeChoice({ kind: 'task', type: 'nonsense' }), 'task');
+});
+
+test('choosing a type sends only what changed, as kind and/or type', () => {
+  const patch = (choice, kind, type) => plain(model.typePatch(choice, kind, type));
+  assert.deepEqual(patch('task', 'task', 'task'), {}, 'no change');
+  assert.deepEqual(patch('task', 'task', undefined), {}, 'no type stored is a task');
+  assert.deepEqual(patch('idea', 'task', 'task'), { kind: 'idea' });
+  assert.deepEqual(patch('task', 'idea', 'task'), { kind: 'task' });
+  assert.deepEqual(patch('bug', 'task', 'task'), { type: 'bug' });
+  assert.deepEqual(patch('task', 'task', 'bug'), { type: 'task' });
+  assert.deepEqual(patch('bug', 'idea', 'task'), { kind: 'task', type: 'bug' }, 'an idea becomes a bug');
+  assert.deepEqual(patch('idea', 'task', 'bug'), { kind: 'idea' }, 'a bug becomes an idea and keeps its type: a bug idea');
+  assert.deepEqual(patch('idea', 'idea', 'bug'), {}, 'a bug idea chosen as Idea again is no change');
+  assert.deepEqual(patch('task', 'idea', 'bug'), { kind: 'task', type: 'task' }, 'an idea that kept a bug type becomes a plain task');
+  assert.deepEqual(patch('bug', 'idea', 'bug'), { kind: 'task' }, 'an idea with the bug type becomes a bug: only the kind changes');
+});
+
+test('the card page offers Idea only for an existing task or idea, sends kind with type, and a milestone has no Status or kind', () => {
+  assert.match(html, /\.concat\(withIdea \? \[\['idea', 'Idea'\]\] : \[\]\)/);
+  assert.match(html, /fieldsEditor\(fxKeys\(\), \(\) => onTouched\(\), !create\)/, 'a new card has its own Type select');
+  assert.match(html, /const tp = typePatch\(fp\.type, P\.base\.kind, P\.base\.type\); delete fp\.type; Object\.assign\(fp, tp\);/);
+  assert.match(html, /const fStatus = isMs \? null : h\('select', 'input'\);/, 'a milestone has no Status select');
+  assert.match(html, /if \(fKind\.value !== 'milestone'\) bodyObj\.status = fStatus\.value;/, 'a new milestone sends no status');
+  assert.match(html, /if \(fStatus && fStatus\.value !== P\.base\.status\) patch\.status = fStatus\.value;/);
+  assert.match(html, /if \(wStatus\) wStatus\.hidden = fKind\.value === 'milestone';/, 'the Status field goes when Type is Milestone');
+  assert.match(html, /metaKind\.textContent = c\.kind;/, 'the Kind row follows the card');
+  assert.match(html, /msStateTag\(msStateOf\(m, current\.cards, conf\)\), progressEl\(progressFor\(m\)\)/, 'the state is beside the progress');
+});
+
+test('the new-card form does not look for a saved card when it syncs the start button (no error on a keystroke)', () => {
+  const start = html.indexOf('    function syncStart()');
+  const end = html.indexOf('    // known sessions', start);
+  const src = `${block('gear menu actions')}\n${html.slice(start, end)}\nsyncStart`;
+  const startBtn = {};
+  const sync = vm.runInNewContext(src, {
+    create: true, P: { target: '', isDirty: () => true }, card: null, findCard: () => null,
+    laneStartPlan: () => { throw new Error('read a saved card'); }, isRO: () => false, startBtn, goBtn: null, whyEl: {}, startWhyEl: {}, setOff: () => {},
+  });
+  assert.doesNotThrow(() => sync());
+  assert.deepEqual(startBtn, {}, 'nothing is touched');
+});
+
+test('a Type choice that the card already is, after its kind changed elsewhere, becomes the baseline instead of leaving the form dirty', () => {
+  // an untouched field follows the server; a touched one that now equals the server's value is the baseline, else the user's choice stays
+  assert.match(html, /if \(sameField\(nv\[k\], cur\[k\]\)\) P\.base\.fields\[k\] = nv\[k\];\s*return;/);
+  // a Save whose patch is empty takes the choice as the baseline too, and the start button follows
+  assert.match(html, /if \(FX\) P\.base\.fields\.type = FX\.values\(\)\.type;\s*msgEl\.textContent = 'No changes to save\.';\s*syncStart\(\);/);
 });

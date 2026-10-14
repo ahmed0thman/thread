@@ -331,8 +331,8 @@ export class FakeEl {
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 }
 
-// The released versions the cross-version tests run: 0.9.1, 0.10.0 (tag v0.10.0, commit 3b61221) and 0.11.0.
-export const RELEASED_REFS = ['v0.9.1', '3b61221', 'v0.11.0'];
+// The released versions the cross-version tests run: 0.9.1, 0.10.0 (tag v0.10.0, commit 3b61221), 0.11.0 and 0.12.1.
+export const RELEASED_REFS = ['v0.9.1', '3b61221', 'v0.11.0', 'v0.12.1'];
 
 /**
  * The server folder of an older plugin version, taken from a git ref (a tag, or a commit id) into a temp folder that is

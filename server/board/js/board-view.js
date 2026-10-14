@@ -34,7 +34,8 @@
     const conf = cfg();
     const chat = conf.mode === 'chat';
     const stages = chat ? chatStages(conf) : conf.stages;
-    const pool = chat ? current.cards.filter(isThread) : current.cards;   // chat-only shows threads only
+    // chat-only shows threads only; a milestone has no stage, so it is not on the board (the Milestones view shows it)
+    const pool = chat ? current.cards.filter(isThread) : current.cards.filter((c) => c.kind !== 'milestone');
     const filtering = !!(f.q || f.threadsOnly || f.session || f.milestone || f.waiting);
     const shown = pool.filter((c) => matches(c, f));
     const byStatus = {};
@@ -58,7 +59,7 @@
     // the line beside the toolbar
     elNote.replaceChildren();
     if (!pool.length) {
-      elNote.textContent = chat ? 'No threads yet. Start one with /thread:new.' : 'The board is empty. Press N to add the first card.';
+      elNote.textContent = chat ? 'No threads yet. Start one with /thread:new.' : current.cards.length ? 'No cards on the board yet. Press N to add one. Milestones are in the Milestones view.' : 'The board is empty. Press N to add the first card.';
     } else if (filtering) {
       const total = pool.length;
       if (!shown.length) {
@@ -122,10 +123,9 @@
   function buildCard(card) {
     const thread = isThread(card);
     const t = thread ? card.thread : null;
-    const milestone = card.kind === 'milestone';
     const ms = milestoneOf(card);
-    const fm = faceModel(card, { cards: current.cards, done: cfg().roles.done, label });
-    const el = h('article', 'card' + (thread ? ' is-thread' : milestone ? ' is-milestone' : ''));
+    const fm = faceModel(card, { cards: current.cards, finished: (b) => finishedIn(b, cfg()), label });
+    const el = h('article', 'card' + (thread ? ' is-thread' : ''));
     el.dataset.id = card.id;
     el.tabIndex = 0;
     el.setAttribute('role', 'button');
@@ -143,8 +143,6 @@
     if (lbls) el.appendChild(lbls);
     if (ms) el.appendChild(milestoneTag(ms));
     if (card.note) el.appendChild(h('p', 'card-note', card.note));
-    const prog = milestone ? progressFor(card) : null;
-    if (prog) el.appendChild(progressEl(prog));
     if (thread && t.parentSessionId) {
       const from = h('p', 'card-from', 'from ' + sessionLabel(t.parentSessionId));
       from.title = sessionLabel(t.parentSessionId);
@@ -166,13 +164,13 @@
     if (lt) foot.appendChild(lt);
     faceTags(fm).forEach((tag) => foot.appendChild(tag));
     const waits = cardWaits(card);
-    const wt = waitTag(waits, milestone ? 'milestone' : 'card');
+    const wt = waitTag(waits, 'card');
     if (wt) foot.appendChild(wt);
     if (card.seenByClaude === false) foot.appendChild(unseenEl('span'));
     if (foot.childNodes.length) el.appendChild(foot);
 
     const rs = thread ? reportState(card) : '';
-    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (ms ? ', in milestone ' + ms.title : '') + (laneInfo(card) ? ', lane ' + laneTagText(laneInfo(card)) : '') + fm.aria.map((a) => ', ' + a).join('') + (prog ? ', ' + prog.done + ' of ' + prog.total + ' done' : '') + (waits.length ? ', ' + waits.length + (milestone ? ' waiting for you on its cards' : ' waiting for you') : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
+    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (ms ? ', in milestone ' + ms.title : '') + (laneInfo(card) ? ', lane ' + laneTagText(laneInfo(card)) : '') + fm.aria.map((a) => ', ' + a).join('') + (waits.length ? ', ' + waits.length + ' waiting for you' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
 
     el.addEventListener('click', () => {
       if (Date.now() - lastDragEnd < 200) return;
@@ -315,7 +313,7 @@
   // ---- gear menu (page.test.mjs runs this block against a small fake DOM) ----
 
   function menuCtx() { return { ro: isRO(), stages: cfg().stages, choices: milestoneChoices(), reportState, waits: (c) => (isChat() ? 0 : openWaitsOf(c).length) }; }
-  function menuActions(card) { return halted ? [] : cardActions(card, menuCtx()); }
+  function menuActions(card) { return halted ? [] : remoteActions(cardActions(card, menuCtx())); }
   function menuItems(actions) { return actions.reduce((all, a) => all.concat(a.items || (a.sep ? [] : [a])), []); }
   function gearOf(id) { return elBoard.querySelector('.card[data-id="' + cssEscape(id) + '"] .gear'); }
 
@@ -507,15 +505,6 @@
     if (!card) { closeMenu(true); return; }
     if (a.id === 'end' || a.id === 'delete') { m.confirm = a.id; renderMenu(true); return; }
     if (a.id === 'keep') { closeMenu(true); return; }
-    if (a.id === 'copy') {
-      const conf = cfg();
-      copyOrWarn(milestoneReport(card, current.cards, conf.stages, conf.roles.done)).then((ok) => {
-        if (menu !== m) return;
-        btn.querySelector('.menu-text').textContent = ok ? 'Copied' : 'Copy failed';
-        m.timer = setTimeout(() => { if (menu === m) closeMenu(true); }, 900);
-      });
-      return;
-    }
     if (a.id === 'start') {
       closeMenu(false);
       startFor = id;

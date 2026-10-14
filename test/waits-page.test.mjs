@@ -233,8 +233,10 @@ test('a card with no open item has no tag, and the tag is wired into the card an
   const { page, setCards } = waitsPage();
   setCards([task('c1', { waits: [wait('c1.w1', 'question', { state: 'answered' })] })]);
   assert.deepEqual(plain(page.cardWaits({ ...task('c1'), waits: undefined })), []);
-  assert.match(html, /const wt = waitTag\(waits, milestone \? 'milestone' : 'card'\);\n\s+if \(wt\) foot\.appendChild\(wt\);/);
-  assert.match(html, /waiting for you on its cards' : ' waiting for you'\)/, 'the card\'s accessible name says it');
+  assert.match(html, /const wt = waitTag\(waits, 'card'\);\n\s+if \(wt\) foot\.appendChild\(wt\);/);
+  assert.match(html, /waits\.length \+ ' waiting for you'/, 'the card\'s accessible name says it');
+  // a milestone is not on the board; the Milestones view shows the tag with its cards' items
+  assert.match(html, /const wt = waitTag\(milestoneWaits\(current\.cards, m\.id\), 'milestone'\);\n\s+if \(wt\) li\.appendChild\(wt\);/);
 });
 
 test('the waiting count of a project: the selected one from the page\'s own state, the others from the project list', () => {

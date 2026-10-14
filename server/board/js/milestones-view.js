@@ -2,16 +2,17 @@
 
   // ---- milestone view model (list-page.test.mjs runs this block on its own, with the "milestones and stages" block) ----
   const MS_OPEN_SHOWN = 5;    // open cards listed under a milestone; the rest are counted
-  // The cards under a milestone by what the stage's role says. Done: the done stage. In progress: the working and review stages.
-  // To do: every other stage (new, blocked, ideas, a stage of your own). `open` is every card not done, in stage order and then by number.
+  // The cards that count under a milestone (not its ideas) by what the stage's role says. Done: the done stage and any stage after it.
+  // In progress: the working and review stages. To do: every other stage (new, blocked, a stage of your own). `open` is every counted
+  // card not done, in stage order and then by number.
   function milestoneStats(cards, m, config) {
-    const kids = childrenOf(cards, m.id);
+    const kids = countedKids(cards, m.id);
     const r = config.roles;
     const order = (c) => { const i = config.stages.findIndex((s) => s.id === c.status); return i < 0 ? config.stages.length : i; };
     const num = (c) => parseInt(String(c.id).replace(/\D/g, ''), 10) || 0;
     const out = { total: kids.length, todo: 0, working: 0, done: 0, open: [] };
     kids.forEach((c) => {
-      if (c.status === r.done) out.done++;
+      if (finishedIn(c, config)) out.done++;
       else {
         if (c.status === r.working || c.status === r.review) out.working++; else out.todo++;
         out.open.push(c);
@@ -29,16 +30,16 @@
     config.stages.forEach((s) => { stageName[s.id] = s.label; });
     return list.map((m) => {
       const st = milestoneStats(cards, m, config);
-      return [m.id, m.title, st.total, st.todo, st.working, st.done, st.more, st.shown.map((c) => [c.id, c.title, stageName[c.status] || c.status])];
+      return [m.id, m.title, msStateOf(m, cards, config), milestoneWaits(cards, m.id).map((w) => w.kind).sort().join(), st.total, st.todo, st.working, st.done, st.more, st.shown.map((c) => [c.id, c.title, stageName[c.status] || c.status])];
     });
   }
   // ---- end milestone view model ----
 
-  function milestonesPaneKey() { return JSON.stringify(['milestones', selKey, current ? milestonesShown(milestoneCards(), current.cards, cfg()) : null]); }
+  function milestonesPaneKey() { return JSON.stringify(['milestones', selKey, current ? milestonesShown(milestonesOrdered(milestoneCards(), current.cards, cfg()), current.cards, cfg()) : null]); }
 
   function renderMilestones() {
-    const list = milestoneCards();
     const conf = cfg();
+    const list = milestonesOrdered(milestoneCards(), current.cards, conf);
     const stageName = (c) => label(c.status);
     const wrap = h('section', 'ms-view');
     const head = h('div', 'home-head');
@@ -54,9 +55,11 @@
       const a = h('a', 'ms-item-head');
       a.href = hashFor(selKey, m.id);
       bindCardLink(a, m.id);
-      a.append(h('span', 'idchip', m.id), h('span', 'ms-item-title', m.title));
+      a.append(h('span', 'idchip', m.id), h('span', 'ms-item-title', m.title), msStateTag(msStateOf(m, current.cards, conf)));
       li.appendChild(a);
       li.appendChild(progressEl({ done: st.done, total: st.total }));
+      const wt = waitTag(milestoneWaits(current.cards, m.id), 'milestone');
+      if (wt) li.appendChild(wt);
       if (st.total) {
         const counts = h('dl', 'ms-counts tnum');
         [['To do', st.todo], ['In progress', st.working], ['Done', st.done]].forEach(([k, n]) => {

@@ -7,6 +7,9 @@ import * as core from './core.mjs';
 import { listLanesWithRelay } from './lanes.mjs';
 import { assembleBoardPage } from './page.mjs';
 import { markRunStopped, readRunText, runActivity } from './runs.mjs';
+import { TunnelError, createTunnelManager, reapStaleTunnel } from './tunnel.mjs';
+
+export { TunnelError };
 
 const MAX_BODY = 64 * 1024;
 const MAX_PORT_TRIES = 20;
@@ -61,6 +64,7 @@ function send(res, status, body, headers = {}) {
     'Content-Length': Buffer.byteLength(payload),
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
     ...headers,
   });
   res.end(payload);
@@ -140,9 +144,9 @@ function cardFields(body) {
   return out;
 }
 
-const PATCH_KEYS = ['title', 'note', 'status', 'parent', ...core.FIELD_NAMES];
-// What the page's "New" panel sends (issue.js): the same as a patch, and the kind.
-const CREATE_KEYS = [...PATCH_KEYS, 'kind'];
+const PATCH_KEYS = ['title', 'note', 'status', 'kind', 'parent', ...core.FIELD_NAMES];
+// What the page's "New" panel sends (issue.js): the same as a patch.
+const CREATE_KEYS = PATCH_KEYS;
 
 // A key the card calls do not take is a mistake worth telling the sender about (a lane, blocked_by).
 function checkKeys(body, allowed) {
@@ -229,7 +233,7 @@ async function handleProject(req, res, projectDir, sub, query) {
     requireJson(req);
     const body = await readJsonBody(req);
     checkKeys(body, PATCH_KEYS);
-    const args = pick(body, ['title', 'note', 'status']);
+    const args = pick(body, ['title', 'note', 'status', 'kind']);
     if (body.parent === null) args.parent = null; // null takes the card out of its milestone, like ''
     else Object.assign(args, pick(body, ['parent']));
     Object.assign(args, cardFields(body));
@@ -341,10 +345,95 @@ function projectsView(homeDir) {
   return { home: homeKey, projects: list };
 }
 
-function makeHandler(homeDir, token, stop) {
+// ---------------------------------------------------------------- the remote policy (the tunnel's listener)
+
+// Everything the board's page and a person at the keyboard can do, minus what could start or steer a Claude process or lose data.
+// The routes are the part of the path below /api/p/<key> (or below /api for the old routes without a project). Anything not listed
+// is refused: a new route is closed to the tunnel until it is added here.
+const RID = '[A-Za-z0-9_-]{1,64}';
+const REMOTE_ROUTES = [
+  ['GET', /^\/(state|agents|lanes)$/],
+  ['GET', new RegExp(`^/threads/${RID}/activity$`)],
+  ['GET', new RegExp(`^/cards/${RID}/runs/[0-9]{1,6}/(activity|prompt|report)$`)],
+  ['POST', /^\/cards$/],                                                  // a new card
+  ['PATCH', new RegExp(`^/cards/${RID}$`)],                                // an edit
+  ['POST', new RegExp(`^/cards/${RID}/waits/[A-Za-z0-9_.-]{1,80}$`)],      // answer or close a waiting item
+  ['POST', new RegExp(`^/threads/${RID}/report-request$`)],                // ask for a report to the main session
+  ['DELETE', new RegExp(`^/threads/${RID}/report-request$`)],              // take it back
+];
+
+function remoteRouteAllowed(method, path) {
+  if (method === 'GET' && (path === '/api/projects' || path === '/api/caps')) return true;
+  const pm = /^\/api\/p\/([0-9a-f]{12})(\/.*)?$/.exec(path);
+  let sub;
+  if (pm) sub = pm[2] || '';
+  else if (/^\/api\/(state|agents|cards|threads)(\/|$)/.test(path)) sub = path.slice('/api'.length);
+  else return false;
+  return REMOTE_ROUTES.some(([m, re]) => m === method && re.test(sub));
+}
+
+// Runs first on the remote listener. Returns true when it has answered. The checks: the tunnel's own host (nothing sent by a proxy
+// is believed, X-Forwarded-* included), the lifetime, the number of requests in flight, the tunnel token, the allowlist, and for a
+// write the exact origin and a rate limit. Nothing here looks at the peer address: every request comes from the tunnel on loopback.
+function remoteGate(req, res, remote, method, path) {
+  const host = remote.host;
+  if (!host || typeof req.headers.host !== 'string' || req.headers.host.toLowerCase() !== host) {
+    req.resume();
+    send(res, 403, { error: 'forbidden host' });
+    return true;
+  }
+  if (remote.expired()) {
+    req.resume();
+    res.once('finish', () => remote.expire());   // ending the tunnel closes this connection, so only after the answer is out
+    send(res, 401, { error: 'the tunnel has expired' });
+    return true;
+  }
+  if (remote.inFlight >= remote.limits.concurrent) {
+    req.resume();
+    send(res, 503, { error: 'too many requests at once' }, { 'Retry-After': '2' });
+    return true;
+  }
+  remote.inFlight++;
+  res.once('close', () => { remote.inFlight--; });
+  if (method === 'GET' && (path === '/' || path === '/api/ping')) return false;
+  const deny = (status, error, headers) => { req.resume(); send(res, status, { error }, headers); return true; };
+  if (!path.startsWith('/api/')) return deny(403, 'not allowed through the tunnel');
+  if (!remote.tokenOk(req.headers['x-thread-token'])) return deny(401, 'missing or wrong board token');
+  if (!remoteRouteAllowed(method, path)) return deny(403, 'not allowed through the tunnel');
+  if (WRITE_METHODS.has(method)) {
+    if (req.headers.origin !== 'https://' + host) return deny(403, 'forbidden origin');
+    const t = remote.now();
+    while (remote.writes.length && t - remote.writes[0] >= 60000) remote.writes.shift();
+    if (remote.writes.length >= remote.limits.writesPerMinute) return deny(429, 'too many changes in a minute; wait a little', { 'Retry-After': '10' });
+    remote.writes.push(t);
+  }
+  return false;
+}
+
+async function handleTunnelControl(req, res, tunnel) {
+  requireJson(req);
+  const body = await readJsonBody(req);
+  const action = body.action;
+  if (action !== 'start' && action !== 'status' && action !== 'stop') throw new HttpError(400, 'action must be start, status or stop');
+  if (action === 'status') { send(res, 200, tunnel.status()); return; }
+  if (action === 'stop') { const was = await tunnel.stop(); send(res, 200, { active: false, stopped: was }); return; }
+  try {
+    send(res, 200, await tunnel.start());
+  } catch (e) {
+    if (!(e instanceof TunnelError)) throw e;
+    send(res, 502, { error: e.message, code: e.code });
+  }
+}
+
+// `remote` is the policy of the tunnel's listener (null on the normal one); `tunnel` is the manager the normal listener controls.
+function makeHandler(homeDir, token, stop, { remote = null, tunnel = null } = {}) {
   const requireToken = typeof token === 'string' && token.length > 0;
   return async function handle(req, res) {
-    if (!hostAllowed(req.headers.host)) {
+    if (remote) {
+      let early;
+      try { early = remoteGate(req, res, remote, req.method, new URL(req.url, 'http://127.0.0.1').pathname); } catch { send(res, 400, { error: 'bad url' }); return; }
+      if (early) return;
+    } else if (!hostAllowed(req.headers.host)) {
       send(res, 403, { error: 'forbidden host' });
       return;
     }
@@ -366,11 +455,12 @@ function makeHandler(homeDir, token, stop) {
     }
 
     if (method === 'GET' && path === '/api/ping') {
-      send(res, 200, { app: 'thread-board', version: core.VERSION, dataKey: dataKey() });
+      // the tunnel's listener says no more than the version: the data key names this machine's data folder
+      send(res, 200, remote ? { app: 'thread-board', version: core.VERSION, remote: true } : { app: 'thread-board', version: core.VERSION, dataKey: dataKey() });
       return;
     }
 
-    if (path.startsWith('/api/')) {
+    if (path.startsWith('/api/') && !remote) {
       if (WRITE_METHODS.has(method) && typeof req.headers.origin === 'string' && !originAllowed(req.headers.origin, req.socket.localPort)) {
         req.resume();
         send(res, 403, { error: 'forbidden origin' });
@@ -383,8 +473,21 @@ function makeHandler(homeDir, token, stop) {
       }
     }
 
+    // What this page may do: everything on the normal listener, the allowlist on the tunnel's.
+    if (method === 'GET' && path === '/api/caps') {
+      send(res, 200, remote ? { remote: true, expiresAt: remote.expiresAt } : { remote: false });
+      return;
+    }
+
+    // Starts, shows or stops the tunnel: only on the normal listener (a guest session's board_open comes here, with the board token).
+    if (method === 'POST' && path === '/api/tunnel' && !remote) {
+      if (!tunnel) { req.resume(); send(res, 404, { error: 'not found' }); return; }
+      await handleTunnelControl(req, res, tunnel);
+      return;
+    }
+
     // Stops only this web server; the process that owns it keeps running.
-    if (method === 'POST' && path === '/api/shutdown') {
+    if (method === 'POST' && path === '/api/shutdown' && !remote) {
       req.resume();
       res.on('finish', stop);
       send(res, 200, { ok: true }, { Connection: 'close' });
@@ -406,7 +509,7 @@ function makeHandler(homeDir, token, stop) {
         send(res, 404, { error: 'unknown project' });
         return;
       }
-      if (sub === '' && method === 'DELETE') {
+      if (sub === '' && method === 'DELETE' && !remote) {
         req.resume();
         await core.forgetProject(key);
         send(res, 200, { ok: true });
@@ -433,9 +536,9 @@ function makeHandler(homeDir, token, stop) {
 }
 
 // What the board page gets for a card. The status is the stage it is shown in (see
-// core.effectiveStatus), a milestone carries its progress, and a thread gets the parsed
+// core.effectiveStatus), a milestone carries its progress and state (msState), and a thread gets the parsed
 // hand-back (free text, digest sections, step map) on each turn. It also carries workedBy, and verified: false for a
-// card with acceptance criteria that sits in the done stage without an approving review. Computed per response; never stored.
+// card with acceptance criteria that sits in a finished stage (the done stage or a later one) without an approving review. Computed per response; never stored.
 // `cards` are the project's stored cards, for the progress of a milestone.
 function withViews(card, cfg, cards) {
   if (!card) return card;
@@ -446,6 +549,7 @@ function withViews(card, cfg, cards) {
   if (view.parent && !cards.some((c) => c.id === view.parent && c.kind === 'milestone')) delete view.parent;
   if (card.kind === 'milestone') {
     view.progress = core.milestoneProgress(cards, card.id, cfg);
+    view.msState = core.milestoneState(cards, card.id, cfg);
     return threadView(view);
   }
   // a card removed since it was named as a blocker is not shown
@@ -454,9 +558,9 @@ function withViews(card, cfg, cards) {
     if (live.length) view.blockedBy = live; else delete view.blockedBy;
   }
   view.workedBy = core.workedBy(card);
-  // criteria in the done stage without an approving review: the board can move a card there, and so could an older plugin version
+  // criteria in a finished stage without an approving review: the board can move a card there, and so could an older plugin version
   // (and 0.11.0 turned cards into threads without checking for criteria, so a thread can carry them too)
-  if (core.hasCriteria(card) && view.status === cfg.taskRoles.done && !core.reviewApproved(card, cfg.taskRoles.done)) view.verified = false;
+  if (core.hasCriteria(card) && core.isFinished(card, cfg) && !core.reviewApproved(card, core.finishedStageIds(cfg))) view.verified = false;
   return threadView(view);
 }
 
@@ -501,8 +605,7 @@ function listenOnce(server, port) {
   });
 }
 
-export async function startBoardServer(projectDir, { port = 0, token } = {}) {
-  const handle = makeHandler(projectDir, token, () => closeBoardServer(server));
+function buildServer(handle) {
   const server = http.createServer((req, res) => {
     handle(req, res).catch((e) => {
       if (e instanceof HttpError || e instanceof core.ChatOnlyError || e instanceof core.WaitError) send(res, e.status, { error: e.message });
@@ -515,6 +618,29 @@ export async function startBoardServer(projectDir, { port = 0, token } = {}) {
   });
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
+  return server;
+}
+
+// The tunnel's listener: the same handler under the remote policy, on a free port of its own. Not the board's port.
+async function startRemoteListener(projectDir, policy) {
+  const server = buildServer(makeHandler(projectDir, '', null, { remote: policy }));
+  try {
+    await listenOnce(server, 0);
+  } catch (e) {
+    try { server.close(); } catch { /* ignore */ }
+    throw e;
+  }
+  server.on('error', (e) => log('remote listener error:', e && e.message));
+  return { server, port: server.address().port };
+}
+
+/**
+ * Starts the board's web server. `tunnel` holds test options for the tunnel manager (clock, lifetime, limits, timeouts).
+ * Resolves { server, port, url, tunnel }: `tunnel` starts, shows and stops the Cloudflare tunnel for this board, and ends with it.
+ */
+export async function startBoardServer(projectDir, { port = 0, token, tunnel: tunnelOptions } = {}) {
+  const tunnel = createTunnelManager({ serve: (policy) => startRemoteListener(projectDir, policy), ...tunnelOptions });
+  const server = buildServer(makeHandler(projectDir, token, () => closeBoardServer(server), { tunnel }));
 
   try {
     await listenOnce(server, port);
@@ -523,9 +649,12 @@ export async function startBoardServer(projectDir, { port = 0, token } = {}) {
     throw e;
   }
   server.on('error', (e) => log('server error:', e && e.message));
+  // however the board ends (stopped, replaced by a newer version, its process exiting), its tunnel ends with it
+  server.on('close', () => { tunnel.close().catch(() => {}); });
   core.sweepOrphanLogs(projectDir).catch(() => {});   // logs an older version left behind
+  reapStaleTunnel().catch(() => {});                  // a cloudflared an owner that crashed left behind
   const actual = server.address().port;
-  return { server, port: actual, url: `http://127.0.0.1:${actual}/` };
+  return { server, port: actual, url: `http://127.0.0.1:${actual}/`, tunnel };
 }
 
 export function closeBoardServer(server) {
@@ -568,6 +697,41 @@ export function stopBoard(baseUrl) {
     req.on('timeout', () => req.destroy());
     req.on('error', () => resolveP(false));
     req.end();
+  });
+}
+
+/**
+ * Ask the board at <base> to start, show or stop its tunnel (a guest session's way to the owner). Resolves { status, body }, or null
+ * when the board cannot be reached. A board from a version before the tunnel answers 404.
+ */
+export function tunnelRequest(baseUrl, action) {
+  return new Promise((resolveP) => {
+    const payload = JSON.stringify({ action });
+    let req;
+    try {
+      req = http.request(new URL('/api/tunnel', baseUrl), {
+        method: 'POST',
+        agent: false,
+        timeout: 60000,   // starting the tunnel can take 30 s
+        headers: { 'X-Thread-Token': boardToken(), 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      }, (res) => {
+        const chunks = [];
+        let size = 0;
+        res.on('data', (c) => { size += c.length; if (size > 16384) res.destroy(); else chunks.push(c); });
+        res.on('end', () => {
+          let body = null;
+          try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* not JSON */ }
+          resolveP({ status: res.statusCode, body });
+        });
+        res.on('error', () => resolveP(null));
+      });
+    } catch {
+      resolveP(null);
+      return;
+    }
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolveP(null));
+    req.end(payload);
   });
 }
 
@@ -653,7 +817,7 @@ export async function ensureBoard(projectDir, { port } = {}) {
     if (p > 65535) break;
     try {
       const b = await startBoardServer(projectDir, { port: p, token });
-      return { url: b.url, owned: true, server: b.server };
+      return { url: b.url, owned: true, server: b.server, tunnel: b.tunnel };
     } catch (e) {
       lastErr = e;
       if (!e || e.code !== 'EADDRINUSE') continue;
@@ -665,7 +829,7 @@ export async function ensureBoard(projectDir, { port } = {}) {
         for (let n = 0; n < 20; n++) {
           try {
             const b = await startBoardServer(projectDir, { port: p, token });
-            return { url: b.url, owned: true, server: b.server };
+            return { url: b.url, owned: true, server: b.server, tunnel: b.tunnel };
           } catch { await new Promise((r) => setTimeout(r, 50)); }
         }
         if (!(await pingBoard(url))) continue;   // someone else's port now

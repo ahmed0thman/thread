@@ -11,6 +11,8 @@
 }
 .dir-head { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dir-tail { flex: none; }
+.remote-badge { flex: none; padding: 2px var(--s2); border: 1px solid var(--warn); border-radius: var(--pill); background: var(--warn-bg); color: var(--warn); font: 500 12px var(--sans); white-space: nowrap; }
+.remote-badge[hidden] { display: none; }
 .conn { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
 .conn .shape { color: var(--muted); }
 .conn[data-state="online"] .shape { color: var(--ok); }

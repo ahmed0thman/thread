@@ -266,7 +266,7 @@ test('the start step sends context and agent, and asks for the agent list when i
 function milestoneHelpers() {
   const m = /\/\/ ---- milestones and stages[^\n]*\n([\s\S]*?)\/\/ ---- end milestones and stages ----/.exec(html);
   assert.ok(m, 'the milestone helper block is missing from the board page');
-  return vm.runInNewContext(`${m[1]}; ({ NO_MS, isThread, clip, chatStages, matches, childrenOf, progressOf, groupByStage, milestoneReport })`);
+  return vm.runInNewContext(`${m[1]}; ({ NO_MS, isThread, clip, chatStages, matches, childrenOf, progressOf, msStateOf, groupByStage, milestoneReport })`);
 }
 
 const STAGES4 = [{ id: 'todo', label: 'To do' }, { id: 'doing', label: 'Doing' }, { id: 'check', label: 'Checking' }, { id: 'done', label: 'Done' }];
@@ -305,8 +305,9 @@ test('the milestone filter shows the milestone and its cards, or the cards of no
   assert.deepEqual([m, inside, thr].filter((c) => matches(c, f({ milestone: 'c1', session: 's1' }))).map((c) => c.id), ['c5']);
 });
 
-test('milestone progress counts the cards in the done stage; the report groups them by stage', () => {
-  const { progressOf, groupByStage, milestoneReport, clip } = milestoneHelpers();
+test('milestone progress counts the cards in the done stage or a later one, not ideas; the report groups them by stage', () => {
+  const { progressOf, msStateOf, groupByStage, milestoneReport, clip } = milestoneHelpers();
+  const config = { stages: STAGES4, roles: { start: 'todo', working: 'doing', review: 'check', blocked: 'doing', done: 'done' } };
   const m = card('c1', 'milestone', 'Docs v2', 'doing');
   const cards = [
     m,
@@ -315,18 +316,37 @@ test('milestone progress counts the cards in the done stage; the report groups t
     card('c4', 'thread', 'Look into the build', 'check', { parent: 'c1', thread: { runState: 'idle' } }),
     card('c5', 'task', 'Changelog', 'done', { parent: 'c1' }),
     card('c6', 'idea', 'Not in it', 'done'),
+    card('c7', 'idea', 'An idea in it', 'todo', { parent: 'c1' }),
   ];
-  assert.deepEqual(plain(progressOf(cards, 'c1', 'done')), { done: 1, total: 4 });
-  assert.deepEqual(plain(progressOf(cards, 'c6', 'done')), { done: 0, total: 0 });
-  assert.deepEqual(groupByStage(cards.filter((c) => c.parent === 'c1'), STAGES4).map((g) => [g.stage.id, g.cards.length]), [['todo', 1], ['doing', 1], ['check', 1], ['done', 1]]);
-  assert.equal(milestoneReport(m, cards, STAGES4, 'done'), [
-    'Milestone c1 "Docs v2": 1 of 4 done.',
-    'To do (1)', '- c2 [task] Fix links',
+  assert.deepEqual(plain(progressOf(cards, 'c1', config)), { done: 1, total: 4 }, 'the idea under the milestone is not counted');
+  assert.deepEqual(plain(progressOf(cards, 'c6', config)), { done: 0, total: 0 });
+  assert.equal(msStateOf(m, cards, config), 'open');
+  assert.equal(msStateOf(card('c8', 'milestone', 'Empty', 'todo'), cards, config), 'empty');
+  assert.equal(msStateOf(card('c9', 'milestone', 'Ideas', 'todo'), [...cards, card('c10', 'idea', 'i', 'done', { parent: 'c9' })], config), 'empty', 'only ideas: empty');
+  // the state is always worked out from the cards the page holds, so it agrees with the progress; the server's msState is not used,
+  // and a stored status on the milestone itself is not looked at
+  assert.equal(msStateOf({ ...m, status: 'done', msState: 'done' }, cards, config), 'open', 'a stale server state is ignored');
+  assert.equal(msStateOf({ ...m, status: 'done' }, cards, config), 'open', 'an older version stored done on it; its cards say open');
+  // a stage after the done stage counts as finished; a thread by its shown stage
+  const later = { ...config, stages: [...STAGES4, { id: 'released', label: 'Released' }] };
+  const kids = [card('c1', 'milestone', 'M', 'todo'), card('c2', 'task', 'T', 'released', { parent: 'c1' }), card('c3', 'task', 'U', 'done', { parent: 'c1' })];
+  assert.deepEqual(plain(progressOf(kids, 'c1', later)), { done: 2, total: 2 });
+  assert.equal(msStateOf(kids[0], kids, later), 'done');
+  const thr = card('c4', 'thread', 'Thr', 'done', { parent: 'c1', thread: { runState: 'ended' } });
+  assert.equal(msStateOf(kids[0], [...kids, { ...thr, status: 'check' }], later), 'open', 'an idle thread is not finished');
+  assert.deepEqual(plain(progressOf([...kids, thr], 'c1', later)), { done: 3, total: 3 }, 'an ended thread is');
+  assert.deepEqual(groupByStage(cards.filter((c) => c.parent === 'c1'), STAGES4).map((g) => [g.stage.id, g.cards.length]), [['todo', 2], ['doing', 1], ['check', 1], ['done', 1]], 'the report lists the idea too');
+  assert.equal(milestoneReport(m, cards, config), [
+    'Milestone c1 "Docs v2": open, 1 of 4 done.',
+    'To do (2)', '- c2 [task] Fix links', '- c7 [idea] An idea in it',
     'Doing (1)', '- c3 [task] Search box',
     'Checking (1)', '- c4 [thread:idle] Look into the build',
     'Done (1)', '- c5 [task] Changelog',
   ].join('\n'));
-  assert.equal(milestoneReport(card('c9', 'milestone', 'Empty', 'todo'), [], STAGES4, 'done'), 'Milestone c9 "Empty": 0 of 0 done.\nNo cards in this milestone yet.');
+  assert.equal(milestoneReport(card('c9', 'milestone', 'Empty', 'todo'), [], config), 'Milestone c9 "Empty": empty, 0 of 0 done.\nNo cards in this milestone yet.');
+  // a milestone with only ideas has cards, though none counts: the report does not say it has none
+  const ideasOnly = [card('c9', 'milestone', 'Ideas', 'todo'), card('c10', 'idea', 'Maybe', 'todo', { parent: 'c9' })];
+  assert.equal(milestoneReport(ideasOnly[0], ideasOnly, config), 'Milestone c9 "Ideas": empty, 0 of 0 done.\nTo do (1)\n- c10 [idea] Maybe');
   assert.equal(clip('  a   long\ntitle ', 100), 'a long title');
   assert.equal(clip('x'.repeat(40), 30), 'x'.repeat(29) + '…');
 });
@@ -334,9 +354,9 @@ test('milestone progress counts the cards in the done stage; the report groups t
 test('a milestone page links to its cards, copies a report and offers no thread start', () => {
   assert.match(html, /Cards in this milestone/);
   assert.match(html, /'Copy report'/);
-  assert.match(html, /\['task', 'idea', 'milestone'\]/);
+  assert.match(html, /\[\['task', 'Task'\], \['bug', 'Bug'\], \['idea', 'Idea'\], \['milestone', 'Milestone'\]\]/);
   assert.match(html, /a\[href\]/, 'the focus trap reaches the card links');
-  assert.match(html, /if \(!isMs\) \{[^}]*Start as thread/s);
+  assert.match(html, /if \(!isMs && !away\) \{[^}]*Start as thread/s);
 });
 
 test('the new-card form and thread pages send parent, and a cleared one is sent as an empty string', () => {
@@ -406,11 +426,11 @@ test('gear menu: criteria or blockers disable Start as thread with a reason for 
   }
 });
 
-test('gear menu: a milestone offers Copy report and Delete, and a read-only board only what does not write', () => {
+test('gear menu: a milestone has no gear (it is not on the board and has no stage), and a read-only board only what does not write', () => {
   const cardActions = gearActions();
   const m = card('c1', 'milestone', 'Launch', 'doing');
-  assert.deepEqual(ids(cardActions(m, ctx())), ['copy', 'delete']);
-  assert.deepEqual(ids(cardActions(m, ctx({ ro: true }))), ['copy'], 'copying changes nothing');
+  assert.deepEqual(ids(cardActions(m, ctx())), [], 'its page has the Copy report and Delete');
+  assert.deepEqual(ids(cardActions(m, ctx({ ro: true }))), []);
   assert.deepEqual(ids(cardActions(card('c2', 'task', 'T', 'todo'), ctx({ ro: true }))), []);
   assert.deepEqual(ids(cardActions(thr('idle', { lastResult: 'x' }), ctx({ ro: true }))), [], 'no gear when nothing applies');
   assert.deepEqual(ids(cardActions(card('c8', 'thread', 'Broken', 'doing'), ctx())), [], 'a thread card without its thread data has nothing to do');
@@ -430,7 +450,8 @@ test('gear menu: each action calls the code its card page calls', () => {
   assert.match(html, /await deleteCard\(card\.id,/);
   assert.match(html, /await deleteCard\(id,/);
   assert.match(html, /await requestReport\(card\.id, on,/);
-  assert.match(html, /milestoneReport\(card, current\.cards, conf\.stages, conf\.roles\.done\)/);
+  assert.doesNotMatch(html, /a\.id === 'copy'/, 'the gear has no Copy report: only a milestone had it');
+  assert.match(html, /milestoneReport\(m, current\.cards, conf\)/, 'the milestone page copies its report');
   // each request is made in one place only
   assert.equal(html.split("'/end'").length, 2);
   assert.equal(html.split("'/report-request'").length, 2);
@@ -498,7 +519,7 @@ function menuPage(over = {}) {
   const env = {
     document: doc, window: { get innerHeight() { return state.windowH; }, addEventListener() {} }, elBoard: board, elNewBtn: newBtn,
     h(tag, cls, text) { const e = doc.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== null) e.textContent = text; return e; },
-    cssEscape: (x) => x, findCard: (id) => state.cards.find((c) => c.id === id) || null,
+    cssEscape: (x) => x, remoteActions: (list) => list, findCard: (id) => state.cards.find((c) => c.id === id) || null,
     cfg: () => ({ stages: state.stages, roles: ROLES4 }), isRO: () => state.ro, isChat: () => state.chat, milestoneChoices: () => state.choices,
     reportState: reportOf, milestoneReport: () => 'REPORT', copyOrWarn: async () => true, current: { cards: [] },
     endConfirmText: () => 'END?', deleteConfirmText: (c) => 'DEL ' + c.id,
@@ -628,9 +649,6 @@ test('gear menu (fake DOM): a disabled item does nothing, an enabled one calls i
   t.item('start').click();
   assert.deepEqual(t.calls.slice(1), [['parent', 'c3', 'c9'], ['parent', 'c3', ''], ['open', 'c3', true]]);
   assert.equal(t.page.startFor, 'c3', 'the card page is asked to open at the start step');
-  const m = t.put(card('c1', 'milestone', 'Launch', 'doing'));
-  m.click();
-  assert.deepEqual(t.items().map((i) => i.dataset.key), ['copy', 'delete']);
 });
 
 test('gear menu (fake DOM): nothing opens on a read-only or halted board, however the gear is reached', () => {
@@ -1074,7 +1092,7 @@ function runViews() {
     findCard: () => world.card,
     renderMarkdown: (t) => { const e = doc.createElement('div'); e.textContent = t; return e; },
     actList: (events) => { const e = doc.createElement('ul'); e.className = 'act-list'; events.forEach((ev) => { const li = doc.createElement('li'); li.textContent = ev.kind + ':' + (ev.id || ''); e.appendChild(li); }); return e; },
-    UNAVAILABLE: 'unavailable', READONLY_WHY: 'read-only', ro: false, isRO: () => env.ro, posts: [],
+    UNAVAILABLE: 'unavailable', READONLY_WHY: 'read-only', ro: false, isRO: () => env.ro, isRemote: () => false, posts: [],
     actionBtn: (text, cls, key, onClick) => { const b = doc.createElement('button'); b.className = 'btn ' + cls; b.textContent = text; b.dataset.busykey = key; b.addEventListener('click', onClick); return b; },
     setOff: (b, off) => { b.disabled = off; }, runAction: async (key, fn) => fn(), clearError() {}, showError: (m) => { env.errors.push(m); }, errors: [],
     applyCard: (c) => { world.card = c; }, wrote() {}, poll: async () => {},
@@ -1302,4 +1320,19 @@ test('the card workspace reveals its form for the discard prompt and for the sta
   assert.match(html, /panes: wsCollapsed, key: THREAD_PANES_KEY/);
   assert.match(html, /panes: cardCollapsed, key: CARD_PANES_KEY/);
   assert.doesNotMatch(html, /sessionStorage\.(get|set)Item\(WS_KEY/);
+});
+
+test('the Board draws no milestone and counts none; the Milestone filter and the card tags stay', () => {
+  assert.match(html, /const pool = chat \? current\.cards\.filter\(isThread\) : current\.cards\.filter\(\(c\) => c\.kind !== 'milestone'\);/);
+  assert.doesNotMatch(html, /is-milestone/);
+  assert.match(html, /if \(ms\) el\.appendChild\(milestoneTag\(ms\)\);/, 'a card keeps its milestone tag');
+  assert.match(html, /fillSelect\(elMilestone, \[\['', 'All'\]\]\.concat\(choices, \[\[NO_MS, 'No milestone'\]\]\), milestoneSel\);/, 'the filter still lists the milestones');
+});
+
+test('the Milestones view shows a state tag and the waiting items of a milestone\'s cards, and sorts open, empty, done', () => {
+  assert.match(html, /a\.append\(h\('span', 'idchip', m\.id\), h\('span', 'ms-item-title', m\.title\), msStateTag\(msStateOf\(m, current\.cards, conf\)\)\);/);
+  assert.match(html, /const list = milestonesOrdered\(milestoneCards\(\), current\.cards, conf\);/);
+  assert.match(html, /const MS_ORDER = \{ open: 0, empty: 1, done: 2 \};/);
+  assert.match(html, /const wt = waitTag\(milestoneWaits\(current\.cards, m\.id\), 'milestone'\);/);
+  assert.doesNotMatch(html, /if \(prog\) el\.appendChild\(progressEl\(prog\)\)/, 'the board face has no milestone progress');
 });

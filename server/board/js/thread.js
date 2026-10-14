@@ -1,6 +1,7 @@
   function sendBlock(card) {
     const t = card.thread;
     if (isRO()) return READONLY_WHY;
+    if (isRemote()) return 'Messaging a thread is only possible on the computer itself, not through the tunnel.';
     if (t.runState === 'ended') return 'This thread has ended, so it cannot take new messages.';
     if (t.runState === 'running') return 'A turn is still running. You can send a message when it finishes.';
     if (t.lane) { const f = laneFollowUp(card); return f.ok ? '' : 'This thread cannot take a follow-up. ' + f.why; }
@@ -348,7 +349,7 @@
         stopBtn.dataset.fid = 'stop-' + run.n;
         if (isRO()) { setOff(stopBtn, true); stopBtn.title = READONLY_WHY; }
         else stopBtn.title = 'Use this when the agent is no longer running but the run never finished';
-        b.appendChild(stopBtn);
+        if (!isRemote()) b.appendChild(stopBtn);
       } else if (typeof run.result === 'string' && run.result.trim()) {
         const bub = h('div', 'bubble');
         bub.appendChild(renderMarkdown(d.reportFull || run.result));
@@ -924,6 +925,7 @@
     const composerIn = h('div', 'composer-in');
     composerIn.append(ta, crow);
     composer.appendChild(composerIn);
+    composer.hidden = isRemote();   // no message box through the tunnel
     function updateSendOff() { setOff(sendBtn, ta.disabled || !ta.value.trim()); }
     function renderComposer(c) {
       const why = sendBlock(c);
@@ -1119,6 +1121,7 @@
     function renderActions(c, focusFirst) {
       const t = c.thread;
       actions.replaceChildren();
+      if (isRemote()) return;   // End thread and Delete are only offered on the computer itself
       const running = t.runState === 'running';
       if (P.confirm === 'end') {
         actions.appendChild(h('span', 'confirm-text', endConfirmText()));

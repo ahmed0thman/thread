@@ -12,7 +12,7 @@ import { dataDir, envValue, now, projectKey, projectPaths, readState, updateStat
 import { EFFORTS, cleanEffort, cleanModel, collapse, sameSession, sessionModel } from './sessions.mjs';
 import { ChatOnlyError, DEFAULT_STAGES, readConfig } from './config.mjs';
 import { openWaits, reviewApproved } from './waits.mjs';
-import { FIELD_NAMES, addHistory, cleanFields, cleanWorker, hasCriteria, liveBlockers } from './fields.mjs';
+import { FIELD_NAMES, addHistory, cleanFields, cleanWorker, finishedStageIds, hasCriteria, liveBlockers } from './fields.mjs';
 import { RESUME, laneSnapshot, requireRunnableLane, unusableLane } from './lanes.mjs';
 
 export * from './state.mjs';
@@ -69,9 +69,9 @@ function listedProject(key) {
     for (const c of s.cards) {
       if (!c || typeof c !== 'object') continue;
       waiting += openWaits(c).length;
-      // open: not in the done stage, milestones left out; a chat-only board shows threads only
+      // open: not finished (see isFinished), milestones left out; a chat-only board shows threads only
       if (c.kind !== 'milestone' && (cfg.mode !== 'chat' || c.kind === 'thread')) {
-        if (effectiveStatus(c, cfg) === (isThread(c) ? cfg.roles.done : cfg.taskRoles.done)) done += 1;
+        if (isFinished(c, cfg)) done += 1;
         else open += 1;
       }
       const t = Date.parse(c.updatedAt);
@@ -220,13 +220,37 @@ export function effectiveStatus(card, cfg) {
   return cfg.taskStages.some((s) => s.id === card.status) ? card.status : cfg.taskRoles.start;
 }
 
-// done and total over the cards under a milestone.
-export function milestoneProgress(cards, milestoneId, cfg) {
-  const kids = cards.filter((c) => c.parent === milestoneId);
-  // A thread is done in the stage its run state maps to; any other card in the task board's done stage, in chat-only mode too.
-  const done = (c) => effectiveStatus(c, cfg) === (isThread(c) ? cfg.roles.done : cfg.taskRoles.done);
-  return { done: kids.filter(done).length, total: kids.length };
+// One meaning of "finished" for the whole plugin. A card that is not a thread is finished when its stage is the task board's done
+// stage or any stage after it, in the task board's order (Done and Released are both finished). A thread is finished when its run
+// state maps to the done role. The page has the same rule (finishedIn, in server/board/js/model.js).
+export function stageFinished(cfg, stageId) {
+  return finishedStageIds(cfg).includes(stageId);
 }
+export function isFinished(card, cfg) {
+  const st = effectiveStatus(card, cfg);
+  // A thread is done in the stage its run state maps to, in chat-only mode too.
+  return isThread(card) ? st === cfg.roles.done : stageFinished(cfg, st);
+}
+
+// The ids of the cards `card` is blocked by that still exist and are not finished: the ones that hold it up.
+export function openBlockers(card, cards, cfg) {
+  return liveBlockers(card, cards).filter((id) => !isFinished(cards.find((c) => c.id === id), cfg));
+}
+
+// A milestone has no stage of its own: its state follows its cards. The cards that count are its children except ideas (an
+// idea counts once it becomes a task). A counted card is finished as isFinished says. done and total are over the counted cards.
+export function milestoneProgress(cards, milestoneId, cfg) {
+  const kids = cards.filter((c) => c.parent === milestoneId && c.kind !== 'idea');
+  return { done: kids.filter((c) => isFinished(c, cfg)).length, total: kids.length };
+}
+
+// 'empty' (no counted cards), 'open' (a counted card is not finished) or 'done' (all are). Derived on each read, never stored.
+export function milestoneState(cards, milestoneId, cfg) {
+  const p = milestoneProgress(cards, milestoneId, cfg);
+  return p.total === 0 ? 'empty' : p.done === p.total ? 'done' : 'open';
+}
+
+export const NO_MS_STAGE = 'a milestone has no stage: it is done when all its cards are done';
 
 // Checks a parent for `card` (kind, or null when not known yet) against the state.
 function checkParent(state, parentId, kind) {
@@ -297,10 +321,11 @@ function setFields(state, card, fields) {
   return changed;
 }
 
-// Moving a card that has acceptance criteria to the done stage needs the owner's approval of a review item. Only Claude's own
-// changes are held to it; the board's are not (its views show such a card as not verified).
+// Moving a card that has acceptance criteria into a finished stage (the done stage or a later one) needs the owner's approval of a
+// review item; so does a move from one finished stage to another when the card was never approved (the owner dragged it there). Only
+// Claude's own changes are held to it; the board's are not (its views show such a card as not verified).
 function gateDone(card, cfg, to) {
-  if (to !== cfg.taskRoles.done || !hasCriteria(card) || reviewApproved(card, cfg.taskRoles.done)) return;
+  if (!stageFinished(cfg, to) || !hasCriteria(card) || reviewApproved(card, finishedStageIds(cfg))) return;
   throw new Error(`${card.id} has acceptance criteria: raise a review item with wait_add (kind review) and move it to ${to} after the owner approves.`);
 }
 
@@ -317,6 +342,8 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
   requireTasks(cfg);
   const t = typeof title === 'string' ? title.trim() : '';
   if (!t) throw new Error('title must not be empty');
+  if (kind === 'milestone' && status !== undefined) throw new Error(NO_MS_STAGE);
+  // A milestone has no stage, but older plugin versions read its status, so it stores the start stage.
   if (status === undefined) status = cfg.roles.start;
   checkStatus(cfg, status);
   if (kind === 'thread') throw new Error('thread cards are created with thread_start');
@@ -352,7 +379,16 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
   });
 }
 
-export async function updateCard(projectDirArg, id, { title, note, status, parent, lane, type, priority, labels, blockedBy, criteria, worker } = {}, { source = 'claude' } = {}) {
+// Turning a card into another kind: only a task and an idea can swap. A thread is made with thread_start, and a card never
+// becomes a milestone or stops being one. The other rules that depend on kind (a lane, fields, criteria, blockers, waits) take a
+// task and an idea alike, so none is in the way.
+function checkKindChange(card, kind) {
+  if (typeof kind !== 'string') throw new Error('kind must be "task" or "idea"');
+  if (card.kind === 'thread' || card.kind === 'milestone') throw new Error(`${card.id} is a ${card.kind}: its kind cannot be changed`);
+  if (kind !== 'task' && kind !== 'idea') throw new Error(`a card can only become a task or an idea, not "${kind.slice(0, 40)}"`);
+}
+
+export async function updateCard(projectDirArg, id, { title, note, status, kind, parent, lane, type, priority, labels, blockedBy, criteria, worker } = {}, { source = 'claude' } = {}) {
   const cfg = readConfig(projectDirArg);
   if (title !== undefined) {
     if (typeof title !== 'string' || !title.trim()) throw new Error('title must not be empty');
@@ -370,8 +406,10 @@ export async function updateCard(projectDirArg, id, { title, note, status, paren
     if (card.kind === 'thread' && status !== undefined && status !== card.status && status !== effectiveStatus(card, cfg)) {
       throw new Error('thread status follows the thread');
     }
+    if (card.kind === 'milestone' && status !== undefined) throw new Error(NO_MS_STAGE);
     let changed = false;
     const fields = [];
+    if (kind !== undefined && kind !== card.kind) { checkKindChange(card, kind); card.kind = kind; changed = true; fields.push('kind'); }
     if (parentId) {
       if (card.parent !== parentId) { checkParent(state, parentId, card.kind); card.parent = parentId; changed = true; fields.push('milestone'); }
     } else if (parentId === null && card.parent !== undefined) { delete card.parent; changed = true; fields.push('milestone'); }
@@ -401,8 +439,9 @@ export async function updateCard(projectDirArg, id, { title, note, status, paren
       if (source === 'user') card.seenByClaude = false;
       // a thread's own page shows its turns, not this
       if (!isThread(card)) {
-        // The card's own record of leaving the done stage: the capped history cannot be trusted to keep the move (see leftDoneAt).
-        if (card.status !== from && from === cfg.taskRoles.done) card.leftDoneAt = ts;
+        // The card's own record of leaving the finished stages (a finished stage to an unfinished one; Done to Released is no exit):
+        // the capped history cannot be trusted to keep the move (see leftDoneAt).
+        if (card.status !== from && stageFinished(cfg, from) && !stageFinished(cfg, card.status)) card.leftDoneAt = ts;
         if (card.status !== from) addHistory(card, source, { type: 'moved', from, to: card.status }, ts, by);
         if (fields.length) addHistory(card, source, { type: 'edited', fields }, ts, by);
       }
@@ -418,7 +457,7 @@ export async function removeCard(projectDirArg, id, { source = 'claude' } = {}) 
     if (!isThread(card)) requireTasks(cfg);
     // Removing a card with acceptance criteria that is neither done nor approved would also remove the owner's test of it.
     // A thread can carry them too: 0.11.0 turned cards into threads without checking.
-    if (source === 'claude' && hasCriteria(card) && effectiveStatus(card, cfg) !== cfg.taskRoles.done && !reviewApproved(card, cfg.taskRoles.done)) {
+    if (source === 'claude' && hasCriteria(card) && !isFinished(card, cfg) && !reviewApproved(card, finishedStageIds(cfg))) {
       throw new Error(`${card.id} has acceptance criteria and is not done or approved, so only the owner can remove it, on the board.`);
     }
     if (isThread(card) && card.thread.runState === 'running' && isAlive(card.thread.pid)) {

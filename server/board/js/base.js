@@ -65,6 +65,7 @@
       const { res, text } = await request('GET', '/api/ping', null, 5000);
       const data = res.ok ? parseJson(text) : null;
       if (data && typeof data.version === 'string') version = data.version;
+      if (data && typeof data.remote === 'boolean' && data.remote !== remote) loadCaps();   // the first answer was lost
     } catch (e) { /* an old or unreachable server has no version to compare */ }
     if (!version || version === pageVersion) versionSays = null;
     else if (olderThan(version, pageVersion)) versionSays = { reload: false, text: 'This page is from version ' + pageVersion + ', but the board is now served by an older session on version ' + version + '. Run /thread:board in an updated session, then reload this page.' };
@@ -73,24 +74,40 @@
   }
 
   // ---------- access token ----------
-  let token = '';
   let halted = false;        // true while the access-link page is showing: no polling at all
+  // ---- token in the address (tunnel.test.mjs runs this block on its own) ----
+  let token = '';
   function readStoredToken() {
     try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
   }
+  // A local link carries the token as ?t=. A link through the tunnel carries it in the fragment, '#t=<token>' followed by the usual
+  // route ('#t=<token>/<project>'): a fragment is never sent to a server, so Cloudflare does not see it. Either way it is kept for
+  // this tab and taken out of the address bar before the route is read.
   (function initToken() {
     let fromUrl = '';
-    try { fromUrl = new URLSearchParams(location.search).get('t') || ''; } catch (e) { fromUrl = ''; }
+    let route = '';
+    const fm = /^#t=([0-9a-f]{32,128})(\/.*)?$/.exec(location.hash || '');
+    if (fm) {
+      fromUrl = fm[1];
+      route = fm[2] || '';
+    } else {
+      try { fromUrl = new URLSearchParams(location.search).get('t') || ''; } catch (e) { fromUrl = ''; }
+    }
     if (!fromUrl) { token = readStoredToken(); return; }
     token = fromUrl;
     try { sessionStorage.setItem(TOKEN_KEY, fromUrl); } catch (e) { /* storage unavailable: keep it in the variable */ }
     try {
-      const sp = new URLSearchParams(location.search);
-      sp.delete('t');
-      const qs = sp.toString();
-      history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+      if (fm) {
+        history.replaceState(null, '', location.pathname + location.search + (route ? '#' + route : ''));
+      } else {
+        const sp = new URLSearchParams(location.search);
+        sp.delete('t');
+        const qs = sp.toString();
+        history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+      }
     } catch (e) { /* leave the address bar as it is */ }
   })();
+  // ---- end token in the address ----
 
   // ---------- projects ----------
   let projects = null;       // [{ key, projectDir, name, exists, cards, threads, running, open, done, waiting, lastActivity }] in a stable order

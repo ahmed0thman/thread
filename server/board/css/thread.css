@@ -185,6 +185,7 @@
 .act-text { padding: 3px 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 .act-row.nested, .act-text.nested { margin-left: var(--s4); }
 
+.composer[hidden] { display: none; }
 .composer { flex: none; padding: var(--s3) var(--s4); display: flex; flex-direction: column; gap: var(--s2); }
 .composer-in { padding: var(--s3) var(--s3) var(--s2) var(--s4); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r4); box-shadow: var(--shadow-md); }
 .composer-in:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }

@@ -193,9 +193,11 @@
       grow.appendChild(h('code', null, dir));
       grow.append('. Its cards are shown read-only.');
       elNotice.appendChild(grow);
-      const ask = plainBtn('Forget this project', 'small', () => { forgetAsk = key; renderNotice(); });
-      elNotice.appendChild(ask);
-      if (hadFocus) ask.focus();
+      if (!isRemote()) {   // forgetting a project is only possible on the computer itself
+        const ask = plainBtn('Forget this project', 'small', () => { forgetAsk = key; renderNotice(); });
+        elNotice.appendChild(ask);
+        if (hadFocus) ask.focus();
+      }
     }
     syncBusy();
   }

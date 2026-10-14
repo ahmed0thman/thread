@@ -180,20 +180,45 @@
     return (c.id + ' ' + c.title + ' ' + (c.note || '')).toLowerCase().includes(f.q);
   }
   function childrenOf(cards, id) { return cards.filter((c) => c.parent === id); }
-  function progressOf(cards, id, doneStage) {
-    const kids = childrenOf(cards, id);
-    return { done: kids.filter((c) => c.status === doneStage).length, total: kids.length };
+  // The open waiting items on the cards under a milestone (all of them, ideas too): to look at only, the answer is on the card.
+  function milestoneWaits(cards, id) { return childrenOf(cards, id).flatMap(openWaitsOf); }
+  // One meaning of "finished" (the server's rule, in core.mjs): a card that is not a thread is finished when its stage is the done
+  // stage or any stage after it, in stage order; a thread, when its shown stage is the done role. `config` is { stages, roles }.
+  function stageFinishedIn(config, stageId) {
+    const doneAt = config.stages.findIndex((s) => s.id === config.roles.done);
+    return doneAt >= 0 && config.stages.findIndex((s) => s.id === stageId) >= doneAt;
+  }
+  function finishedIn(c, config) {
+    return isThread(c) ? c.status === config.roles.done : stageFinishedIn(config, c.status);
+  }
+  // A milestone has no stage: its state follows its cards. The cards that count are its children except ideas.
+  function countedKids(cards, id) { return childrenOf(cards, id).filter((c) => c.kind !== 'idea'); }
+  function progressOf(cards, id, config) {
+    const kids = countedKids(cards, id);
+    return { done: kids.filter((c) => finishedIn(c, config)).length, total: kids.length };
+  }
+  // 'empty' (no counted cards), 'open' (one is not finished) or 'done' (all are). Always worked out here from the cards the page holds,
+  // never taken from the server's msState: that can lag behind a card the page has just changed, and the progress beside it must agree.
+  const MS_STATE_LABEL = { empty: 'Empty', open: 'Open', done: 'Done' };
+  const MS_ORDER = { open: 0, empty: 1, done: 2 };    // the order the Milestones view and the List's Stage sort put them in
+  function msStateOf(m, cards, config) {
+    const p = progressOf(cards, m.id, config);
+    return p.total === 0 ? 'empty' : p.done === p.total ? 'done' : 'open';
+  }
+  // The milestones in the order the view lists them: open first, then empty, then done; each group keeps the order it had.
+  function milestonesOrdered(list, cards, config) {
+    return list.map((m, i) => ({ m, i, r: MS_ORDER[msStateOf(m, cards, config)] })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.m);
   }
   // [{ stage, cards }] in stage order; a stage with no card is left out
   function groupByStage(cards, stages) {
     return stages.map((stage) => ({ stage, cards: cards.filter((c) => c.status === stage.id) })).filter((g) => g.cards.length);
   }
   // The plain-text report of a milestone, in the shape of the board_list tool's report.
-  function milestoneReport(m, cards, stages, doneStage) {
-    const p = progressOf(cards, m.id, doneStage);
-    const lines = ['Milestone ' + m.id + ' "' + clip(m.title, 120) + '": ' + p.done + ' of ' + p.total + ' done.'];
-    if (!p.total) lines.push('No cards in this milestone yet.');
-    groupByStage(childrenOf(cards, m.id), stages).forEach((g) => {
+  function milestoneReport(m, cards, config) {
+    const p = progressOf(cards, m.id, config);
+    const lines = ['Milestone ' + m.id + ' "' + clip(m.title, 120) + '": ' + msStateOf(m, cards, config) + ', ' + p.done + ' of ' + p.total + ' done.'];
+    if (!childrenOf(cards, m.id).length) lines.push('No cards in this milestone yet.');   // ideas are cards too, though they do not count
+    groupByStage(childrenOf(cards, m.id), config.stages).forEach((g) => {
       lines.push(g.stage.label + ' (' + g.cards.length + ')');
       g.cards.forEach((c) => lines.push('- ' + c.id + ' [' + (c.kind === 'thread' && c.thread ? 'thread:' + c.thread.runState : c.kind) + '] ' + clip(c.title, 120)));
     });
@@ -208,11 +233,7 @@
   // o: { ro, stages, choices: [[id, title]], reportState(card), waits(card): the number of open waiting items }. An item is { id, label, ... }; { group, items } is a labelled set
   // and { sep: true } a divider. A read-only board gets nothing that writes, so a card may have no action at all.
   function cardActions(c, o) {
-    if (c.kind === 'milestone') {
-      const out = [{ id: 'copy', label: 'Copy report' }];
-      if (!o.ro) out.push({ id: 'delete', label: 'Delete', danger: true });
-      return out;
-    }
+    if (c.kind === 'milestone') return [];   // a milestone is not on the board and has no stage to move to: its page has its own actions
     if (o.ro) return [];
     const out = [];
     const waits = o.waits ? o.waits(c) : 0;

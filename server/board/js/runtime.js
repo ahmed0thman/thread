@@ -108,7 +108,7 @@
     let res, text;
     try { res = await fetch(path, opts); text = await res.text(); }
     catch (e) { throw new Error('Could not reach the board server.'); }
-    if (res.status === 401) { haltForAuth(); throw authError(); }
+    if (res.status === 401) { haltForAuth(/expired/.test((parseJson(text) || {}).error || '')); throw authError(); }
     return { res, text };
   }
   function parseJson(text) { try { return JSON.parse(text); } catch (e) { return null; } }
@@ -122,9 +122,11 @@
 
   // ----- access-link page -----
   let loopTimer = null;
-  function haltForAuth() {
+  function haltForAuth(expired) {
     if (halted) return;
     halted = true;
+    $('gate-default').hidden = !!expired;
+    $('gate-expired').hidden = !expired;
     clearTimeout(loopTimer); loopTimer = null;
     closeMenu(false);
     if (panel) { if (panel.dispose) panel.dispose(); panel = null; }

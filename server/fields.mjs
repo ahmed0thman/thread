@@ -130,18 +130,33 @@ export function workedBy(card) {
 // ---------------------------------------------------------------- the done gate (reviewApproved is in waits.mjs)
 
 /**
- * When the card last left the done stage, in ms: the later of the card's own `leftDoneAt` (written whenever a card moves out of
- * the done stage, so the capped history cannot lose it) and the latest `moved` entry of its history that came from `doneStage`
- * (a move an older plugin version made leaves no field). -Infinity when there is neither (never reopened), so every review counts.
+ * The ids of the task board's finished stages: its done stage and every stage after it, in stage order. [] when the done role
+ * names no stage. `cfg` is the effective config (taskStages and taskRoles).
  */
-export function leftDoneAt(card, doneStage) {
+export function finishedStageIds(cfg) {
+  const stages = cfg && Array.isArray(cfg.taskStages) ? cfg.taskStages : [];
+  const at = stages.findIndex((s) => s && cfg.taskRoles && s.id === cfg.taskRoles.done);
+  return at < 0 ? [] : stages.slice(at).map((s) => s.id);
+}
+
+/**
+ * When the card last left the finished range (a finished stage to an unfinished one), in ms: the later of the card's own
+ * `leftDoneAt` (written whenever a card moves out of the range, so the capped history cannot lose it) and the latest `moved`
+ * entry of its history that went from a finished stage to one that is not (a move an older plugin version made leaves no
+ * field). `finished` is the list of finished stage ids (finishedStageIds), or one id. A move between two finished stages
+ * (Done to Released) is no exit. An older version wrote `leftDoneAt` for any move out of the done stage, Done to Released
+ * included; that is read as it stands, so such a card needs a new approval: stricter, never looser.
+ * -Infinity when there is neither (never reopened), so every review counts.
+ */
+export function leftDoneAt(card, finished) {
   let at = -Infinity;
-  if (!card || typeof doneStage !== 'string') return at;
+  const range = Array.isArray(finished) ? finished : typeof finished === 'string' ? [finished] : null;
+  if (!card || !range || !range.length) return at;
   const stored = typeof card.leftDoneAt === 'string' ? Date.parse(card.leftDoneAt) : NaN;
   if (Number.isFinite(stored)) at = stored;
   if (!Array.isArray(card.history)) return at;
   for (const h of card.history) {
-    if (!isObject(h) || h.type !== 'moved' || h.from !== doneStage) continue;
+    if (!isObject(h) || h.type !== 'moved' || !range.includes(h.from) || range.includes(h.to)) continue;
     const t = Date.parse(h.at);
     if (Number.isFinite(t) && t > at) at = t;
   }
@@ -151,7 +166,7 @@ export function leftDoneAt(card, doneStage) {
 /** True when the card has acceptance criteria. */
 export const hasCriteria = (card) => !!card && Array.isArray(card.criteria) && card.criteria.length > 0;
 
-/** The ids of the cards a card is blocked by that still exist. `cards` are the project's cards. */
+/** The ids of the cards a card is blocked by that still exist, finished or not. `cards` are the project's cards. */
 export function liveBlockers(card, cards) {
   if (!card || !Array.isArray(card.blockedBy)) return [];
   return card.blockedBy.filter((id) => typeof id === 'string' && cards.some((c) => c && c.id === id));

@@ -39,13 +39,14 @@ const approves = (w) => w.state === 'answered' && isObject(w.answer) && w.answer
 /**
  * True when the card's criteria were approved: no review item is open, and the latest closed one (answered or withdrawn,
  * by the time it was closed; a tie goes to the one that is no approval) is answered with the verdict "approve". A withdrawn
- * one is no approval, and an item answered in the chat holds no verdict. Only items closed after the card last left `doneStage` count (see leftDoneAt), so a card
- * that was reopened needs a new approval; without a stage, or when it never left it, all of them count.
+ * one is no approval, and an item answered in the chat holds no verdict. Only items closed after the card last left the finished stages
+ * (`finished`: their ids, or one id; see leftDoneAt) count, so a card that was reopened needs a new approval; without stages, or when
+ * it never left them, all of them count.
  */
-export function reviewApproved(card, doneStage) {
+export function reviewApproved(card, finished) {
   const reviews = waitsOf(card).filter((w) => w.kind === 'review');
   if (reviews.some((w) => w.state === 'open')) return false;
-  const since = leftDoneAt(card, doneStage);
+  const since = leftDoneAt(card, finished);
   let latest = null, latestAt = 0;
   for (const w of reviews) {
     if (w.state !== 'answered' && w.state !== 'withdrawn') continue;

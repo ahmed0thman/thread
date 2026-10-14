@@ -23,7 +23,8 @@ server/
   fields.mjs        card fields (type, priority, labels, blockedBy, criteria), history workers, workedBy; no imports
   runner.mjs        the detached process that runs one thread turn
   mcp.mjs           the MCP server and its tools
-  http.mjs          the board server (loopback only, token, Host and Origin checks)
+  http.mjs          the board server (loopback only, token, Host and Origin checks); also the remote policy and allowlist of the tunnel's listener
+  tunnel.mjs        the opt-in Cloudflare tunnel: finds and runs cloudflared, the pid file, the manager (token, lifetime, listener)
   page.mjs          assembleBoardPage(): joins the board pieces into the one page GET / sends; lists them, in order
   board/            the board page's source pieces; no framework
     page.html       markup, the tiny theme script, and placeholders inside <style> and <script>; it also opens and
@@ -57,7 +58,7 @@ A test never passes an inline script to `node -e`; put the script in `test/fixtu
 - **Several plugin versions share one data directory.** Each open Claude Code session keeps the plugin version it started with until its window is reloaded, so an old process and a new one read and write the same state file. A new field must be safe for an older version to ignore, a stored value an older version writes must still be handled, and nothing may be migrated in place. The board is served by one session; from 0.8.2 a newer version replaces an older board.
 - **The data directory is owner-only.** A folder the plugin makes there goes through `mkdirPrivate`/`mkdirPrivateSync` and a file it writes gets `mode: PRIVATE_FILE` (both in `server/state.mjs`); `tightenDataDir()` narrows older ones at MCP start. Do not write into the data directory with the default modes.
 - **Stages are not fixed.** Never hard-code `in_progress`, `done` and so on outside the defaults in `server/config.mjs`. Use the project's effective config (`readConfig`) and its roles. A thread card's stage is always derived from its run state.
-- **The board's guarantees:** it listens on `127.0.0.1` only, requires the access token, checks Host and Origin on writes, makes no network calls, and cannot change settings. Do not weaken any of them.
+- **The board's guarantees:** it listens on `127.0.0.1` only, requires the access token, checks Host and Origin on writes, makes no network calls, and cannot change settings. Do not weaken any of them. The one exception is the tunnel (`/thread:board --tunnel`), which is opt-in and token-gated: a second `127.0.0.1` listener (own port, fresh token, exact tunnel Host and Origin, a route allowlist that defaults to deny, limits) that `cloudflared` points at, which lasts 12 hours and never carries over. The tunnel never points at the normal port, never accepts `board.token`, and a new route is closed to it until it is added to the allowlist in `server/http.mjs`. The cloudflared pid file and the child must be cleaned up on every way the tunnel or the process can end.
 - **Text that reaches the page is set as text, never as HTML.** The board page (`server/board/`) has no `innerHTML` sinks; keep it that way.
 - **Cross-version tests run released code.** They take it from a git tag or a release commit (`RELEASED_REFS` in `test/helpers.mjs`), never `HEAD`, which stops meaning a release once new work is committed. A missing ref fails the test; only a checkout with no git history skips.
 - **No over-engineering.** Build what was asked. If a request is unclear or turns out to need a design decision, stop and ask.

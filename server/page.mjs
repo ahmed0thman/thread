@@ -27,6 +27,7 @@ export const JS_PIECES = [
   'js/fields.js',
   'js/routes.js',
   'js/runtime.js',
+  'js/remote.js',
   'js/shell.js',
   'js/milestones.js',
   'js/summary.js',

@@ -83,3 +83,4 @@ p.sum-more { color: var(--muted); }
   .sum-flow { order: 1; } .sum-who { order: 2; } .sum-wait { order: 3; } .sum-ms { order: 4; } .sum-stage { order: 5; }
   .sum-about { margin-top: 0; }
 }
+.sum-ms-top .ms-st { flex: none; margin-left: auto; }

@@ -57,7 +57,7 @@
   // The open items a card's tag counts: its own, or for a milestone those of its cards (to look at only). None in a chat-only project.
   function cardWaits(card) {
     if (isChat()) return [];
-    return card.kind === 'milestone' ? childrenOf(current.cards, card.id).flatMap(openWaitsOf) : openWaitsOf(card);
+    return card.kind === 'milestone' ? milestoneWaits(current.cards, card.id) : openWaitsOf(card);
   }
   // { n, kinds (distinct, most urgent first), count (per kind) } for a list of items
   function waitSummary(items) {

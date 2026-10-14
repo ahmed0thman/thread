@@ -43,6 +43,16 @@
     b.addEventListener('click', (e) => { e.stopPropagation(); filterToMilestone(m.id); });
     return b;
   }
+  // The state tag of a milestone: Empty, Open or Done. Each has its own shape, so colour is not the only sign.
+  const MS_STATE_SHAPE = { empty: 's-dring', open: 's-ring', done: 's-circle' };
+  const MS_STATE_HINT = { empty: 'No card counts yet (ideas do not count until they become tasks)', open: 'Some card is not done yet', done: 'Every card is done' };
+  function msStateTag(state) {
+    const tag = h('span', 'tag ms-st ms-st-' + state);
+    tag.appendChild(shape(MS_STATE_SHAPE[state] || 's-dring'));
+    tag.appendChild(h('span', null, MS_STATE_LABEL[state] || state));
+    tag.title = MS_STATE_HINT[state] || '';
+    return tag;
+  }
   // "3/5 done" with a thin bar
   function progressEl(p) {
     const row = h('div', 'ms-prog');
@@ -54,7 +64,7 @@
     row.append(bar, h('span', 'tnum', p.total ? p.done + '/' + p.total + ' done' : 'No cards yet'));
     return row;
   }
-  function progressFor(m) { return progressOf(current.cards, m.id, cfg().roles.done); }
+  function progressFor(m) { return progressOf(current.cards, m.id, cfg()); }
 
   // A <select>'s options from [[value, text]]; rebuilt only when they changed. `want` is the value to show (the first option if it is gone).
   function fillSelect(sel, pairs, want) {

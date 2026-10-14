@@ -19,6 +19,22 @@
       criteria: strings(c.criteria),
     };
   }
+  // The Type select of a task or idea card's page has three choices: Task, Bug and Idea. A bug is a task with the type field; an idea is
+  // the idea kind. This is the choice for a card.
+  const typeChoice = (c) => (c && c.kind === 'idea' ? 'idea' : fieldValues(c).type);
+  // What choosing `choice` changes on a card whose kind is `kind` and whose type field is `type`: { kind?, type? }, only what differs.
+  // Idea changes the kind only: a bug that becomes an idea keeps its type, so it stays a bug idea (marked as a bug, counted as an open
+  // bug). Task and Bug make the card a task; Task clears the bug type and Bug sets it.
+  function typePatch(choice, kind, type) {
+    const out = {};
+    const k = choice === 'idea' ? 'idea' : 'task';
+    if (k !== kind) out.kind = k;
+    if (choice !== 'idea') {
+      const t = choice === 'bug' ? 'bug' : 'task';
+      if (t !== (type === 'bug' ? 'bug' : 'task')) out.type = t;
+    }
+    return out;
+  }
   // 'API, ui ,, api' -> ['api', 'ui']: lower case, each once, in the order typed. Their length and number are for the server to judge.
   function parseLabels(text) {
     const out = [];
@@ -55,8 +71,8 @@
     const what = ({ agent: 'Sub-agent ', thread: 'Side thread ', lane: 'Delegation lane ' })[s.slice(0, s.indexOf(':'))];
     return what ? what + s.slice(s.indexOf(':') + 1) : s;
   }
-  // What a card's face shows of its fields. ctx: { cards, done, label(stageId) }. `blocked` lists only the blockers that are not finished:
-  // a card whose blockers are all done is not held up. Cards without the fields give an empty model.
+  // What a card's face shows of its fields. ctx: { cards, finished(card), label(stageId) }. `blocked` lists only the blockers that are not
+  // finished (in the done stage or a later one): a card whose blockers are all finished is not held up. Cards without the fields give an empty model.
   function faceModel(card, ctx) {
     const m = { bug: false, priority: '', labels: [], more: 0, blocked: [], blockedTitle: '', criteria: 0, notVerified: false, aria: [] };
     if (!card || card.kind === 'milestone') return m;
@@ -69,7 +85,7 @@
     const parts = [];
     v.blockedBy.forEach((id) => {
       const b = cards.find((x) => x.id === id);
-      if (!b || (ctx && b.status === ctx.done)) return;
+      if (!b || (ctx && ctx.finished && ctx.finished(b))) return;
       m.blocked.push(id);
       parts.push(id + (ctx && ctx.label ? ' (' + ctx.label(b.status) + ')' : ''));
     });

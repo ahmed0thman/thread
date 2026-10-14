@@ -26,3 +26,8 @@
 .ms-open-stage { flex: none; font-size: 12px; }
 .ms-open .btn { margin-left: calc(-1 * var(--s2)); color: var(--muted); }
 .ms-allDone { margin: 0; font-size: 12.5px; }
+.ms-item-head .ms-st { flex: none; margin-left: auto; }
+.tag.ms-st-empty { color: var(--muted); background: var(--surface-2); font-weight: 500; }
+.tag.ms-st-open { color: var(--accent); background: var(--accent-bg); }
+.tag.ms-st-done { color: var(--fin); background: var(--fin-bg); }
+.ms-item > .wait-tag { align-self: flex-start; }

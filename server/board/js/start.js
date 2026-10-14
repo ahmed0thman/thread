@@ -37,6 +37,7 @@
 
   (async function start() {
     if (!token) { haltForAuth(); return; }
+    await loadCaps();   // before anything is drawn, so no control that the tunnel refuses is ever shown
     try { applyProjects(await loadProjects()); if (!selKey) setOnline(true); }   // a project's own poll shows the connection
     catch (e) { if (e.auth) return; setOnline(false); }
     projectsAt = Date.now();

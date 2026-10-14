@@ -445,12 +445,12 @@ test('reopening a card resets its approval: only reviews answered after it left 
 
 test('reopening uses the project\'s done stage', async (t) => {
   const e = setupThreadEnv(t);
-  await core.saveConfig(e.projectDir, 'project', { stages: [{ id: 'todo', label: 'To do' }, { id: 'doing', label: 'Doing' }, { id: 'shipped', label: 'Shipped' }, { id: 'done', label: 'Done (old)' }], roles: { start: 'todo', working: 'doing', review: 'doing', blocked: 'doing', done: 'shipped' } });
+  await core.saveConfig(e.projectDir, 'project', { stages: [{ id: 'todo', label: 'To do' }, { id: 'doing', label: 'Doing' }, { id: 'qa', label: 'QA' }, { id: 'shipped', label: 'Shipped' }], roles: { start: 'todo', working: 'doing', review: 'doing', blocked: 'doing', done: 'shipped' } });
   const c = await core.addCard(e.projectDir, { title: 'Gated', criteria: ['a'] });
   await review(e, c.id, 'approve');
   await tick();
-  // leaving a stage that is not the done role does not reset anything
-  await core.updateCard(e.projectDir, c.id, { status: 'done' });
+  // leaving a stage before the done role (a stage that is not finished) does not reset anything
+  await core.updateCard(e.projectDir, c.id, { status: 'qa' });
   await core.updateCard(e.projectDir, c.id, { status: 'doing' });
   await tick();
   assert.equal(core.reviewApproved(cardOf(e, c.id), 'shipped'), true);
@@ -727,7 +727,7 @@ test('/api/projects counts the open and done cards and the waiting items', async
   await core.addCard(e.projectDir, { title: 'Open 1' });
   await core.addCard(e.projectDir, { title: 'Open 2', kind: 'idea' });
   await core.addCard(e.projectDir, { title: 'Done 1', status: 'shipped' });
-  await core.addCard(e.projectDir, { title: 'A milestone', kind: 'milestone', status: 'shipped' });
+  await core.addCard(e.projectDir, { title: 'A milestone', kind: 'milestone' });
   await core.addCard(e.projectDir, { title: 'Another', kind: 'milestone' });
   await core.addWait(e.projectDir, { card: 'c1', kind: 'todo', text: 'a', sessionId: PARENT_SESSION });
   await core.addWait(e.projectDir, { card: 'c2', kind: 'question', text: 'b', sessionId: PARENT_SESSION });
@@ -998,7 +998,8 @@ for (const ref of RELEASED_REFS) test(`this version reads cards the plugin versi
   assert.equal((await bd.view('c2')).verified, false, 'already in done: not verified');
 });
 
-for (const ref of RELEASED_REFS) test(`a card with criteria that the plugin version at ${ref} moves to done is shown as not verified`, async (t) => {
+// 0.12.0 brought the gate, so only the versions before it let Claude move such a card
+for (const ref of RELEASED_REFS.filter((r) => r !== 'v0.12.1')) test(`a card with criteria that the plugin version at ${ref} moves to done is shown as not verified`, async (t) => {
   const old = oldServerFrom(t, ref);
   if (!old) return;
   const e = setupThreadEnv(t);

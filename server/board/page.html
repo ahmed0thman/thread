@@ -30,6 +30,7 @@
     </nav>
     <span class="dir" id="dir"><span class="dir-head" id="dir-head"></span><span class="dir-tail" id="dir-tail"></span></span>
     <button type="button" class="btn" id="theme-btn"></button>
+    <span class="remote-badge" id="remote-badge" role="status" hidden>Remote</span>
     <span class="conn" id="conn" role="status" data-state="connecting"><span class="shape s-ring"></span><span id="conn-text">Connecting</span></span>
   </header>
   <nav class="views" id="views" aria-label="Project views" hidden></nav>
@@ -65,9 +66,16 @@
 
 <div class="gate" id="gate" role="alert" hidden>
   <div class="gate-card">
-    <h1>The board needs its access link</h1>
-    <p>This page does not have a valid access token, so the board server turned it away. Nothing is wrong with your cards.</p>
-    <p>In Claude Code, run <code>/thread:board</code> and open the link it prints.</p>
+    <div id="gate-default">
+      <h1>The board needs its access link</h1>
+      <p>This page does not have a valid access token, so the board server turned it away. Nothing is wrong with your cards.</p>
+      <p>In Claude Code, run <code>/thread:board</code> and open the link it prints.</p>
+    </div>
+    <div id="gate-expired" hidden>
+      <h1>This remote link has expired</h1>
+      <p>The tunnel that carried it was closed or ran out of time (it lasts 12 hours). Nothing is wrong with your cards.</p>
+      <p>In Claude Code on the computer, run <code>/thread:board --tunnel</code> and open the new link it prints.</p>
+    </div>
     <div class="gate-row">
       <button type="button" class="btn primary" id="gate-retry">Retry</button>
       <span class="foot-note" id="gate-msg" role="status"></span>

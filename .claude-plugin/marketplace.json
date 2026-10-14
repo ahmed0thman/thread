@@ -8,7 +8,7 @@
     {
       "name": "thread",
       "source": ".",
-      "description": "Side threads that start from a short brief of the session (or a full copy), report back on demand, and can run as a sub-agent or on another coding CLI through your delegation lanes, plus a project board of tasks, ideas and milestones (summary, kanban, list, your own stages, a done gate) that can wake the session when you answer on it."
+      "description": "Side threads that start from a short brief of the session (or a full copy), report back on demand, and can run as a sub-agent or on another coding CLI through your delegation lanes, plus a project board of tasks, ideas and milestones (summary, kanban, list, your own stages, a done gate) that can wake the session when you answer on it, and open on your phone through a tunnel you turn on."
     }
   ]
 }

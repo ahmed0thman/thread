@@ -873,7 +873,7 @@ test('milestone progress counts the same in chat-only mode as in tasks mode, wit
   assert.deepEqual((await b.get('/api/state')).body.cards.find((x) => x.id === 'c1').progress, { done: 2, total: 5 });
   const c = mcp(t, e);
   await c.init();
-  assert.match((await c.call('board_list', { parent: 'c1' })).text, /^Milestone c1 "c1": 2 of 5 done\./);
+  assert.match((await c.call('board_list', { parent: 'c1' })).text, /^Milestone c1 "c1": open, 2 of 5 done\./);
   assert.equal(core.effectiveStatus(stateOf(e).cards[3], core.readConfig(e.projectDir)), 'todo', 'a card whose stage is gone is in the task board\'s start stage');
 });
 

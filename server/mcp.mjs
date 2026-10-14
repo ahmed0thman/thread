@@ -45,7 +45,7 @@ const CARD_FIELD_PROPS = {
   priority: { type: 'string', enum: [...core.PRIORITIES, ''], description: '"high", "normal" (the default) or "low". Not for milestones.' },
   labels: { type: 'array', items: { type: 'string' }, maxItems: 8, description: 'Up to 8 short labels, each 1 to 24 characters (they are lowercased). Not for milestones.' },
   blocked_by: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'The ids of up to 10 cards that must be finished first, for example ["c4"]. A card cannot be blocked by itself or by a milestone, and a card that has this list cannot be started as a thread. Not for milestones or threads.' },
-  criteria: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'Up to 10 acceptance criteria, each up to 200 characters. A card with criteria cannot be moved to the done stage until the owner has approved a review item on it: raise one with wait_add (kind "review"). Once a card has criteria you can only add lines to them. A card with criteria cannot be started as a thread. Not for milestones or threads.' },
+  criteria: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'Up to 10 acceptance criteria, each up to 200 characters. A card with criteria cannot be moved to the done stage, or any stage after it, until the owner has approved a review item on it: raise one with wait_add (kind "review"). Once a card has criteria you can only add lines to them. A card with criteria cannot be started as a thread. Not for milestones or threads.' },
   worker: WORKER_PROP,
 };
 const CONFIRM_PROP = { type: 'string', description: 'The confirm code from a "CONFIRMATION REQUIRED" answer. Pass it only after the user agreed to continue.' };
@@ -129,13 +129,13 @@ const TOOLS = [
   },
   {
     name: 'board_add',
-    description: 'Add a card (task, idea or milestone) to the project board that the user sees on a local web page. A milestone groups other cards: give them its id as parent. A task or idea can also have a type (bug), a priority, labels, cards it is blocked by and acceptance criteria. Refused when the project is chat-only. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
+    description: 'Add a card (task, idea or milestone) to the project board that the user sees on a local web page. A milestone groups other cards: give them its id as parent. A milestone has no stage: it is open until every card in it is done (ideas do not count), then done. A task or idea can also have a type (bug), a priority, labels, cards it is blocked by and acceptance criteria. Refused when the project is chat-only. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Card title.' },
         note: { type: 'string', description: 'Optional longer note.' },
-        status: { type: 'string', description: `Column: ${STATUS_NOTE}. Defaults to the board's start stage.` },
+        status: { type: 'string', description: `Column: ${STATUS_NOTE}. Defaults to the board's start stage. Not for a milestone: it has no stage (it is done when all its cards are done), so a status is refused.` },
         kind: { type: 'string', enum: KINDS, description: 'Defaults to "task".' },
         parent: PARENT_PROP,
         lane: LANE_PROP,
@@ -146,14 +146,15 @@ const TOOLS = [
   },
   {
     name: 'board_update',
-    description: 'Change a board card\'s title, note, status, milestone, lane, type, priority, labels, blocked_by or criteria. An empty value (an empty list, or an empty string) removes that field, except criteria: once a card has acceptance criteria you may add lines but not remove or change them (only the owner can, on the board). A card with criteria cannot be moved to the done stage until the owner approves a review item on it (wait_add, kind "review"); a card moved back out of done needs a new approval. Thread cards follow their thread and should not be moved by hand. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
+    description: 'Change a board card\'s title, note, status, kind (task or idea), milestone, lane, type, priority, labels, blocked_by or criteria. An empty value (an empty list, or an empty string) removes that field, except criteria: once a card has acceptance criteria you may add lines but not remove or change them (only the owner can, on the board). A card with criteria cannot be moved to the done stage, or any stage after it, until the owner approves a review item on it (wait_add, kind "review"); a card moved back out of the finished stages needs a new approval. Thread cards follow their thread and should not be moved by hand. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
     inputSchema: {
       type: 'object',
       properties: {
         id: ID_PROP,
         title: { type: 'string', description: 'New title.' },
         note: { type: 'string', description: 'New note (replaces the old one).' },
-        status: { type: 'string', description: `New column: ${STATUS_NOTE}.` },
+        status: { type: 'string', description: `New column: ${STATUS_NOTE}. Not for a milestone: it has no stage (it is done when all its cards are done), so a status is refused.` },
+        kind: { type: 'string', enum: ['task', 'idea'], description: 'Turn a task into an idea, or an idea into a task (an idea does not count towards its milestone until it is a task). Threads and milestones never change kind, and a card cannot become a milestone.' },
         parent: { type: 'string', description: 'The id of the milestone card this card belongs to, or an empty string to take it out of its milestone.' },
         lane: { type: 'string', description: 'The name of a delegation lane to label this task or idea with, or an empty string to remove its lane. Milestones and threads cannot have one.' },
         ...CARD_FIELD_PROPS,
@@ -172,8 +173,8 @@ const TOOLS = [
   },
   {
     name: 'board_list',
-    description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane shows it in braces, as {lane: name}; a milestone shows how many of its cards are done; a card with items waiting for the user shows "(2 waiting)" (wait_list reads them). ' +
-      'After the title come the marks of its fields, when it has them: "(bug)", "!high" or "!low", "#label" for each label, "{blocked by c4, c7}" for the blockers that are not done yet, "[criteria 3]" for its acceptance criteria, and "(done, not verified)" for a done card whose criteria were never approved. ' +
+    description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane shows it in braces, as {lane: name}; milestones are listed in their own section after the stages, each with its state (empty, open or done) and how many of its cards are done; a card with items waiting for the user shows "(2 waiting)" (wait_list reads them). ' +
+      'After the title come the marks of its fields, when it has them: "(bug)", "!high" or "!low", "#label" for each label, "{blocked by c4, c7}" for the blockers that are not finished yet (in the done stage or a later one), "[criteria 3]" for its acceptance criteria, and "(done, not verified)" for a finished card whose criteria were never approved. ' +
       'With parent, list only that milestone and its cards, after a summary line: the report for a milestone. Cards the user added or edited since the last listing are flagged "(new from user)". Listing marks them as seen.',
     inputSchema: { type: 'object', properties: { parent: { type: 'string', description: 'Optional: a milestone card id; list only that milestone and the cards under it.' } }, required: [] },
   },
@@ -227,8 +228,15 @@ const TOOLS = [
   },
   {
     name: 'board_open',
-    description: 'Return the URL of the local board web page for this project. Starts the board again if it was stopped.',
-    inputSchema: { type: 'object', properties: {}, required: [] },
+    description: 'Return the URL of the local board web page for this project. Starts the board again if it was stopped. With tunnel: "start" it also opens (or shows the one already open) a remote link, through a Cloudflare quick tunnel, that works from another device for 12 hours; "stop" closes it. The remote link puts the board on the internet: whoever holds it acts as the user, can read every project and thread report and can create cards and answer waiting items. So opening it is never done on the first call: the tool answers "CONFIRMATION REQUIRED" with a confirm_code and opens nothing. Use tunnel "start" only when the user asked for it, show them what the link allows, and call again with the confirm_code only after they agree. Showing a link that is already open needs no code, and "stop" needs none. A side thread cannot use tunnel. Give the user the link and the warning exactly as returned.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tunnel: { type: 'string', enum: ['start', 'stop'], description: '"start": open the remote link (needs the user\'s agreement: see confirm_code), or show the current one (it does not extend it). "stop": close it. Leave out for the local link only.' },
+        confirm_code: CONFIRM_PROP,
+      },
+      required: [],
+    },
   },
   {
     name: 'lane_list',
@@ -268,7 +276,7 @@ const TOOLS = [
         roles: {
           type: ['object', 'null'],
           properties: Object.fromEntries(ROLE_NAMES.map((r) => [r, { type: 'string', description: 'A stage id.' }])),
-          description: 'Which stage the plugin itself uses: start (a new card), working (a running thread), review (a finished turn), blocked (a failed thread), done (an ended thread; also what counts as done for milestone progress). Left out, they follow the stages\' order, and giving new stages without roles drops the old roles. null removes them.',
+          description: 'Which stage the plugin itself uses: start (a new card), working (a running thread), review (a finished turn), blocked (a failed thread), done (an ended thread; a card in this stage or a later one also counts as finished for its milestone). Left out, they follow the stages\' order, and giving new stages without roles drops the old roles. null removes them.',
         },
         reset: { type: 'boolean', description: 'true deletes this scope\'s config file. Give no other setting with it.' },
       },
@@ -277,7 +285,7 @@ const TOOLS = [
   },
   {
     name: 'board_stop',
-    description: 'Stop the local board web page for every session, until board_open is called again. Cards and threads are not touched. Use it only when the user asks.',
+    description: 'Stop the local board web page for every session, until board_open is called again. A remote tunnel link is closed too. Cards and threads are not touched. Use it only when the user asks.',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
 ];
@@ -387,18 +395,18 @@ function laneTag(c) {
 }
 
 // The compact marks after a card's title in board_list, in this order and only when present: (bug) !high or !low #label
-// {blocked by c4, c7} [criteria N] (done, not verified). `cards` are all the cards, with their shown stage in `status`.
+// {blocked by c4, c7} [criteria N] (done, not verified), the last for a card in a finished stage. `cards` are all the cards, with their shown stage in `status`.
 function fieldMarks(c, cards, cfg) {
   const marks = [];
   if (c.type === 'bug') marks.push('(bug)');
   if (c.priority === 'high' || c.priority === 'low') marks.push(`!${c.priority}`);
   if (Array.isArray(c.labels)) for (const l of c.labels) if (typeof l === 'string' && l) marks.push(`#${core.clip(l, 24)}`);
-  // only the blockers that are not done yet: a card whose blockers are all done is not blocked
-  const blockers = core.liveBlockers(c, cards).filter((id) => cards.find((x) => x.id === id).status !== cfg.taskRoles.done);
+  // only the blockers that are not finished yet: a card whose blockers are all done is not blocked
+  const blockers = core.openBlockers(c, cards, cfg);
   if (blockers.length) marks.push(`{blocked by ${blockers.join(', ')}}`);
   if (c.kind !== 'milestone' && core.hasCriteria(c)) {
     marks.push(`[criteria ${c.criteria.length}]`);
-    if (c.status === cfg.taskRoles.done && !core.reviewApproved(c, cfg.taskRoles.done)) marks.push('(done, not verified)');
+    if (core.isFinished(c, cfg) && !core.reviewApproved(c, core.finishedStageIds(cfg))) marks.push('(done, not verified)');
   }
   return marks.length ? ` ${marks.join(' ')}` : '';
 }
@@ -478,7 +486,7 @@ const ROLE_HELP = {
   working: 'a thread whose turn is running',
   review: 'a thread whose turn finished',
   blocked: 'a thread that failed',
-  done: 'a thread that was ended; also what counts as done for milestone progress',
+  done: 'a thread that was ended; a card in this stage or a later one also counts as finished for its milestone',
 };
 
 // The effective settings of a project as text: config_get and config_set answer with it.
@@ -570,6 +578,94 @@ function watchBoard(projectDir) {
     }
   }, BOARD_WATCH_MS);
   if (typeof boardWatch.unref === 'function') boardWatch.unref();
+}
+
+// ---------- the remote link (tunnel) ----------
+
+const OLDER_OWNER = 'The board is served by an older plugin version; run /thread:board in an updated session first (it takes the board over), then --tunnel.';
+
+// "in 11 h 30 min", "in 12 h", "in 40 min"
+function inText(ms) {
+  const total = Math.max(0, Math.round(ms / 60000));
+  const h = Math.floor(total / 60), m = total % 60;
+  return 'in ' + (h ? `${h} h${m ? ` ${m} min` : ''}` : `${m} min`);
+}
+
+function untilText(expiresAt) {
+  const d = new Date(expiresAt);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const when = d.toLocaleString([], sameDay ? { hour: '2-digit', minute: '2-digit' } : { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  return `${when} (${inText(expiresAt - Date.now())})`;
+}
+
+// Starts, shows or stops the tunnel on whichever process serves the board: this one when it owns the board, otherwise the owner,
+// over its local control route. Answers text for the user; a failure is text too (a tool error would cut it to one line).
+async function tunnelText(action) {
+  let r;   // { status, body } as the owner's control route answers
+  if (board.owned && board.tunnel) {
+    try {
+      r = { status: 200, body: action === 'stop' ? { active: false, stopped: await board.tunnel.stop() } : await board.tunnel.start() };
+    } catch (e) {
+      if (!(e instanceof boardMod.TunnelError)) throw e;
+      r = { status: 502, body: { error: e.message } };
+    }
+  } else {
+    r = await boardMod.tunnelRequest(board.url, action);
+    if (!r) return 'The tunnel was not changed: the board could not be reached.';
+    if (r.status === 404) return OLDER_OWNER;
+  }
+  const body = r.body || {};
+  if (r.status !== 200) return `The tunnel did not start: ${body.error || 'the board answered with status ' + r.status}`;
+  if (action === 'stop') return body.stopped ? 'The tunnel is stopped. The remote link no longer works.' : 'No tunnel was open.';
+  const link = `${body.url}#t=${body.token}/${core.projectKey(core.projectDir())}`;
+  return [
+    `Remote link: ${link}`,
+    `It works until ${untilText(body.expiresAt)}.${body.reused ? ' This is the tunnel that was already open; asking again does not extend it.' : ''}`,
+    TUNNEL_EXPOSES,
+    'It stops working when it expires or when /thread:board --tunnel stop closes it.',
+  ].join('\n');
+}
+
+// What the remote link gives to whoever holds it: shown with the confirmation and again with the link.
+const TUNNEL_EXPOSES = [
+  'Whoever has this link acts as you on this board, from anywhere on the internet.',
+  'It can read: every project on the board with its absolute path (which contains your username), thread reports and transcripts, sub-agent run prompts, reports and steps, the session list, the agents list and the lane settings.',
+  'It can do: create and edit cards (which gives Claude new instructions), answer waiting items (which can approve a review and wake Claude), and ask for thread reports. It acts as you, so it can also move a card that has criteria to done, or edit those criteria, as you can on the local board. It cannot start, message, end or delete threads, or stop the board.',
+].join('\n');
+
+// Opening the tunnel needs the user's yes, like turning waking on: the first call gets a code and opens nothing, a second call with
+// the code opens it. The code lives in this server process, works once and expires.
+const TUNNEL_CONFIRM_TTL_MS = 10 * 60 * 1000;
+let tunnelConfirm = null;
+
+function tunnelConfirmText(code) {
+  return [
+    'CONFIRMATION REQUIRED. No tunnel was opened.',
+    '',
+    `Opening the remote link puts this board on the internet through a Cloudflare tunnel for 12 hours. ${TUNNEL_EXPOSES}`,
+    '',
+    'Do not decide for the user. Show them the paragraph above in your own words and ask whether to open the remote link. Do this only when they asked for it.',
+    `Only if they agree, call board_open again with tunnel "start" and confirm_code "${code}". If they decline, do not call it again.`,
+  ].join('\n');
+}
+
+// null when the tunnel may be opened by this call; otherwise the answer to give instead. A tunnel that is already open is only shown.
+async function tunnelStartGuard(code) {
+  let open = false;
+  if (board.owned && board.tunnel) open = board.tunnel.status().active;
+  else {
+    const r = await boardMod.tunnelRequest(board.url, 'status');
+    if (r && r.status === 404) return null;   // a board from before the tunnel: nothing can open, and tunnelText says so
+    open = !!(r && r.status === 200 && r.body && r.body.active);
+  }
+  if (open) return null;
+  const given = typeof code === 'string' ? code.trim().toLowerCase() : '';
+  if (tunnelConfirm && given && tunnelConfirm.code === given && tunnelConfirm.expiresAt > Date.now()) {
+    tunnelConfirm = null;
+    return null;
+  }
+  tunnelConfirm = { code: randomBytes(4).toString('hex'), expiresAt: Date.now() + TUNNEL_CONFIRM_TTL_MS };
+  return tunnelConfirmText(tunnelConfirm.code);
 }
 
 // ---------- tool handlers ----------
@@ -723,7 +819,8 @@ const HANDLERS = {
     const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : '');
     // a sub-agent's run is linked to its card by the card id at the start of the Agent call's description
     const hand = card.kind === 'milestone' ? '' : ` When you hand this card's work to a sub-agent, start the Agent call's description with [${card.id}] (for example "[${card.id}] fix the rounding") so the board shows that run on the card.`;
-    return `Added ${card.id} [${card.kind}] "${core.clip(card.title, 80)}" in ${card.status}${m}.${hand}`;
+    const where = card.kind === 'milestone' ? '' : ` in ${card.status}`;   // a milestone has no stage
+    return `Added ${card.id} [${card.kind}] "${core.clip(card.title, 80)}"${where}${m}.${hand}`;
   },
 
   async board_update(args) {
@@ -739,12 +836,14 @@ const HANDLERS = {
       title: optStr(args, 'title'),
       note: optStr(args, 'note'),
       status: optStr(args, 'status'),
+      kind: optEnum(args, 'kind', ['task', 'idea']),
       parent: optStr(args, 'parent'),
       lane,
       ...cardFieldArgs(args),
     }), { source: 'claude' });
     const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : '');
-    return `Updated ${card.id} "${core.clip(card.title, 80)}" (${card.status}${m}).`;
+    const where = card.kind === 'milestone' ? m.replace(/^, /, '') : `${card.status}${m}`;   // a milestone has no stage
+    return `Updated ${card.id} "${core.clip(card.title, 80)}"${where ? ` (${where})` : ''}.`;
   },
 
   async board_remove(args) {
@@ -769,7 +868,7 @@ const HANDLERS = {
       if (!m) throw new ToolError(`milestone not found: ${parent}`);
       if (m.kind !== 'milestone') throw new ToolError(`${parent} is not a milestone`);
       const p = core.milestoneProgress(all, parent, cfg);
-      lines.push(`Milestone ${parent} "${core.clip(m.title, 120)}": ${p.done} of ${p.total} done.`);
+      lines.push(`Milestone ${parent} "${core.clip(m.title, 120)}": ${core.milestoneState(all, parent, cfg)}, ${p.done} of ${p.total} done.`);
       cards = all.filter((c) => c.id === parent || c.parent === parent);
     }
     if (chat) {
@@ -782,20 +881,28 @@ const HANDLERS = {
       return `- ${st.id}: ${st.label}${roles.length ? ` [${roles.join(', ')}]` : ''}`;
     })];
     if (!cards.length) return [...lines, chat ? 'No threads.' : 'The board is empty.', ...stageLines].join('\n');
+    const cardLine = (c) => {
+      // a milestone has no stage: its state stands where a thread's run state does
+      const ms = c.kind === 'milestone';
+      const kind = c.kind === 'thread' ? `thread:${c.thread.runState}` : ms ? `milestone:${core.milestoneState(all, c.id, cfg)}` : c.kind;
+      const progress = ms ? core.milestoneProgress(all, c.id, cfg) : null;
+      const done = progress ? ` (${progress.done}/${progress.total} done)` : '';
+      const flag = unseen.has(c.id) ? ' (new from user)' : '';
+      const waiting = chat ? 0 : core.openWaits(c).length;   // not shown on a chat-only board
+      const wait = waiting ? ` (${waiting} waiting)` : '';
+      const note = c.note ? ` — ${core.clip(c.note, 200)}` : '';
+      return `- ${c.id} [${kind}] ${core.clip(c.title, 120)}${fieldMarks(c, all, cfg)}${milestoneTag(all, c)}${laneTag(c)}${done}${wait}${flag}${note}`;
+    };
     for (const st of cfg.stages) {
-      const inCol = cards.filter((c) => c.status === st.id);
+      const inCol = cards.filter((c) => c.kind !== 'milestone' && c.status === st.id);
       if (!inCol.length) continue;
       lines.push(`${st.label} (${inCol.length})`);
-      for (const c of inCol) {
-        const kind = c.kind === 'thread' ? `thread:${c.thread.runState}` : c.kind;
-        const progress = c.kind === 'milestone' ? core.milestoneProgress(all, c.id, cfg) : null;
-        const done = progress ? ` (${progress.done}/${progress.total} done)` : '';
-        const flag = unseen.has(c.id) ? ' (new from user)' : '';
-        const waiting = chat ? 0 : core.openWaits(c).length;   // not shown on a chat-only board
-        const wait = waiting ? ` (${waiting} waiting)` : '';
-        const note = c.note ? ` — ${core.clip(c.note, 200)}` : '';
-        lines.push(`- ${c.id} [${kind}] ${core.clip(c.title, 120)}${fieldMarks(c, all, cfg)}${milestoneTag(all, c)}${laneTag(c)}${done}${wait}${flag}${note}`);
-      }
+      for (const c of inCol) lines.push(cardLine(c));
+    }
+    const milestones = cards.filter((c) => c.kind === 'milestone');
+    if (milestones.length) {
+      lines.push(`Milestones (${milestones.length})`);
+      for (const c of milestones) lines.push(cardLine(c));
     }
     if (unseen.size) lines.push('', `${unseen.size} card(s) new from the user.`);
     return [...lines, ...stageLines].join('\n');
@@ -879,7 +986,9 @@ const HANDLERS = {
     return `${reset === true ? `The ${scope} config file was deleted.` : `Saved to the ${scope} config file.`}\n\n${configText(cfg)}\n\n${cards}`;
   },
 
-  async board_open() {
+  async board_open(args) {
+    const tunnel = optEnum(args, 'tunnel', ['start', 'stop']);
+    if (tunnel && process.env.THREAD_DEPTH) throw new ToolError('a side thread cannot open or close the remote link');
     if (process.env.THREAD_NO_HTTP === '1') return 'The board server is disabled (THREAD_NO_HTTP=1).';
     await boardPromise;
     try {
@@ -901,7 +1010,13 @@ const HANDLERS = {
       log('board token failed:', e);
       return 'The board is unavailable: its access token could not be read (see the plugin log on stderr).';
     }
-    return `Board: ${link}\nThis link opens this project's tab; the same board shows every project.`;
+    const local = `Board: ${link}\nThis link opens this project's tab; the same board shows every project.`;
+    if (!tunnel) return local;
+    if (tunnel === 'start') {
+      const ask = await tunnelStartGuard(optStr(args, 'confirm_code'));
+      if (ask) return `${local}\n\n${ask}`;
+    }
+    return `${local}\n\n${await tunnelText(tunnel)}`;
   },
 
   async board_stop() {
@@ -911,10 +1026,16 @@ const HANDLERS = {
     const again = 'Cards and threads are untouched. /thread:board starts it again.';
     boardMod.setBoardStopped(true);
     if (!board) return 'The board is not running. ' + again;
-    if (board.owned) { boardMod.closeBoardServer(board.server); return 'Board stopped. ' + again; }
+    if (board.owned) {
+      const tunnelWas = board.tunnel ? await board.tunnel.stop() : false;
+      boardMod.closeBoardServer(board.server);
+      return 'Board stopped.' + (tunnelWas ? ' The remote tunnel link is closed too.' : '') + ' ' + again;
+    }
     const info = await boardMod.pingBoard(board.url);
     if (!info) return 'The board is not running. ' + again;
-    if (await boardMod.stopBoard(board.url)) return 'Board stopped. ' + again;
+    const closed = await boardMod.tunnelRequest(board.url, 'stop');   // the owner ends its tunnel with its board anyway; this says whether there was one
+    const tunnelNote = closed && closed.status === 200 && closed.body && closed.body.stopped ? ' The remote tunnel link is closed too.' : '';
+    if (await boardMod.stopBoard(board.url)) return 'Board stopped.' + tunnelNote + ' ' + again;
     boardMod.setBoardStopped(false);
     return `The board was not stopped: it is served by another session on plugin version ${info.version}, which is too old to be stopped from here. Reload that session's window, or stop its process.`;
   },

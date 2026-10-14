@@ -16,7 +16,7 @@ const block = (name) => {
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
 const S = vm.runInNewContext(
-  `${block('tokens and agents')}\n${block('milestones and stages')}\n${block('summary')}\n({ summaryModel, weekEdges, weekOf, doneAt, stageTimes, median, chartScale, spanText, derivedWorker })`,
+  `${block('tokens and agents')}\n${block('milestones and stages')}\n${block('summary')}\n({ summaryModel, weekEdges, weekOf, completedAt, stageTimes, median, chartScale, spanText, derivedWorker })`,
   {},
 );
 
@@ -112,6 +112,36 @@ test('created and done are counted per week, milestones are not counted, and the
   assert.deepEqual(m.scale, { top: 4, ticks: [0, 1, 2, 3, 4] });
 });
 
+test('a card in a stage after the done stage is finished: Open leaves it out, and the date it counts for is when it was completed, not when it moved on', () => {
+  const RELEASED = { stages: [...DEFAULT.stages, { id: 'released', label: 'Released' }], roles: DEFAULT.roles };
+  const mv = (at, from, to) => ({ at: ago(at), by: 'claude', type: 'moved', from, to });
+  const completedLately = card({ status: 'released', updatedAt: ago(HOUR), history: [{ at: ago(30 * DAY), type: 'created', to: 'new' }, mv(2 * DAY, 'new', 'done'), mv(HOUR, 'done', 'released')] });
+  const completedLongAgo = card({ status: 'released', updatedAt: ago(DAY), history: [{ at: ago(40 * DAY), type: 'created', to: 'new' }, mv(20 * DAY, 'new', 'done'), mv(DAY, 'done', 'released')] });
+  const cards = [
+    completedLately, completedLongAgo,
+    card({ status: 'done', updatedAt: ago(9 * DAY), history: [{ at: ago(30 * DAY), type: 'created', to: 'new' }, mv(9 * DAY, 'review', 'done')] }),
+    card({ status: 'review' }),
+    card({ kind: 'idea', type: 'bug', status: 'idea' }),                 // an unfinished bug idea is an open bug
+    card({ kind: 'idea', type: 'bug', status: 'released', updatedAt: ago(DAY) }),   // a finished one is not
+  ];
+  const m = model(cards, RELEASED);
+  assert.equal(m.tiles.open, 2, 'the review card and the idea');
+  assert.equal(m.tiles.doneRecent, 2, 'the card completed two days ago, and the bug idea released yesterday (no history: last updated)');
+  assert.equal(m.tiles.bugs, 1);
+  const inWeek = (ms) => m.weeks.findIndex((w) => ms >= w.start && ms < w.start + 7 * DAY);
+  assert.equal(m.weeks.reduce((n, w) => n + w.done, 0), 4, 'four finished cards, each in one week');
+  // the week of completion, not the week it was released
+  const twenty = inWeek(NOW - 20 * DAY);
+  assert.ok(twenty >= 0 && m.weeks[twenty].done >= 1, 'the card completed 20 days ago is in that week');
+});
+
+test('the time in stages leaves out every finished stage', () => {
+  const RELEASED = { stages: [...DEFAULT.stages, { id: 'released', label: 'Released' }], roles: DEFAULT.roles };
+  const mv = (at, from, to) => ({ at: ago(at), by: 'claude', type: 'moved', from, to });
+  const c = card({ status: 'released', history: [{ at: ago(10 * DAY), type: 'created', to: 'new' }, mv(8 * DAY, 'new', 'done'), mv(4 * DAY, 'done', 'released')] });
+  assert.deepEqual(model([c], RELEASED).stages.map((x) => x.id), ['new'], 'Done and Released are where a card ends up');
+});
+
 test('chartScale: whole-number gridlines, four steps, at least four', () => {
   assert.deepEqual(plain(S.chartScale(0)), { top: 4, ticks: [0, 1, 2, 3, 4] });
   assert.deepEqual(plain(S.chartScale(4)), { top: 4, ticks: [0, 1, 2, 3, 4] });
@@ -119,9 +149,9 @@ test('chartScale: whole-number gridlines, four steps, at least four', () => {
   assert.deepEqual(plain(S.chartScale(13)), { top: 16, ticks: [0, 4, 8, 12, 16] });
 });
 
-// ---------------------------------------------------------------- when a card was done
+// ---------------------------------------------------------------- when a card was completed
 
-test('a card was done at its last move into the done stage, not at an earlier one or one into another stage', () => {
+test('a card was completed at its last move into the finished stages from an unfinished one, not at an earlier one or one into another stage', () => {
   const mv = (at, from, to) => ({ at: iso(at), by: 'claude', type: 'moved', from, to });
   const c = card({ status: 'done', updatedAt: iso(local(2026, 10, 14)), history: [
     { at: iso(local(2026, 9, 1)), by: 'user', type: 'created', to: 'new' },
@@ -131,22 +161,39 @@ test('a card was done at its last move into the done stage, not at an earlier on
     mv(local(2026, 9, 9), 'done', 'review'),
     mv(local(2026, 9, 7), 'new', 'blocked'),
   ] });
-  assert.equal(S.doneAt(c, 'done'), local(2026, 9, 5).getTime());
-  assert.equal(S.doneAt(c, 'blocked'), local(2026, 9, 7).getTime());
+  assert.equal(S.completedAt(c, DEFAULT), local(2026, 9, 5).getTime());
+  // with the blocked stage as the done role, blocked and done are both finished: the later move in is the 7th
+  const shifted = { ...DEFAULT, roles: { ...DEFAULT.roles, done: 'blocked' } };
+  assert.equal(S.completedAt(c, shifted), local(2026, 9, 7).getTime());
 });
 
-test('with no move into the done stage a card was done when it was last updated; a thread, when its last turn ended', () => {
+test('a move from Done to Released is no completion, and finishing again after a reopening gives a new date', () => {
+  const RELEASED = { stages: [...DEFAULT.stages, { id: 'released', label: 'Released' }], roles: DEFAULT.roles };
+  const mv = (at, from, to) => ({ at: iso(at), by: 'claude', type: 'moved', from, to });
+  const c = card({ status: 'released', updatedAt: iso(local(2026, 10, 14)), history: [
+    { at: iso(local(2026, 9, 1)), by: 'user', type: 'created', to: 'new' },
+    mv(local(2026, 9, 2), 'new', 'done'),
+    mv(local(2026, 9, 12), 'done', 'released'),
+  ] });
+  assert.equal(S.completedAt(c, RELEASED), local(2026, 9, 2).getTime(), 'released later, completed when it was done');
+  c.history.push(mv(local(2026, 9, 20), 'released', 'review'), mv(local(2026, 9, 25), 'review', 'released'));
+  assert.equal(S.completedAt(c, RELEASED), local(2026, 9, 25).getTime(), 'reopened and finished again: a new date');
+  // a card created straight in a finished stage was completed then
+  assert.equal(S.completedAt(card({ status: 'released', updatedAt: iso(local(2026, 10, 14)), history: [{ at: iso(local(2026, 9, 1)), type: 'created', to: 'released' }] }), RELEASED), local(2026, 9, 1).getTime());
+});
+
+test('with no move into the finished stages a card was completed when it was last updated; a thread, when its last turn ended', () => {
   const updated = local(2026, 10, 3, 9).getTime();
-  assert.equal(S.doneAt(card({ updatedAt: iso(new Date(updated)) }), 'done'), updated);
-  assert.equal(S.doneAt(card({ updatedAt: iso(new Date(updated)), history: [{ at: iso(local(2026, 9, 1)), type: 'created', to: 'new' }] }), 'done'), updated);
+  assert.equal(S.completedAt(card({ updatedAt: iso(new Date(updated)) }), DEFAULT), updated);
+  assert.equal(S.completedAt(card({ updatedAt: iso(new Date(updated)), history: [{ at: iso(local(2026, 9, 1)), type: 'created', to: 'new' }] }), DEFAULT), updated);
   const thread = card({ kind: 'thread', updatedAt: iso(new Date(updated)), thread: { runState: 'ended', turns: [
     { startedAt: 'a', finishedAt: iso(local(2026, 10, 1)) }, { startedAt: 'b', finishedAt: iso(local(2026, 10, 2)) },
   ] } });
-  assert.equal(S.doneAt(thread, 'done'), local(2026, 10, 2).getTime());
+  assert.equal(S.completedAt(thread, DEFAULT), local(2026, 10, 2).getTime());
   thread.thread.turns[1].finishedAt = null;
-  assert.equal(S.doneAt(thread, 'done'), local(2026, 10, 1).getTime(), 'a turn still open is passed over');
-  assert.equal(S.doneAt(card({ updatedAt: 'not a date' }), 'done'), null);
-  assert.equal(S.doneAt(card({ updatedAt: undefined }), 'done'), null);
+  assert.equal(S.completedAt(thread, DEFAULT), local(2026, 10, 1).getTime(), 'a turn still open is passed over');
+  assert.equal(S.completedAt(card({ updatedAt: 'not a date' }), DEFAULT), null);
+  assert.equal(S.completedAt(card({ updatedAt: undefined }), DEFAULT), null);
 });
 
 test('a done card with no usable time is counted nowhere in the weeks and not among the lately done', () => {
@@ -284,14 +331,32 @@ test('spanText: one unit, minutes up to an hour, hours up to two days, then days
 
 // ---------------------------------------------------------------- milestones, old cards, empty
 
-test('each milestone has its own progress, counted by the done stage, and only six are listed', () => {
+test('each milestone has its own state and progress, counted by the done stage and later ones without ideas, and only six are listed', () => {
   const ms = Array.from({ length: 8 }, (_, i) => ({ id: 'c' + (100 + i), kind: 'milestone', title: 'Milestone ' + i, status: 'new' }));
-  const cards = [...ms, card({ parent: 'c100', status: 'shipped' }), card({ parent: 'c100', status: 'doing' }), card({ parent: 'c101', status: 'todo' })];
+  const cards = [...ms, card({ parent: 'c100', status: 'shipped' }), card({ parent: 'c100', status: 'doing' }), card({ parent: 'c101', status: 'todo' }),
+    card({ parent: 'c102', kind: 'idea', status: 'todo' }), card({ parent: 'c103', status: 'shipped' })];
   const m = model(cards, CUSTOM);
   assert.equal(m.milestones.length, 6);
   assert.equal(m.milestonesMore, 2);
-  assert.deepEqual(m.milestones[0], { id: 'c100', title: 'Milestone 0', done: 1, total: 2 });
-  assert.deepEqual(m.milestones[2], { id: 'c102', title: 'Milestone 2', done: 0, total: 0 });
+  // in the Milestones view's order (open, empty, done), cut after six: the done one is the first to go
+  assert.deepEqual(m.milestones.map((x) => x.id), ['c100', 'c101', 'c102', 'c104', 'c105', 'c106']);
+  assert.deepEqual(m.milestones[0], { id: 'c100', title: 'Milestone 0', state: 'open', done: 1, total: 2 });
+  assert.deepEqual(m.milestones[2], { id: 'c102', title: 'Milestone 2', state: 'empty', done: 0, total: 0 }, 'an idea does not count');
+  const done = model([ms[3], card({ parent: 'c103', status: 'shipped' })], CUSTOM).milestones[0];
+  assert.deepEqual(done, { id: 'c103', title: 'Milestone 3', state: 'done', done: 1, total: 1 });
+  // a stage after the done stage counts as done
+  const later = { ...CUSTOM, stages: [...CUSTOM.stages, { id: 'live', label: 'Live' }] };
+  assert.equal(model([ms[0], card({ parent: 'c100', status: 'live' })], later).milestones[0].state, 'done');
+});
+
+test('the milestones panel lists open milestones first, then empty ones, then done ones, before it keeps six', () => {
+  const ms = Array.from({ length: 8 }, (_, i) => ({ id: 'c' + (200 + i), kind: 'milestone', title: 'M' + i, status: 'new' }));
+  const kid = (i, status) => card({ parent: 'c' + (200 + i), status });
+  // c200, c203 and c206 are done, c204 and c207 open, the rest empty
+  const cards = [...ms, kid(0, 'shipped'), kid(3, 'shipped'), kid(4, 'doing'), kid(6, 'shipped'), kid(7, 'todo')];
+  const m = model(cards, CUSTOM);
+  assert.deepEqual(m.milestones.map((x) => [x.id, x.state]), [['c204', 'open'], ['c207', 'open'], ['c201', 'empty'], ['c202', 'empty'], ['c205', 'empty'], ['c200', 'done']]);
+  assert.equal(m.milestonesMore, 2, 'the two done ones that did not fit');
 });
 
 test('old cards with no history, no workedBy, no runs, no waits and no times do not break the numbers', () => {
@@ -343,6 +408,7 @@ function summaryPage(cards, config = DEFAULT, over = {}) {
     timeEl: (at) => { const t = doc.createElement('time'); t.textContent = 'rel ' + at; return t; },
     waitKindMark: (kind) => { const m = doc.createElement('span'); m.className = 'pill'; m.dataset.wk = kind; m.textContent = kind; return m; },
     progressEl: (p) => { const e = doc.createElement('div'); e.className = 'ms-prog'; e.textContent = p.done + '/' + p.total; return e; },
+    msStateTag: (state) => { const e = doc.createElement('span'); e.className = 'tag ms-st'; e.textContent = state; return e; },
     ...over,
   };
   const src = `${block('card link')}\n${block('tokens and agents')}\n${block('milestones and stages')}\n${block('summary')}\n${block('summary page')}\nDate.now = () => ${NOW};\n({ renderSummary })`;
@@ -454,6 +520,7 @@ test('milestones link to their page with their progress', () => {
   assert.equal(a.href, '#/k1/c3');
   assert.equal(a.querySelector('.sum-ms-title').textContent, 'Launch <script>');
   assert.equal(a.querySelector('.ms-prog').textContent, '0/1');
+  assert.equal(a.querySelector('.ms-st').textContent, 'open', 'the state is beside the title');
 });
 
 test('text from cards is set as text: no markup is made from a title, a wait or a milestone', () => {
