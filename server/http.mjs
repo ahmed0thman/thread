@@ -13,6 +13,10 @@ const DEFAULT_PORT = 47800;
 const TOKEN_RE = /^[0-9a-f]{32,64}$/;
 const WRITE_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 
+export function escapeAttribute(value) {
+  return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
 function log(...a) {
   try { process.stderr.write('[thread/http] ' + a.join(' ') + '\n'); } catch { /* ignore */ }
 }
@@ -260,7 +264,8 @@ function makeHandler(homeDir, token, stop) {
 
     if (method === 'GET' && path === '/') {
       try {
-        const html = await readFile(BOARD_FILE);
+        const page = await readFile(BOARD_FILE, 'utf8');
+        const html = page.replace('__THREAD_VERSION__', () => escapeAttribute(core.VERSION));
         send(res, 200, html, { 'Content-Type': 'text/html; charset=utf-8' });
       } catch (e) {
         log('board.html read failed:', e && e.message);

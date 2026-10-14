@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<meta name="thread-version" content="__THREAD_VERSION__">
 <script>
 // Apply the saved theme, or the system one, before the first paint.
 (function () {
@@ -115,6 +116,7 @@ code, pre { font-family: var(--mono); }
   padding: var(--s3) var(--s4) var(--s2);
 }
 .top h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.005em; flex: none; }
+.plugin-version { display: block; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 400; color: var(--muted); }
 .dir {
   flex: 1 1 0; min-width: 0; display: flex; color: var(--muted);
   font: 12px var(--mono); white-space: nowrap;
@@ -309,6 +311,31 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .card.is-thread { border-left: 3px solid var(--thread); padding-left: 8px; }
 .card.is-milestone { border-left: 3px solid var(--milestone); padding-left: 8px; }
 .card-top { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+.btn.gear { flex: none; margin: -3px -4px -3px auto; width: 26px; min-height: 26px; height: 26px; padding: 0; border-radius: var(--r1); color: var(--muted); font-size: 16px; line-height: 1; }
+.btn.gear:hover:not(:disabled) { color: var(--text); }
+.btn.gear[aria-expanded="true"] { background: var(--accent-bg); color: var(--accent); }
+.menu {
+  position: fixed; z-index: 50; top: 0; left: 0; min-width: 210px; max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; padding: 4px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--r3);
+  box-shadow: 0 6px 20px var(--scrim);
+}
+.menu-label { padding: 6px 10px 2px; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
+.menu-item {
+  display: flex; align-items: center; gap: var(--s2); width: 100%; min-height: 30px; padding: 3px 10px; border: 0;
+  border-radius: var(--r2); background: none; color: var(--text); font-size: 13px; text-align: left; cursor: pointer;
+}
+.menu-item:hover:not([aria-disabled="true"]), .menu-item:focus-visible { background: var(--surface-2); }
+.menu-item:focus-visible { outline-offset: -2px; }
+.menu-item[aria-checked="true"] { font-weight: 600; }
+.menu-item[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+.menu-item.danger { color: var(--danger); }
+.menu-item.danger:hover:not([aria-disabled="true"]), .menu-item.danger:focus-visible { background: var(--danger-bg); }
+.menu-mark { flex: none; width: 12px; color: var(--accent); }
+.menu-text { min-width: 0; overflow-wrap: anywhere; }
+.menu-hint { margin-left: auto; padding-left: var(--s2); font-size: 11.5px; font-weight: 400; color: var(--muted); }
+.menu-confirm { margin: 0; padding: 6px 10px 4px; max-width: 280px; font-weight: 600; }
 .card-title {
   margin: 0; font-size: 13.5px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
@@ -634,6 +661,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   .board { padding: 0 var(--s3) var(--s3); grid-template-columns: repeat(var(--cols, 6), 264px); scroll-snap-type: x proximity; }
   .col { scroll-snap-align: start; }
   .drawer { width: 100vw; border-left: 0; }
+  .menu-item { min-height: 36px; }
   .drawer.page .dr-body, .drawer.page .dr-foot { padding-left: var(--s3); padding-right: var(--s3); }
   .row2 { grid-template-columns: 1fr; }
   .dr-head, .dr-body, .scroller, .composer, .dr-foot { padding-left: var(--s3); padding-right: var(--s3); }
@@ -657,7 +685,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 <body>
 <div id="app">
   <header class="top">
-    <h1>Thread board</h1>
+    <h1>Thread board<span class="plugin-version" id="plugin-version" title="thread plugin version"></span></h1>
     <span class="dir" id="dir"><span class="dir-head" id="dir-head"></span><span class="dir-tail" id="dir-tail"></span></span>
     <button type="button" class="btn" id="theme-btn"></button>
     <span class="conn" id="conn" role="status" data-state="connecting"><span class="shape s-ring"></span><span id="conn-text">Connecting</span></span>
@@ -677,6 +705,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     <button type="button" class="btn primary" id="new-btn" aria-keyshortcuts="n">New card <kbd class="hint" aria-hidden="true">N</kbd></button>
   </div>
   <p class="mode-note" id="old-note" role="status" hidden>This board is served by a session on an older plugin version, so your stages and milestones are not shown. Run <code>/thread:board</code> in an updated session, then reload this page.</p>
+  <p class="mode-note" id="version-note" role="status" hidden><span id="version-text"></span> <button type="button" class="btn small" id="version-reload">Reload</button></p>
   <p class="mode-note" id="mode-note" role="status" hidden>The task board is off for this project (chat-only), so only threads are shown. Run <code>/thread:setup</code> to turn it on.</p>
   <div class="callout warn notice" id="notice" role="status" hidden></div>
   <main class="board" id="board" aria-label="Board columns"></main>
@@ -740,6 +769,42 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   const elMilestone = $('milestone-filter'), elMilestoneWrap = $('milestone-wrap'), elModeNote = $('mode-note'), elOldNote = $('old-note');
   const elGate = $('gate'), elGateRetry = $('gate-retry'), elGateMsg = $('gate-msg');
 
+  // ---------- plugin version ----------
+  const pageVersion = document.querySelector('meta[name="thread-version"]').content;
+  $('plugin-version').textContent = 'v' + pageVersion;
+  $('version-reload').addEventListener('click', () => location.reload());
+  let versionAt = 0;         // when the server's version was last asked for
+  let versionSays = null;    // the note the server's version calls for: { text, reload }, or null while the versions agree
+  function parts(v) { const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(v)); return m ? m.slice(1).map(Number) : null; }
+  // True when x.y.z version a is lower than b; false when either is not x.y.z.
+  function olderThan(a, b) {
+    const x = parts(a), y = parts(b);
+    if (!x || !y) return false;
+    for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i];
+    return false;
+  }
+  // Shown unless the older-session note is: the two would contradict each other. The text is written only when it changes.
+  function showVersionNote() {
+    const say = $('old-note').hidden ? versionSays : null;
+    const text = say ? say.text : '';
+    if ((say || !versionSays) && $('version-text').textContent !== text) $('version-text').textContent = text;
+    $('version-reload').hidden = !(say && say.reload);
+    $('version-note').hidden = !say;
+  }
+  async function refreshVersion() {
+    versionAt = Date.now();
+    let version;
+    try {
+      const { res, text } = await request('GET', '/api/ping', null, 5000);
+      const data = res.ok ? parseJson(text) : null;
+      if (data && typeof data.version === 'string') version = data.version;
+    } catch (e) { /* an old or unreachable server has no version to compare */ }
+    if (!version || version === pageVersion) versionSays = null;
+    else if (olderThan(version, pageVersion)) versionSays = { reload: false, text: 'This page is from version ' + pageVersion + ', but the board is now served by an older session on version ' + version + '. Run /thread:board in an updated session, then reload this page.' };
+    else versionSays = { reload: true, text: 'This page is from version ' + pageVersion + ', but the board is now served by version ' + version + '. Reload the page.' };
+    showVersionNote();
+  }
+
   // ---------- access token ----------
   let token = '';
   let halted = false;        // true while the access-link page is showing: no polling at all
@@ -774,6 +839,10 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   let pollSeq = 0, appliedSeq = 0;
   let boardKey = null;
   let dragId = null, pendingRender = false, lastDragEnd = 0;
+  let gearCtx = null;        // what the gear menus may offer, worked out once per board render
+  let menu = null;           // the open gear menu: { id, el, gear, confirm, sig, timer }
+  let gearDown = false;      // a press that began on a card's gear: it must not start a drag
+  let startFor = '';         // a card whose page should open at the "Start as thread" step
   let panel = null;          // the open drawer or thread workspace, if any
   let hashPushed = false;    // true when the open panel added a history entry
   let returnFocus = null;    // where focus goes when the panel closes
@@ -931,6 +1000,37 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     return lines.join('\n');
   }
   // ---- end milestones and stages ----
+  // ---- gear menu actions (page.test.mjs runs this block on its own) ----
+  // What the gear menu on a card offers, under the conditions the card's page uses.
+  // o: { ro, stages, choices: [[id, title]], reportState(card) }. An item is { id, label, ... }; { group, items } is a labelled set
+  // and { sep: true } a divider. A read-only board gets nothing that writes, so a card may have no action at all.
+  function cardActions(c, o) {
+    if (c.kind === 'milestone') {
+      const out = [{ id: 'copy', label: 'Copy report' }];
+      if (!o.ro) out.push({ id: 'delete', label: 'Delete', danger: true });
+      return out;
+    }
+    if (o.ro) return [];
+    const out = [];
+    if (c.kind === 'thread') {
+      if (!c.thread) return [];
+      if (c.thread.runState !== 'ended') out.push({ id: 'end', label: 'End thread' });
+      const rs = o.reportState(c);
+      if (rs === 'not') out.push({ id: 'report', label: 'Report to main session', on: true });
+      else if (rs === 'queued') out.push({ id: 'report', label: 'Cancel queued report', on: false });
+      const running = c.thread.runState === 'running';
+      out.push({ id: 'delete', label: 'Delete', danger: true, disabled: running, hint: running ? 'a turn is running' : '', why: running ? 'A turn is running. End the thread or wait for it to finish before deleting.' : '' });
+      return out;
+    }
+    out.push({ group: 'Move to', items: o.stages.map((s) => ({ id: 'move:' + s.id, value: s.id, label: s.label, radio: true, checked: c.status === s.id, disabled: c.status === s.id })) });
+    if (o.choices.length) {
+      const cur = o.choices.some((m) => m[0] === c.parent) ? c.parent : '';
+      out.push({ group: 'Set milestone', items: [['', 'No milestone']].concat(o.choices).map(([id, label]) => ({ id: 'ms:' + id, value: id, label, radio: true, checked: id === cur })) });
+    }
+    out.push({ sep: true }, { id: 'start', label: 'Start as thread…' }, { id: 'delete', label: 'Delete', danger: true });
+    return out;
+  }
+  // ---- end gear menu actions ----
   function elapsedEl(iso) {
     const e = h('span', 'elapsed', fmtMs(Date.now() - new Date(iso).getTime()));
     e.dataset.since = iso;
@@ -1059,6 +1159,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     if (halted) return;
     halted = true;
     clearTimeout(loopTimer); loopTimer = null;
+    closeMenu(false);
     if (panel) { if (panel.dispose) panel.dispose(); panel = null; }
     elOverlay.replaceChildren();
     elOverlay.hidden = true;
@@ -1093,6 +1194,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   });
 
   // ----- loops -----
+  // ---- tick (page.test.mjs runs this function with stubs) ----
   async function tick() {
     loopTimer = null;
     if (halted) return;
@@ -1100,8 +1202,11 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     if (halted) return;
     if (!projects || Date.now() - projectsAt >= PROJECTS_MS) await refreshProjects();
     if (halted) return;
+    if (Date.now() - versionAt >= PROJECTS_MS) await refreshVersion();
+    if (halted) return;
     loopTimer = setTimeout(tick, POLL_MS);
   }
+  // ---- end tick ----
 
   async function poll() {
     if (halted || !selKey) return;
@@ -1304,6 +1409,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
   // Switch to a project: forget the old state, show the new tab, fetch the new board.
   function selectProject(key) {
+    closeMenu(false);
     saveFilters();
     selKey = key;
     current = null; currentKey = ''; lastRaw = null; boardKey = null; synced = false; pendingRender = false;
@@ -1342,6 +1448,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     elThreadsOnly.hidden = chat;
     elModeNote.hidden = !chat;
     elOldNote.hidden = !(current && !current.config);
+    showVersionNote();
   }
 
   // The bar above the columns for a project whose folder is gone.
@@ -1527,6 +1634,8 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     const focusCard = (a && a.closest && elBoard.contains(a)) ? a.closest('.card') : null;
     const focusId = focusCard ? focusCard.dataset.id : null;
     const focusTag = !!(a && a.classList && a.classList.contains('ms-tag'));
+    const focusGear = !!(a && a.classList && a.classList.contains('gear'));
+    gearCtx = menuCtx();
 
     const conf = cfg();
     const chat = conf.mode === 'chat';
@@ -1548,8 +1657,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     });
     if (focusId) {
       const t = elBoard.querySelector('.card[data-id="' + cssEscape(focusId) + '"]');
-      if (t) (focusTag && t.querySelector('.ms-tag') || t).focus({ preventScroll: true });
+      if (t) (focusGear && t.querySelector('.gear') || focusTag && t.querySelector('.ms-tag') || t).focus({ preventScroll: true });
     }
+    syncMenu();
 
     // the line beside the toolbar
     elNote.replaceChildren();
@@ -1625,6 +1735,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     top.appendChild(h('span', 'idchip', card.id));
     const kind = thread ? 'thread' : String(card.kind);
     top.appendChild(kindMark(kind));
+    if (cardActions(card, gearCtx).length) top.appendChild(gearBtn(card));
     el.appendChild(top);
 
     el.appendChild(h('h3', 'card-title', card.title));
@@ -1667,6 +1778,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     if (!thread && !isRO()) {
       el.draggable = true;
       el.addEventListener('dragstart', (e) => {
+        if (dragBlocked(e)) return;
         dragId = card.id;
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', card.id);
@@ -1735,6 +1847,290 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     });
     poll();
   }
+
+  // ----- card actions shared by the board's gear menu and the card pages -----
+  // Each runs one request with the usual error handling. `after` runs once the request has settled, before the next poll.
+  // an ended thread goes to the stage with the done role, whatever the project calls it
+  function endConfirmText() { return 'End this thread? It stops taking messages and the card moves to ' + label(cfg().roles.done) + '.'; }
+  function deleteConfirmText(card) {
+    if (isThread(card)) return 'Delete ' + card.id + ' and its history? This cannot be undone.';
+    return 'Delete ' + card.id + '? ' + (card.kind === 'milestone' ? 'Its cards stay on the board. ' : '') + 'This cannot be undone.';
+  }
+  async function endThread(id, after) {
+    clearError();
+    const pk = selKey;
+    await runAction('end:' + pk + ':' + id, async () => {
+      try { applyCard(await api('POST', pp(pk, 'threads/' + encodeURIComponent(id) + '/end'), {}), pk); wrote(); }
+      catch (e) { showError(e.message); }
+    });
+    if (after) after();
+    poll();
+  }
+  // after(ok, here): ok = the card is gone from the server, here = the same project is still selected
+  async function deleteCard(id, after) {
+    clearError();
+    let ok = false;
+    const pk = selKey;
+    await runAction('delete:' + pk + ':' + id, async () => {
+      try { await api('DELETE', pp(pk, 'cards/' + encodeURIComponent(id)), {}); ok = true; wrote(); }
+      catch (e) { showError(e.message); }
+    });
+    if (after) after(ok, pk === selKey);
+    poll();
+  }
+  // Ask for a thread's report to arrive with the main session's next message, or take the request back.
+  async function requestReport(id, on, after) {
+    clearError();
+    const pk = selKey;
+    await runAction('report:' + pk + ':' + id, async () => {
+      try { applyCard(await api(on ? 'POST' : 'DELETE', pp(pk, 'threads/' + encodeURIComponent(id) + '/report-request'), {}), pk); wrote(); }
+      catch (e) { showError(e.message); }
+    });
+    if (after) after();
+    poll();
+  }
+  // Put a task or idea in a milestone; '' takes it out. after(ok)
+  async function setParent(id, parent, after) {
+    clearError();
+    let ok = false;
+    const pk = selKey;
+    await runAction('parent:' + pk + ':' + id, async () => {
+      try { applyCard(await api('PATCH', pp(pk, 'cards/' + encodeURIComponent(id)), { parent }), pk); ok = true; wrote(); }
+      catch (e) { showError(e.message); }
+    });
+    if (after) after(ok);
+    poll();
+  }
+
+  // ---------- gear menu ----------
+  // Every card with an action has a gear that opens a menu of them. Each item calls the code its card page uses.
+  // ---- gear menu (page.test.mjs runs this block against a small fake DOM) ----
+
+  function menuCtx() { return { ro: isRO(), stages: cfg().stages, choices: milestoneChoices(), reportState }; }
+  function menuActions(card) { return halted ? [] : cardActions(card, menuCtx()); }
+  function menuItems(actions) { return actions.reduce((all, a) => all.concat(a.items || (a.sep ? [] : [a])), []); }
+  function gearOf(id) { return elBoard.querySelector('.card[data-id="' + cssEscape(id) + '"] .gear'); }
+
+  function gearBtn(card) {
+    const b = h('button', 'btn ghost gear');
+    b.type = 'button';
+    b.title = 'Actions';
+    b.setAttribute('aria-label', 'Actions for ' + card.id);
+    b.setAttribute('aria-haspopup', 'menu');
+    b.setAttribute('aria-expanded', menu && menu.id === card.id ? 'true' : 'false');
+    const g = h('span', null, '⚙︎');
+    g.setAttribute('aria-hidden', 'true');
+    b.appendChild(g);
+    b.addEventListener('pointerdown', () => { gearDown = true; });
+    // a held key repeats; only the first press may act
+    b.addEventListener('keydown', (e) => { if (e.repeat && (e.key === 'Enter' || e.key === ' ')) e.preventDefault(); });
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (menu && menu.id === card.id) closeMenu(true); else openMenu(card.id, b);
+    });
+    return b;
+  }
+  // gearDown must not outlive its press: a press that never ends in a pointerup (a right-click) would cancel the next drag
+  ['pointerup', 'pointercancel', 'dragend', 'contextmenu'].forEach((ev) => document.addEventListener(ev, () => { gearDown = false; }, true));
+  // The card's dragstart asks this: true (and the drag is cancelled) when the press began on a gear.
+  function dragBlocked(e) {
+    if (!gearDown) return false;
+    gearDown = false;
+    e.preventDefault();
+    return true;
+  }
+
+  function openMenu(id, gear) {
+    closeMenu(false);
+    const card = findCard(id);
+    if (!card || !menuActions(card).length) return;
+    const el = h('div', 'menu');
+    el.setAttribute('role', 'menu');
+    el.setAttribute('aria-label', 'Actions for ' + id);
+    el.addEventListener('keydown', menuKeydown);
+    menu = { id, el, gear, confirm: null, sig: '', timer: 0 };
+    document.body.appendChild(el);
+    gear.setAttribute('aria-expanded', 'true');
+    renderMenu(true);
+  }
+
+  // refocus: put focus back on the card's gear (or, if it is gone, the card, or the New card button)
+  function closeMenu(refocus) {
+    const m = menu;
+    if (!m) return;
+    menu = null;
+    clearTimeout(m.timer);
+    m.el.remove();
+    const g = gearOf(m.id);
+    m.gear.setAttribute('aria-expanded', 'false');
+    if (g) g.setAttribute('aria-expanded', 'false');
+    if (!refocus) return;
+    const t = g || elBoard.querySelector('.card[data-id="' + cssEscape(m.id) + '"]') || elNewBtn;
+    t.focus({ preventScroll: true });
+  }
+
+  function menuEntry(a) {
+    const b = h('button', 'menu-item' + (a.danger ? ' danger' : ''));
+    b.type = 'button';
+    b.tabIndex = -1;
+    b.dataset.key = a.id;
+    b.setAttribute('role', a.radio ? 'menuitemradio' : 'menuitem');
+    if (a.radio) {
+      b.setAttribute('aria-checked', a.checked ? 'true' : 'false');
+      const mark = h('span', 'menu-mark', a.checked ? '✓' : '');
+      mark.setAttribute('aria-hidden', 'true');
+      b.appendChild(mark);
+    }
+    b.appendChild(h('span', 'menu-text', a.label));
+    if (a.hint) b.appendChild(h('span', 'menu-hint', a.hint));
+    if (a.disabled) { b.setAttribute('aria-disabled', 'true'); if (a.why) b.title = a.why; }
+    b.addEventListener('click', () => { if (b.getAttribute('aria-disabled') !== 'true') menuDo(a, b); });
+    return b;
+  }
+
+  // Draw the items (or the confirm step); focus stays on the same item, or goes to the first one.
+  function renderMenu(focusFirst) {
+    const m = menu, card = findCard(m.id), el = m.el;
+    const a = document.activeElement;
+    const had = a && el.contains(a) ? a.dataset.key : null;
+    const scrolled = el.scrollTop;
+    el.replaceChildren();
+    const actions = menuActions(card);
+    if (m.confirm) {
+      const p = h('p', 'menu-confirm', m.confirm === 'end' ? endConfirmText() : deleteConfirmText(card));
+      p.id = 'menu-confirm-text';
+      el.setAttribute('aria-describedby', p.id);
+      el.append(p, menuEntry({ id: 'keep', label: m.confirm === 'end' ? 'Keep it open' : 'Keep it' }), menuEntry({ id: 'go', label: m.confirm === 'end' ? 'End thread' : 'Delete card', danger: true }));
+    } else {
+      el.removeAttribute('aria-describedby');
+      actions.forEach((x, i) => {
+        if (x.sep) { const s = h('div', 'menu-sep'); s.setAttribute('role', 'separator'); el.appendChild(s); }
+        else if (x.group) {
+          const g = h('div', 'menu-group');
+          g.setAttribute('role', 'group');
+          const l = h('div', 'menu-label', x.group);
+          l.id = 'menu-group-' + i;
+          g.setAttribute('aria-labelledby', l.id);
+          g.appendChild(l);
+          x.items.forEach((it) => g.appendChild(menuEntry(it)));
+          el.appendChild(g);
+        } else el.appendChild(menuEntry(x));
+      });
+    }
+    m.sig = menuSig(actions);
+    placeMenu();
+    const items = Array.from(el.querySelectorAll('[role^="menuitem"]'));
+    el.scrollTop = scrolled;
+    if (focusFirst || had !== null) focusItem(el, items.find((i) => i.dataset.key === had) || items[0]);
+  }
+  function menuSig(actions) { return JSON.stringify([actions, menu.confirm]); }
+
+  // Below the gear and right-aligned with it; above it near the bottom edge; always inside the viewport.
+  function placeMenu() {
+    const el = menu.el, g = menu.gear.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth, vh = window.innerHeight, pad = 8;
+    const w = el.offsetWidth, ht = el.offsetHeight;
+    const left = Math.min(Math.max(g.right - w, pad), Math.max(pad, vw - w - pad));
+    let top = g.bottom + 4;
+    if (top + ht > vh - pad) top = g.top - 4 - ht >= pad ? g.top - 4 - ht : Math.max(pad, vh - pad - ht);
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  }
+  // The gear is inside a column's scrolling area: once it has scrolled out of sight the menu has nothing to hang from.
+  function gearInView(gear) {
+    const col = gear.closest('.col-body');
+    if (!col) return true;
+    const a = gear.getBoundingClientRect(), c = col.getBoundingClientRect(), b = elBoard.getBoundingClientRect();
+    return a.bottom > c.top && a.top < c.bottom && a.right > b.left && a.left < b.right;
+  }
+
+  // After the board was drawn again: follow the new gear, update the items, or close.
+  function syncMenu() {
+    const m = menu;
+    if (!m) return;
+    const card = findCard(m.id), gear = card && gearOf(m.id);
+    const actions = card ? menuActions(card) : [];
+    const items = menuItems(actions);
+    if (!gear || !actions.length) { closeMenu(true); return; }
+    // a step waiting for a yes is void once its action no longer applies
+    if (m.confirm && !items.some((i) => i.id === (m.confirm === 'end' ? 'end' : 'delete') && !i.disabled)) m.confirm = null;
+    m.gear = gear;
+    gear.setAttribute('aria-expanded', 'true');
+    if (menuSig(actions) !== m.sig) renderMenu(false); else placeMenu();
+  }
+
+  function menuKeydown(e) {
+    if (e.repeat && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); return; }   // holding the key that opened the menu must not choose an item
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(true); return; }
+    if (e.key === 'Tab') { closeMenu(true); return; }      // the Tab then moves on from the gear
+    const items = Array.from(menu.el.querySelectorAll('[role^="menuitem"]'));
+    const i = items.indexOf(document.activeElement);
+    let n;
+    if (e.key === 'ArrowDown') n = (i + 1) % items.length;
+    else if (e.key === 'ArrowUp') n = (i - 1 + items.length) % items.length;
+    else if (e.key === 'Home') n = 0;
+    else if (e.key === 'End') n = items.length - 1;
+    else return;
+    e.preventDefault();
+    focusItem(menu.el, items[n]);
+  }
+  // Focus an item without scrolling the page, then scroll the menu itself to show it (a long menu scrolls).
+  function focusItem(el, item) {
+    item.focus({ preventScroll: true });
+    const top = item.offsetTop, bottom = top + item.offsetHeight;
+    if (item === el.querySelector('[role^="menuitem"]')) el.scrollTop = 0;     // the first item brings its group label with it
+    else if (top < el.scrollTop) el.scrollTop = top;
+    else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
+  }
+
+  document.addEventListener('pointerdown', (e) => {
+    if (!(e.target.closest && e.target.closest('.gear'))) gearDown = false;
+    if (menu && !menu.el.contains(e.target) && !menu.gear.contains(e.target)) closeMenu(false);
+  }, true);
+  document.addEventListener('scroll', (e) => {
+    if (!menu || menu.el.contains(e.target) || !menu.gear.isConnected) return;
+    if (gearInView(menu.gear)) placeMenu(); else closeMenu(true);
+  }, true);
+  window.addEventListener('resize', () => { if (menu) placeMenu(); });
+
+  // One item was chosen. Each calls what the card's page calls.
+  function menuDo(a, btn) {
+    const m = menu, id = m.id, card = findCard(id);
+    if (!card) { closeMenu(true); return; }
+    if (a.id === 'end' || a.id === 'delete') { m.confirm = a.id; renderMenu(true); return; }
+    if (a.id === 'keep') { closeMenu(true); return; }
+    if (a.id === 'copy') {
+      const conf = cfg();
+      copyOrWarn(milestoneReport(card, current.cards, conf.stages, conf.roles.done)).then((ok) => {
+        if (menu !== m) return;
+        btn.querySelector('.menu-text').textContent = ok ? 'Copied' : 'Copy failed';
+        m.timer = setTimeout(() => { if (menu === m) closeMenu(true); }, 900);
+      });
+      return;
+    }
+    if (a.id === 'start') {
+      closeMenu(false);
+      startFor = id;
+      setTimeout(() => { if (startFor === id) startFor = ''; }, 1500);
+      openCard(id, true);
+      return;
+    }
+    const confirmed = m.confirm;
+    closeMenu(true);
+    if (a.id === 'go' && confirmed === 'end') endThread(id);
+    else if (a.id === 'go') {
+      deleteCard(id, (ok, here) => {
+        if (!ok || !here) return;
+        dropCard(id);
+        renderBoard(false);
+        if (!document.activeElement || document.activeElement === document.body) elNewBtn.focus({ preventScroll: true });
+      });
+    }
+    else if (a.id === 'report') requestReport(id, a.on);
+    else if (a.id.startsWith('move:')) moveCard(id, a.value);
+    else if (a.id.startsWith('ms:')) setParent(id, a.value);
+  }
+  // ---- end gear menu ----
 
   elSearch.addEventListener('input', () => renderBoard(false));
   elThreadsOnly.addEventListener('click', () => {
@@ -2011,12 +2407,15 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   }
 
   function buildPanel(target) {
+    closeMenu(false);
+    const startNow = startFor === target;
+    startFor = '';
     if (target === 'new') { buildTaskPanel(null); }
     else {
       const card = shownCard(target);
       if (!card) buildMissing(target);
       else if (isThread(card)) buildThreadPanel(card);
-      else buildTaskPanel(card);
+      else buildTaskPanel(card, startNow);
     }
     if (panel) {
       const first = panel.initialFocus ? panel.initialFocus() : panel.root;
@@ -2079,9 +2478,10 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   const stagePairs = () => cfg().stages.map((st) => [st.id, st.label]);
   const milestonePairs = () => [['', 'None']].concat(milestoneChoices());
 
-  function buildTaskPanel(card) {
+  // startNow: open at the "Start as thread" step (the gear menu asked for it)
+  function buildTaskPanel(card, startNow) {
     const create = !card;
-    const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? panelKey(card) : '', confirmDelete: false, starting: false };
+    const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? panelKey(card) : '', confirmDelete: false, starting: !!startNow && !create && card.kind !== 'milestone' && !isRO() };
     const page = !create;      // a new card stays a side drawer
     const isMs = !create && card.kind === 'milestone';
     mountDrawer(P, page);
@@ -2164,7 +2564,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       if (fMs && fMs.value !== P.base.parent) return true;
       return create ? fKind.value !== P.base.kind : false;
     };
-    P.initialFocus = () => (create ? fTitle : P.root);
+    P.initialFocus = () => (create ? fTitle : P.starting ? foot.querySelector('select') || foot.querySelector('button') : P.root);
 
     function refreshConflict() {
       conflict.hidden = !(!create && P.isDirty() && P.latestUpdatedAt && P.latestUpdatedAt !== P.baseUpdatedAt);
@@ -2339,7 +2739,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
         return;
       }
       if (P.confirmDelete) {
-        foot.appendChild(h('span', 'confirm-text', 'Delete ' + card.id + '? ' + (isMs ? 'Its cards stay on the board. ' : '') + 'This cannot be undone.'));
+        foot.appendChild(h('span', 'confirm-text', deleteConfirmText(card)));
         foot.appendChild(h('span', 'grow'));
         const del = actionBtn('Delete card', 'danger solid', 'delete:' + selKey + ':' + card.id, () => doDelete(card.id));
         const keep = plainBtn('Keep it', null, () => { P.confirmDelete = false; renderFoot(true); });
@@ -2380,21 +2780,16 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     }
 
     async function doDelete(id) {
-      clearError();
-      let ok = false;
-      const pk = selKey;
-      await runAction('delete:' + pk + ':' + id, async () => {
-        try { await api('DELETE', pp(pk, 'cards/' + encodeURIComponent(id)), {}); ok = true; wrote(); }
-        catch (e) { showError(e.message); P.confirmDelete = false; }
+      await deleteCard(id, (ok, here) => {
+        if (!ok) P.confirmDelete = false;
+        if (ok && panel === P && here) {
+          dropCard(id);
+          P.isDirty = null;
+          returnFocus = { el: elNewBtn };
+          navigateClose();
+          renderBoard(false);
+        } else if (panel === P) renderFoot();
       });
-      if (ok && panel === P && pk === selKey) {
-        dropCard(id);
-        P.isDirty = null;
-        returnFocus = { el: elNewBtn };
-        navigateClose();
-        renderBoard(false);
-      } else if (panel === P) renderFoot();
-      poll();
     }
 
     let roShown = null;
@@ -2503,14 +2898,18 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       return ok;
     } catch (e) { return false; }
   }
+  async function copyOrWarn(text) {
+    const ok = await copyText(text);
+    if (!ok) showError('Could not copy to the clipboard. Select the text and copy it by hand.');
+    return ok;
+  }
   function copyBtn(text, what, labelText) {
     const idle = labelText || 'Copy';
     const b = plainBtn(idle, 'small');
     b.setAttribute('aria-label', labelText ? labelText : 'Copy ' + what);
     b.addEventListener('click', async () => {
-      const ok = await copyText(text);
+      const ok = await copyOrWarn(text);
       b.textContent = ok ? 'Copied' : 'Copy failed';
-      if (!ok) showError('Could not copy to the clipboard. Select the text and copy it by hand.');
       clearTimeout(b._t);
       b._t = setTimeout(() => { b.textContent = idle; }, 1600);
     });
@@ -2772,16 +3171,11 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     }
     // Ask for the report to be delivered with the main session's next message, or take the request back.
     async function setReportRequest(on) {
-      clearError();
-      const pk = selKey;
-      await runAction('report:' + pk + ':' + card.id, async () => {
-        try { applyCard(await api(on ? 'POST' : 'DELETE', pp(pk, 'threads/' + encodeURIComponent(card.id) + '/report-request'), {}), pk); wrote(); }
-        catch (e) { showError(e.message); }
+      await requestReport(card.id, on, () => {
+        // the clicked button was replaced (and disabled while busy), so focus would fall to the page
+        const next = meta.querySelector('[data-fid="c-report-req"]');
+        if (panel === P && next && (!document.activeElement || document.activeElement === document.body)) next.focus({ preventScroll: true });
       });
-      // the clicked button was replaced (and disabled while busy), so focus would fall to the page
-      const next = meta.querySelector('[data-fid="c-report-req"]');
-      if (panel === P && next && (!document.activeElement || document.activeElement === document.body)) next.focus({ preventScroll: true });
-      poll();
     }
 
     // ----- trace (right pane) -----
@@ -3282,20 +3676,13 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     }
 
     async function setMilestone(sel) {
-      clearError();
-      const pk = selKey;
-      await runAction('parent:' + pk + ':' + card.id, async () => {
-        try {
-          applyCard(await api('PATCH', pp(pk, 'cards/' + encodeURIComponent(card.id)), { parent: sel.value }), pk);
-          wrote();
-          saveNote.textContent = sel.value ? 'Milestone saved.' : 'Removed from its milestone.';
-        } catch (e) {
-          showError(e.message);
+      await setParent(card.id, sel.value, (ok) => {
+        if (ok) saveNote.textContent = sel.value ? 'Milestone saved.' : 'Removed from its milestone.';
+        else {
           const c = findCard(P.target);
           sel.value = c && c.parent ? c.parent : '';
         }
       });
-      poll();
     }
 
     // ----- bar actions: End thread and Delete, with their confirm steps -----
@@ -3304,12 +3691,12 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       actions.replaceChildren();
       const running = t.runState === 'running';
       if (P.confirm === 'end') {
-        actions.appendChild(h('span', 'confirm-text', 'End this thread? It stops taking messages and the card moves to Done.'));
+        actions.appendChild(h('span', 'confirm-text', endConfirmText()));
         const keep = plainBtn('Keep it open', null, () => { P.confirm = null; renderActions(findCard(P.target) || c, true); });
         actions.append(keep, actionBtn('End thread', 'danger solid', 'end:' + selKey + ':' + c.id, doEnd));
         if (focusFirst) keep.focus();
       } else if (P.confirm === 'delete') {
-        actions.appendChild(h('span', 'confirm-text', 'Delete ' + c.id + ' and its history? This cannot be undone.'));
+        actions.appendChild(h('span', 'confirm-text', deleteConfirmText(c)));
         const keep = plainBtn('Keep it', null, () => { P.confirm = null; renderActions(findCard(P.target) || c, true); });
         actions.append(keep, actionBtn('Delete card', 'danger solid', 'delete:' + selKey + ':' + c.id, doDelete));
         if (focusFirst) keep.focus();
@@ -3334,30 +3721,21 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       syncBusy();
     }
     async function doEnd() {
-      clearError();
-      const pk = selKey;
-      await runAction('end:' + pk + ':' + card.id, async () => {
-        try { const updated = await api('POST', pp(pk, 'threads/' + encodeURIComponent(card.id) + '/end'), {}); P.confirm = null; applyCard(updated, pk); wrote(); }
-        catch (e) { showError(e.message); P.confirm = null; }
+      await endThread(card.id, () => {
+        P.confirm = null;
+        if (panel === P) renderActions(findCard(P.target) || card);
       });
-      if (panel === P) renderActions(findCard(P.target) || card);
-      poll();
     }
     async function doDelete() {
-      clearError();
-      let ok = false;
-      const pk = selKey;
-      await runAction('delete:' + pk + ':' + card.id, async () => {
-        try { await api('DELETE', pp(pk, 'cards/' + encodeURIComponent(card.id)), {}); ok = true; wrote(); }
-        catch (e) { showError(e.message); P.confirm = null; }
+      await deleteCard(card.id, (ok, here) => {
+        if (!ok) P.confirm = null;
+        if (ok && panel === P && here) {
+          dropCard(card.id);
+          returnFocus = { el: elNewBtn };
+          navigateClose();
+          renderBoard(false);
+        } else if (panel === P) renderActions(findCard(P.target) || card);
       });
-      if (ok && panel === P && pk === selKey) {
-        dropCard(card.id);
-        returnFocus = { el: elNewBtn };
-        navigateClose();
-        renderBoard(false);
-      } else if (panel === P) renderActions(findCard(P.target) || card);
-      poll();
     }
 
     // ----- update from polling -----
@@ -3404,6 +3782,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 
   document.addEventListener('keydown', (e) => {
     if (e.defaultPrevented || e.isComposing || halted) return;
+    if (menu && menu.el.contains(e.target)) return;
     if (panel) {
       if (e.key === 'Escape') { e.preventDefault(); requestClose(); return; }
       if (e.key === 'Tab') {

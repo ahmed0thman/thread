@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import { setupThreadEnv, cleanAmbientEnv, waitFor, writeStateFile, emptyState, threadCard, REPLY_WITH_MAP } from './helpers.mjs';
 import * as core from '../server/core.mjs';
-import { startBoardServer } from '../server/http.mjs';
+import { startBoardServer, escapeAttribute } from '../server/http.mjs';
 
 cleanAmbientEnv();
 
@@ -52,6 +52,14 @@ test('GET / returns the board html', async (t) => {
   assert.match(res.headers.get('cache-control') || '', /no-store/);
   const html = await res.text();
   assert.match(html, /<html|<!doctype html/i);
+  assert.ok(html.includes(`<meta name="thread-version" content="${core.VERSION}">`));
+  assert.ok(!html.includes('__THREAD_VERSION__'));
+  const ping = await (await fetch(b.base + '/api/ping')).json();
+  assert.equal(ping.version, core.VERSION);
+});
+
+test('the served version escapes attribute metacharacters', () => {
+  assert.equal(escapeAttribute(`x&<>"'`), 'x&amp;&lt;&gt;&quot;&#39;');
 });
 
 test('POST creates a user card, PATCH moves it, DELETE removes it', async (t) => {
