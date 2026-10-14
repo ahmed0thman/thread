@@ -1,5 +1,5 @@
 /* ---------- the Summary view ---------- */
-.sum { max-width: 1280px; }
+.sum { max-width: 1280px; margin-inline: auto; }
 .sum .grow { flex: 1 1 0; }
 .sum-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: var(--s3); margin-bottom: var(--s4); }
 .sum-tile {
