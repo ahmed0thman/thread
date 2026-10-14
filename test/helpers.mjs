@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import net from 'node:net';
 import readline from 'node:readline';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 export const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -272,3 +272,87 @@ export class McpClient {
   }
   kill() { this.child.kill('SIGKILL'); }
 }
+
+/** A small stand-in for a DOM element, enough to run the board page's own code in a vm. */
+export class FakeEl {
+  constructor(doc, tag) {
+    Object.assign(this, { doc, tagName: tag.toUpperCase(), children: [], parent: null, attrs: {}, dataset: {}, style: {}, listeners: {}, className: '', _text: '', scrollTop: 0, clientHeight: 300, offsetTop: 0, offsetHeight: 30, offsetWidth: 210, rect: { left: 0, top: 0, right: 0, bottom: 0 } });
+  }
+  get childNodes() { return this.children; }
+  get isConnected() { let n = this; while (n.parent) n = n.parent; return n === this.doc.body; }
+  get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
+  set textContent(v) { this._text = String(v); this.children.forEach((c) => { c.parent = null; }); this.children = []; }
+  prepend(...cs) { const keep = this.children; this.children = []; this.append(...cs, ...keep); }
+  scrollIntoView() { this.scrolledIntoView = (this.scrolledIntoView || 0) + 1; }
+  appendChild(c) { c.parent = this; this.children.push(c); return c; }
+  append(...cs) { cs.forEach((c) => { if (typeof c === 'string') { const t = new FakeEl(this.doc, 'span'); t.textContent = c; this.appendChild(t); } else this.appendChild(c); }); }
+  replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.append(...cs); }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this); this.parent = null; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
+  fire(type, extra = {}) {
+    const e = { type, target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...extra };
+    (this.listeners[type] || []).forEach((fn) => fn(e));
+    return e;
+  }
+  click() { return this.fire('click'); }
+  contains(n) { for (let x = n; x; x = x.parent) if (x === this) return true; return false; }
+  focus() { this.doc.activeElement = this; }
+  getBoundingClientRect() { return this.rect; }
+  closest(sel) { for (let x = this; x; x = x.parent) if (x.matches && x.matches(sel)) return x; return null; }
+  // one compound selector: an optional tag, then .class and [attr], [attr="v"], [attr^="v"] parts
+  matches(sel) {
+    const tag = /^[a-z][a-z0-9]*/i.exec(sel);
+    if (tag && tag[0].toUpperCase() !== this.tagName) return false;
+    const parts = sel.match(/\.[\w-]+|\[[^\]]+\]/g) || [];
+    return parts.every((p) => {
+      if (p[0] === '.') return this.className.split(' ').includes(p.slice(1));
+      const [, name, op, val] = /^\[([\w-]+)(\^?=)?"?([^"\]]*)"?\]$/.exec(p);
+      const have = name.startsWith('data-') ? this.dataset[name.slice(5)] : this.getAttribute(name);
+      if (have === undefined || have === null) return false;
+      return !op ? true : op === '=' ? have === val : have.startsWith(val);
+    });
+  }
+  querySelectorAll(sel) {
+    const steps = sel.split(/\s+/);
+    let found = [this];
+    for (const step of steps) {
+      const next = [];
+      for (const root of found) {
+        const walk = (n) => n.children.forEach((c) => { if (c.matches(step)) next.push(c); walk(c); });
+        walk(root);
+      }
+      found = next;
+    }
+    return found;
+  }
+  querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+}
+
+// The released versions the cross-version tests run. 0.10.0 has no tag yet, so it is pinned by its commit; use the tag `v0.10.0` once it exists.
+export const RELEASED_REFS = ['v0.9.1', '3b61221'];
+
+/**
+ * The server folder of an older plugin version, taken from a git ref (a tag, or a commit id) into a temp folder that is
+ * removed after test `t`. Returns the folder to pass to test/fixtures/old-writer.mjs. A checkout with no git history at all skips the
+ * test; any other failure, a missing ref included, throws, so the test fails where it can be seen instead of going quiet.
+ */
+export function oldServerFrom(t, ref) {
+  const git = (...args) => execFileSync('git', ['-C', ROOT, ...args], { encoding: 'buffer', maxBuffer: 1 << 26, stdio: ['ignore', 'pipe', 'pipe'] });
+  try { git('rev-list', '-n', '1', 'HEAD'); } catch {
+    t.skip('this checkout has no git history, so there is no older version to run');
+    return null;
+  }
+  const old = fs.mkdtempSync(path.join(os.tmpdir(), 'thread-old-'));
+  t.after(() => fs.rmSync(old, { recursive: true, force: true }));
+  try { git('rev-parse', '--verify', '--quiet', `${ref}^{commit}`); } catch { throw new Error(`the git ref ${ref} is not in this checkout (a shallow clone, or a clone without tags?)`); }
+  fs.mkdirSync(path.join(old, 'server'));
+  fs.mkdirSync(path.join(old, '.claude-plugin'));
+  const names = git('ls-tree', '--name-only', ref, 'server/').toString('utf8').split('\n').filter((n) => n.endsWith('.mjs'));
+  for (const n of names) fs.writeFileSync(path.join(old, n), git('show', `${ref}:${n}`));
+  fs.writeFileSync(path.join(old, '.claude-plugin', 'plugin.json'), git('show', `${ref}:.claude-plugin/plugin.json`));
+  return path.join(old, 'server');
+}
+

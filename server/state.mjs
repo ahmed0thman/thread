@@ -1,7 +1,7 @@
 // State file, project paths and the lock that serialises writes. Imports nothing local.
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, rename, rm, rmdir, stat, writeFile, unlink } from 'node:fs/promises';
-import { readFileSync, existsSync } from 'node:fs';
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -34,6 +34,68 @@ export function projectKey(projectDirArg) {
 export function projectPaths(projectDirArg) {
   const dir = join(dataDir(), 'projects', projectKey(projectDirArg));
   return { dir, state: join(dir, 'state.json'), lock: join(dir, 'state.lock'), logs: join(dir, 'logs') };
+}
+
+// ---------------------------------------------------------------- private files
+
+// Everything the plugin keeps (the state, logs, briefs, run reports) is for its owner only: folders 0700, files 0600. A folder the
+// plugin creates and a file it writes get these modes at once; tightenDataDir() fixes what an older version made with the default
+// modes, once per process. A mode is a POSIX idea, so on Windows none of this does anything.
+export const PRIVATE_DIR = 0o700;
+export const PRIVATE_FILE = 0o600;
+const POSIX = process.platform !== 'win32';
+
+export function mkdirPrivateSync(dir) { mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR }); }
+export async function mkdirPrivate(dir) { await mkdir(dir, { recursive: true, mode: PRIVATE_DIR }); }
+
+// Clears the group and other bits of one folder or file the current user owns. It opens the path without following a symlink
+// (a link, or a path that changed to a link meanwhile, is skipped) and changes the open handle, never the path.
+function tightenOne(path, isDir) {
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | (isDir ? constants.O_DIRECTORY : 0));
+    const st = fstatSync(fd);
+    if (st.uid !== process.getuid() || (isDir ? !st.isDirectory() : !st.isFile())) return false;
+    if (!isDir && st.nlink > 1) return false;   // a hard link: the same file lives somewhere else too
+
+    const want = isDir ? PRIVATE_DIR : ((st.mode & 0o700) | PRIVATE_FILE);
+    if ((st.mode & 0o777) !== want) fchmodSync(fd, want);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) try { closeSync(fd); } catch { /* ignore */ }
+  }
+}
+
+function tightenTree(dir) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const full = join(dir, e.name);
+    if (e.isSymbolicLink()) continue;
+    if (e.isDirectory()) { if (tightenOne(full, true)) tightenTree(full); } else if (e.isFile()) tightenOne(full, false);
+  }
+}
+
+const tightened = new Set();
+// The plugin's own entries at the top of the data directory. THREAD_DATA_DIR may name a folder that holds other things too,
+// so only these and the projects tree are touched, and the folder itself only when it is the plugin's own default.
+const OWN_TOP_FILES = ['config.json', 'board.token', 'board.stopped', 'setup-hint'];
+// Makes the plugin's data owner-only. Only what the current user owns, is not a symlink and is not hard-linked is touched,
+// and nothing outside the data directory. Never throws; a filesystem that ignores modes just keeps what it has.
+export function tightenDataDir() {
+  if (!POSIX) return;
+  const root = dataDir();
+  if (tightened.has(root)) return;
+  tightened.add(root);
+  try {
+    if (!lstatSync(root).isDirectory()) return;   // missing, or a symlink: left alone
+    if (!envValue('THREAD_DATA_DIR')) tightenOne(root, true);
+    for (const name of OWN_TOP_FILES) tightenOne(join(root, name), false);
+    const projects = join(root, 'projects');
+    if (tightenOne(projects, true)) tightenTree(projects);
+  } catch { /* best effort */ }
 }
 
 // ---------------------------------------------------------------- state io
@@ -80,7 +142,7 @@ async function stealIfStale(lockPath) {
   if (Date.now() - st.mtimeMs <= LOCK_STALE_MS) return;
   const guard = `${lockPath}.steal`;
   try {
-    await mkdir(guard);
+    await mkdir(guard, { mode: PRIVATE_DIR });
   } catch {
     try {
       const g = await stat(guard);
@@ -102,8 +164,8 @@ async function acquireLock(lockPath) {
   const owner = join(lockPath, `owner-${process.pid}-${randomBytes(6).toString('hex')}`);
   for (;;) {
     try {
-      await mkdir(lockPath);
-      await writeFile(owner, '');
+      await mkdir(lockPath, { mode: PRIVATE_DIR });
+      await writeFile(owner, '', { mode: PRIVATE_FILE });
       return owner;
     } catch (e) {
       // ENOENT: the directory vanished between mkdir and writeFile; retry.
@@ -126,7 +188,7 @@ async function releaseLock(lockPath, owner) {
 
 export async function withLock(projectDirArg, fn) {
   const paths = projectPaths(projectDirArg);
-  await mkdir(paths.dir, { recursive: true });
+  await mkdirPrivate(paths.dir);
   const owner = await acquireLock(paths.lock);
   try {
     return await fn(paths);
@@ -152,7 +214,7 @@ export async function updateState(projectDirArg, fn) {
     if (!existed || before !== after) {
       const tmp = `${paths.state}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
       try {
-        await writeFile(tmp, after, 'utf8');
+        await writeFile(tmp, after, { encoding: 'utf8', mode: PRIVATE_FILE });
         await rename(tmp, paths.state);
       } catch (e) {
         await unlink(tmp).catch(() => {});

@@ -2,10 +2,11 @@
 import http from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as core from './core.mjs';
 import { listLanesWithRelay } from './lanes.mjs';
+import { markRunStopped, readRunText, runActivity } from './runs.mjs';
 
 const MAX_BODY = 64 * 1024;
 const MAX_PORT_TRIES = 20;
@@ -141,7 +142,10 @@ async function handleProject(req, res, projectDir, sub, query) {
   const tm = /^\/threads\/([A-Za-z0-9_-]{1,64})\/(messages|end|activity|report-request)$/.exec(sub);
   const threadRoute = tm ? `${method} ${tm[2]}` : '';
   const isActivity = threadRoute === 'GET activity';
-  const known = isState || isAgents || isLanes || isCardCreate || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
+  const rm = method === 'GET' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/runs\/([0-9]{1,6})\/(activity|prompt|report)$/.exec(sub) : null;
+  const stopm = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/runs\/([0-9]{1,6})\/stop$/.exec(sub) : null;
+  const waitm = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/waits\/([A-Za-z0-9_.-]{1,80})$/.exec(sub) : null;
+  const known = isState || isAgents || isLanes || isCardCreate || !!rm || !!stopm || !!waitm || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
   if (!known) {
     req.resume();
     send(res, 404, { error: 'not found' });
@@ -150,7 +154,7 @@ async function handleProject(req, res, projectDir, sub, query) {
 
   const viewOf = (card) => withViews(card, core.readConfig(projectDir), core.readState(projectDir).cards);
   const present = core.dirExists(projectDir);
-  if (!isState && !isAgents && !isLanes && !isActivity && !present) {
+  if (!isState && !isAgents && !isLanes && !isActivity && !rm && !present) {
     req.resume();
     send(res, 409, { error: `project folder not found: ${projectDir}` });
     return;
@@ -216,6 +220,42 @@ async function handleProject(req, res, projectDir, sub, query) {
     return;
   }
 
+  if (rm) {
+    // The page names a card and a run, never a path: the only file read is the transcript recorded on the run.
+    const card = core.readState(projectDir).cards.find((c) => c.id === rm[1]);
+    const n = Number(rm[2]);
+    const run = card && Array.isArray(card.runs) ? card.runs.find((r) => r && r.n === n) : null;
+    if (!run) throw new HttpError(404, `card ${rm[1]} has no run ${rm[2]}`);
+    if (rm[3] !== 'activity') {
+      send(res, 200, readRunText(projectDir, card.id, run, rm[3]));
+      return;
+    }
+    const offset = Number(query.get('offset'));
+    send(res, 200, runActivity(projectDir, card.id, run, Number.isInteger(offset) && offset > 0 ? offset : 0));
+    return;
+  }
+
+  if (stopm) {
+    // "Mark as stopped": writes only that run's own state fields
+    requireJson(req);
+    await readJsonBody(req);
+    const card = core.readState(projectDir).cards.find((c) => c.id === stopm[1]);
+    const n = Number(stopm[2]);
+    if (!card || !Array.isArray(card.runs) || !card.runs.some((r) => r && r.n === n)) throw new HttpError(404, `card ${stopm[1]} has no run ${stopm[2]}`);
+    await markRunStopped(projectDir, card.id, n);
+    send(res, 200, viewOf(core.readState(projectDir).cards.find((c) => c.id === card.id)));
+    return;
+  }
+
+  if (waitm) {
+    // The user's answer to an item Claude is waiting on. Only the answer fields of an open item are written (see waits.mjs).
+    requireJson(req);
+    const body = await readJsonBody(req);
+    const { card } = await core.answerWait(projectDir, waitm[1], waitm[2], body);
+    send(res, 200, viewOf(card));
+    return;
+  }
+
   if (threadRoute === 'DELETE report-request') {
     req.resume();
     send(res, 200, viewOf(await core.cancelReportRequest(projectDir, tm[1])));
@@ -251,6 +291,7 @@ function projectsView(homeDir) {
       cards: 0,
       threads: 0,
       running: 0,
+      waiting: 0,
       lastActivity: new Date().toISOString(),
     });
   }
@@ -355,6 +396,8 @@ function makeHandler(homeDir, token, stop) {
 function withViews(card, cfg, cards) {
   if (!card) return card;
   const view = { ...card, status: core.effectiveStatus(card, cfg) };
+  // where the transcript of a sub-agent run lies stays on the server
+  if (Array.isArray(view.runs)) view.runs = view.runs.filter((r) => r && typeof r === 'object').map(({ transcript, ...run }) => run);
   // an older plugin version can remove a milestone without clearing its cards
   if (view.parent && !cards.some((c) => c.id === view.parent && c.kind === 'milestone')) delete view.parent;
   if (card.kind === 'milestone') {
@@ -408,7 +451,7 @@ export async function startBoardServer(projectDir, { port = 0, token } = {}) {
   const handle = makeHandler(projectDir, token, () => closeBoardServer(server));
   const server = http.createServer((req, res) => {
     handle(req, res).catch((e) => {
-      if (e instanceof HttpError || e instanceof core.ChatOnlyError) send(res, e.status, { error: e.message });
+      if (e instanceof HttpError || e instanceof core.ChatOnlyError || e instanceof core.WaitError) send(res, e.status, { error: e.message });
       else if (e && e.message) send(res, 400, { error: String(e.message).split('\n')[0] });
       else send(res, 500, { error: 'internal error' });
     });
@@ -441,7 +484,7 @@ export function closeBoardServer(server) {
 const stoppedFile = () => join(core.dataDir(), 'board.stopped');
 export function boardStopped() { return existsSync(stoppedFile()); }
 export function setBoardStopped(on) {
-  if (on) { mkdirSync(core.dataDir(), { recursive: true }); writeFileSync(stoppedFile(), ''); }
+  if (on) { core.mkdirPrivateSync(core.dataDir()); writeFileSync(stoppedFile(), '', { mode: core.PRIVATE_FILE }); }
   else try { unlinkSync(stoppedFile()); } catch { /* not stopped */ }
 }
 
@@ -488,7 +531,7 @@ export function boardToken() {
   for (let attempt = 0; attempt < 5; attempt++) {
     const existing = readGood();
     if (existing) return existing;
-    mkdirSync(core.dataDir(), { recursive: true });
+    core.mkdirPrivateSync(core.dataDir());
     const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
     try {
       writeFileSync(tmp, randomBytes(16).toString('hex') + '\n', { mode: 0o600 });

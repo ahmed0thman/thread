@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { SERVER_DIR } from './helpers.mjs';
+import { SERVER_DIR, FakeEl } from './helpers.mjs';
 
 const html = fs.readFileSync(path.join(SERVER_DIR, 'board.html'), 'utf8');
 
@@ -405,77 +405,26 @@ test('gear menu: a drawn board keeps an open menu in step with the card, or clos
 
 // ---- the gear menu, run for real against a small fake DOM ----
 
-class FakeEl {
-  constructor(doc, tag) {
-    Object.assign(this, { doc, tagName: tag.toUpperCase(), children: [], parent: null, attrs: {}, dataset: {}, style: {}, listeners: {}, className: '', _text: '', scrollTop: 0, clientHeight: 300, offsetTop: 0, offsetHeight: 30, offsetWidth: 210, rect: { left: 0, top: 0, right: 0, bottom: 0 } });
-  }
-  get isConnected() { let n = this; while (n.parent) n = n.parent; return n === this.doc.body; }
-  get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
-  set textContent(v) { this._text = String(v); this.children.forEach((c) => { c.parent = null; }); this.children = []; }
-  appendChild(c) { c.parent = this; this.children.push(c); return c; }
-  append(...cs) { cs.forEach((c) => this.appendChild(c)); }
-  replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.append(...cs); }
-  remove() { if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this); this.parent = null; }
-  setAttribute(k, v) { this.attrs[k] = String(v); }
-  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
-  removeAttribute(k) { delete this.attrs[k]; }
-  addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
-  fire(type, extra = {}) {
-    const e = { type, target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...extra };
-    (this.listeners[type] || []).forEach((fn) => fn(e));
-    return e;
-  }
-  click() { return this.fire('click'); }
-  contains(n) { for (let x = n; x; x = x.parent) if (x === this) return true; return false; }
-  focus() { this.doc.activeElement = this; }
-  getBoundingClientRect() { return this.rect; }
-  closest(sel) { for (let x = this; x; x = x.parent) if (x.matches && x.matches(sel)) return x; return null; }
-  // one compound selector: .class and [attr], [attr="v"], [attr^="v"] parts
-  matches(sel) {
-    const parts = sel.match(/\.[\w-]+|\[[^\]]+\]/g) || [];
-    return parts.every((p) => {
-      if (p[0] === '.') return this.className.split(' ').includes(p.slice(1));
-      const [, name, op, val] = /^\[([\w-]+)(\^?=)?"?([^"\]]*)"?\]$/.exec(p);
-      const have = name.startsWith('data-') ? this.dataset[name.slice(5)] : this.getAttribute(name);
-      if (have === undefined || have === null) return false;
-      return !op ? true : op === '=' ? have === val : have.startsWith(val);
-    });
-  }
-  querySelectorAll(sel) {
-    const steps = sel.split(/\s+/);
-    let found = [this];
-    for (const step of steps) {
-      const next = [];
-      for (const root of found) {
-        const walk = (n) => n.children.forEach((c) => { if (c.matches(step)) next.push(c); walk(c); });
-        walk(root);
-      }
-      found = next;
-    }
-    return found;
-  }
-  querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
-}
-
 const ROLES4 = { start: 'todo', working: 'doing', review: 'check', blocked: 'doing', done: 'done' };
 
 // The page's own pieces: the action rules and the menu code, with stand-ins for what lives elsewhere on the page.
 function menuPage(over = {}) {
   const actions = /\/\/ ---- gear menu actions[^\n]*\n([\s\S]*?)\/\/ ---- end gear menu actions ----/.exec(html);
   const menuSrc = /\/\/ ---- gear menu \(page\.test[^\n]*\n([\s\S]*?)\/\/ ---- end gear menu ----/.exec(html);
-  assert.ok(actions && menuSrc, 'the gear menu blocks are missing from board.html');
+  const milestones = /\/\/ ---- milestones and stages[^\n]*\n([\s\S]*?)\/\/ ---- end milestones and stages ----/.exec(html);
+  assert.ok(actions && menuSrc && milestones, 'the gear menu blocks are missing from board.html');
   const doc = { listeners: {}, activeElement: null, documentElement: { clientWidth: 1280 }, addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }, createElement(tag) { return new FakeEl(doc, tag); } };
   doc.body = new FakeEl(doc, 'body');
   const calls = [];
   const rec = (name) => (...args) => { calls.push([name, ...args.filter((a) => typeof a !== 'function')]); return Promise.resolve(); };
   const board = new FakeEl(doc, 'main'), newBtn = new FakeEl(doc, 'button');
   doc.body.append(board, newBtn);
-  const state = { cards: [], ro: false, halted: false, choices: [], stages: STAGES4, windowH: 800 };
+  const state = { cards: [], ro: false, chat: false, halted: false, choices: [], stages: STAGES4, windowH: 800 };
   const env = {
     document: doc, window: { get innerHeight() { return state.windowH; }, addEventListener() {} }, elBoard: board, elNewBtn: newBtn,
     h(tag, cls, text) { const e = doc.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== null) e.textContent = text; return e; },
     cssEscape: (x) => x, findCard: (id) => state.cards.find((c) => c.id === id) || null,
-    cfg: () => ({ stages: state.stages, roles: ROLES4 }), isRO: () => state.ro, milestoneChoices: () => state.choices,
+    cfg: () => ({ stages: state.stages, roles: ROLES4 }), isRO: () => state.ro, isChat: () => state.chat, milestoneChoices: () => state.choices,
     reportState: reportOf, milestoneReport: () => 'REPORT', copyOrWarn: async () => true, current: { cards: [] },
     endConfirmText: () => 'END?', deleteConfirmText: (c) => 'DEL ' + c.id,
     endThread: rec('end'), deleteCard: rec('delete'), requestReport: rec('report'), moveCard: rec('move'), setParent: rec('parent'),
@@ -483,10 +432,11 @@ function menuPage(over = {}) {
     get halted() { return state.halted; },
   };
   Object.assign(env, over);
-  const script = `let menu = null, gearCtx = null, gearDown = false, startFor = '';
+  const script = `let menu = null, gearCtx = null, gearDown = false, startFor = '', waitsFor = '';
+${milestones[1]}
 ${actions[1]}
 ${menuSrc[1]}
-({ gearBtn, openMenu, closeMenu, syncMenu, menuActions, menuKeydown, dragBlocked, placeMenu, get menu() { return menu; }, get startFor() { return startFor; } })`;
+({ gearBtn, openMenu, closeMenu, syncMenu, menuActions, menuKeydown, dragBlocked, placeMenu, get menu() { return menu; }, get startFor() { return startFor; }, get waitsFor() { return waitsFor; } })`;
   const page = vm.runInNewContext(script, vm.createContext(env));
   // a card element on the board, with its gear when it has one
   const put = (card) => {
@@ -813,7 +763,7 @@ test('the page wires lanes in: read on the slow cycle and when a project shows, 
   assert.match(html, /lanes = null; lanesSig = ''; lanesAt = 0;/);
   assert.match(html, /const lt = laneTag\(card\);\n\s+if \(lt\) foot\.appendChild\(lt\);/);
   assert.match(html, /laneNodes = showLaneRows\(metaDl, laneNodes, c\);/);
-  assert.match(html, /f\.milestone \+ '\|' \+ lanesSig/, 'the board is drawn again when the lanes change');
+  assert.match(html, /f\.milestone \+ '\|' \+ f\.waiting \+ '\|' \+ lanesSig/, 'the board is drawn again when the lanes change');
   assert.match(html, /if \(card\.lane \|\| \(card\.thread && card\.thread\.lane\)\) ctx\.push\(laneSig\(card\)\)/, 'so is a card page');
   assert.doesNotMatch(html, /\blane\s*:\s*(fMs|fTitle|fNote|fStatus)|patch\.lane|bodyObj\.lane/, 'no write sends a lane');
   assert.ok(Buffer.byteLength(html) < 256 * 1024);
@@ -951,4 +901,313 @@ test('start step: it says what runs, offers only read access for agy, and warns 
   assert.equal(page.laneStartPlan(lcard('gone')).provider, '', 'an unknown lane names no provider');
   assert.match(html, /'This card becomes a thread: a background ' \+ \(lp0\.provider \? lp0\.provider \+ ' session' : 'session'\) \+ ' on lane ' \+ lp0\.name/);
   assert.match(html, /a background Claude session working on this card’s title and note\./, 'the usual step still says Claude');
+});
+
+// ---- the card workspace: sub-agent runs ----
+
+function runsBlock() {
+  const m = /\/\/ ---- sub-agent runs[^\n]*\n([\s\S]*?)\/\/ ---- end sub-agent runs ----/.exec(html);
+  assert.ok(m, 'the sub-agent runs block is missing from board.html');
+  return vm.runInNewContext(`${m[1]}; ({ TOOL_VERB, runTitle, runPillState, runSteps, historyRows, quietNote, shownEvents })`);
+}
+
+test('a run is titled by its description without the [cN] marker, and shows as Running or Finished', () => {
+  const { runTitle, runPillState } = runsBlock();
+  assert.equal(runTitle({ description: '[c24] fix the tax rounding', agentType: 'worker' }), 'fix the tax rounding');
+  assert.equal(runTitle({ description: '  [c7]fix it' }), 'fix it');
+  assert.equal(runTitle({ description: '[c7]', agentType: 'worker' }), 'worker', 'no text after the marker: the agent type');
+  assert.equal(runTitle({}), 'Sub-agent');
+  assert.equal(runPillState({ state: 'running' }), 'running');
+  assert.equal(runPillState({ state: 'done' }), 'idle');
+  assert.equal(runPillState({ state: 'stopped' }), 'ended');
+});
+
+test('the trace of a run has one step per tool call: read, ran, edited, searched; a failed call is an error step', () => {
+  const { runSteps } = runsBlock();
+  const events = [
+    { kind: 'tool', id: 'a', name: 'Read', summary: '/work/shop/a.txt' }, { kind: 'tool_result', id: 'a', ok: true, preview: 'x' },
+    { kind: 'text', text: 'thinking aloud' },
+    { kind: 'tool', id: 'b', name: 'Bash', summary: 'npm test' }, { kind: 'tool_result', id: 'b', ok: true, preview: '' },
+    { kind: 'tool', id: 'c', name: 'Edit', summary: '/work/shop/cart.js' }, { kind: 'tool_result', id: 'c', ok: true, preview: '' },
+    { kind: 'tool', id: 'd', name: 'Grep', summary: 'tax' }, { kind: 'tool_result', id: 'd', ok: false, preview: 'boom' },
+    { kind: 'tool', id: 'e', name: 'MadeUpTool', summary: '' },
+    { kind: 'truncated' },
+  ];
+  assert.deepEqual(JSON.parse(JSON.stringify(runSteps(events))), [
+    { kind: 'found', label: 'Read', text: '/work/shop/a.txt' },
+    { kind: 'did', label: 'Ran', text: 'npm test' },
+    { kind: 'changed', label: 'Edited', text: '/work/shop/cart.js' },
+    { kind: 'error', label: 'Searched failed', text: 'tax' },
+    { kind: 'did', label: 'MadeUpTool', text: '' },
+  ]);
+  assert.deepEqual(runSteps([]), []);
+});
+
+test('the history reads newest first, names who did it and the stages by their labels, and keeps the creation of an older card', () => {
+  const { historyRows } = runsBlock();
+  const labelOf = (id) => ({ new: 'New', review: 'Review' })[id] || id;
+  const card = { source: 'user', createdAt: 'T0', history: [
+    { at: 'T1', by: 'user', type: 'created', to: 'new' },
+    { at: 'T2', by: 'claude', type: 'moved', from: 'new', to: 'review' },
+    { at: 'T3', by: 'user', type: 'edited', fields: ['title', 'note'] },
+    { at: 'T4', by: 'claude', type: 'from-a-later-version' },
+  ] };
+  assert.deepEqual(JSON.parse(JSON.stringify(historyRows(card, labelOf))), [
+    { text: 'You edited the title, note', at: 'T3' },
+    { text: 'Claude moved it from New to Review', at: 'T2' },
+    { text: 'You created it in New', at: 'T1' },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(historyRows({ source: 'claude', createdAt: 'T0' }, labelOf))), [{ text: 'Claude created it', at: 'T0' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(historyRows({ source: 'user', createdAt: 'T0', history: [{ at: 'T5', by: 'claude', type: 'moved', from: 'new', to: 'gone_stage' }] }, labelOf))).map((r) => r.text), ['Claude moved it from New to gone_stage', 'You created it']);
+});
+
+// The run views, run against a fake DOM and a scripted server.
+function runViews() {
+  const run = /\/\/ ---- run views[^\n]*\n([\s\S]*?)\/\/ ---- end run views ----/.exec(html);
+  const helpers = /\/\/ ---- sub-agent runs[^\n]*\n([\s\S]*?)\/\/ ---- end sub-agent runs ----/.exec(html);
+  const tokens = /\/\/ ---- tokens and agents[^\n]*\n([\s\S]*?)\/\/ ---- end tokens and agents ----/.exec(html);
+  assert.ok(run && helpers && tokens);
+  const doc = { activeElement: null, createElement: (tag) => new FakeEl(doc, tag), createTextNode: (t) => { const e = new FakeEl(doc, 'span'); e.textContent = t; return e; } };
+  doc.body = new FakeEl(doc, 'body');
+  const requests = [];
+  const world = { answers: [], card: null };
+  const env = {
+    document: doc, selKey: 'k1', POLL_MS: 5, panel: null,
+    h(tag, cls, text) { const e = doc.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== null) e.textContent = text; return e; },
+    shape: () => doc.createElement('span'), chev: () => doc.createElement('span'), timeEl: (t) => { const e = doc.createElement('time'); e.textContent = String(t); return e; },
+    elapsedEl: () => doc.createElement('span'), runPill: (st) => { const e = doc.createElement('span'); e.className = 'pill'; e.textContent = st; return e; },
+    label: (id) => id, sessionLabel: (id) => `session ${id}`, stepsText: (n) => `${n} steps`, fmtMs: (ms) => `${ms} ms`, cfg: () => ({ stages: [] }),
+    pp: (key, rest) => `/api/p/${key}/${rest}`,
+    findCard: () => world.card,
+    renderMarkdown: (t) => { const e = doc.createElement('div'); e.textContent = t; return e; },
+    actList: (events) => { const e = doc.createElement('ul'); e.className = 'act-list'; events.forEach((ev) => { const li = doc.createElement('li'); li.textContent = ev.kind + ':' + (ev.id || ''); e.appendChild(li); }); return e; },
+    UNAVAILABLE: 'unavailable', READONLY_WHY: 'read-only', ro: false, isRO: () => env.ro, posts: [],
+    actionBtn: (text, cls, key, onClick) => { const b = doc.createElement('button'); b.className = 'btn ' + cls; b.textContent = text; b.dataset.busykey = key; b.addEventListener('click', onClick); return b; },
+    setOff: (b, off) => { b.disabled = off; }, runAction: async (key, fn) => fn(), clearError() {}, showError: (m) => { env.errors.push(m); }, errors: [],
+    applyCard: (c) => { world.card = c; }, wrote() {}, poll: async () => {},
+    stepEl: (kind, text) => { const e = doc.createElement('li'); e.textContent = kind + ' ' + text; e.querySelector = () => ({ append() {} }); return e; },
+    api: async (method, path, body) => { requests.push(path); if (method === 'POST') env.posts.push([path, body]); const a = world.answers.shift(); if (a instanceof Error) throw a; return a; },
+    setTimeout: (fn) => { env.__cycle = fn; return 1; }, clearTimeout() {},
+  };
+  const code = `${tokens[1]}\n${helpers[1]}\n${run[1]}\n({ attachRuns, runData })`;
+  const page = vm.runInNewContext(code, vm.createContext(env));   // env becomes the page's global scope: env.panel is the page's `panel`
+  const P = { target: 'c1', actOpen: {}, flash: null, scrollers: {} };
+  env.panel = P;
+  const scConvo = new FakeEl(doc, 'div'), scTrace = new FakeEl(doc, 'div');
+  P.scrollers = { conversation: scConvo, trace: scTrace };
+  const S = { scConvo, scTrace, composer: new FakeEl(doc, 'div'), rebuild: (id, build) => P.scrollers[id].replaceChildren(...[].concat(build())), jumpToTurn() {} };
+  return { page, env, P, S, doc, requests, world, scConvo, scTrace };
+}
+const RUN1 = (over = {}) => ({ n: 1, agentId: 'a1b2c3d4', agentType: 'worker', mode: 'foreground', description: '[c1] go', state: 'running', sessionId: 's', startedAt: 'T0', finishedAt: null, ok: null, prompt: 'do the thing', result: null, ...over });
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('run views: a running run is read from the offset the server gave, and a finished answer replaces what was read', async () => {
+  const t = runViews();
+  const view = t.page.attachRuns(t.P, t.S);
+  t.world.card = { id: 'c1', kind: 'task', title: 'T', status: 'new', source: 'user', createdAt: 'T0', runs: [RUN1()] };
+  t.world.answers = [
+    { run: 1, running: true, events: [{ kind: 'tool', id: 'x', name: 'Read', summary: 'a' }], next: 100, more: true, prompt: 'do the thing' },
+    { run: 1, running: true, events: [{ kind: 'tool_result', id: 'x', ok: true }], next: 180, more: false },
+  ];
+  view.update(t.world.card);
+  // update() scheduled a cycle on a stubbed timer: run it by hand
+  await vm_cycle(t);
+  assert.deepEqual(t.requests, ['/api/p/k1/cards/c1/runs/1/activity?offset=0', '/api/p/k1/cards/c1/runs/1/activity?offset=100'], 'a chunk that says "more" is followed at once, from where it ended');
+  assert.equal(t.scTrace.textContent.includes('found a'), true, 'the step is in the trace');
+  const d = Object.values(t.page.runData)[0];
+  assert.equal(d.events.length, 2);
+  assert.equal(d.offset, 180);
+  assert.equal(d.final, false, 'a running run is read again');
+  // the run finished: its answer is the whole snapshot, with no offset
+  t.world.card = { ...t.world.card, runs: [RUN1({ state: 'done', finishedAt: 'T1', ok: true, result: 'the report', steps: 1 })] };
+  t.world.answers = [{ run: 1, running: false, events: [{ kind: 'tool', id: 'x', name: 'Read', summary: 'a' }, { kind: 'tool_result', id: 'x', ok: true }, { kind: 'text', text: 'done' }], next: null, more: false }];
+  t.requests.length = 0;
+  await vm_cycle(t);
+  assert.equal(t.requests.length, 1);
+  assert.equal(d.events.length, 3, 'replaced, not added to the two already read');
+  assert.equal(d.final, true);
+  assert.ok(t.scConvo.textContent.includes('the report'));
+  assert.ok(t.scConvo.textContent.includes('do the thing'), 'the prompt is shown');
+  // a finished run is not asked for again
+  t.requests.length = 0;
+  await vm_cycle(t);
+  assert.deepEqual(t.requests, []);
+});
+
+// One round of the page's own cycle: update() scheduled it on a stubbed timer, so call it through the stub.
+async function vm_cycle(t) {
+  const fn = t.env.__cycle;
+  assert.ok(fn, 'the page scheduled a cycle');
+  await fn();
+}
+
+test('run views: a card with no run says so, and the page offers no message box for a run', () => {
+  const t = runViews();
+  const view = t.page.attachRuns(t.P, t.S);
+  t.world.card = { id: 'c1', kind: 'task', title: 'T', status: 'new', source: 'user', createdAt: 'T0' };
+  view.update(t.world.card);
+  assert.match(t.scConvo.textContent, /No agent has worked on this card/);
+  assert.match(t.scConvo.textContent, /\[c1\]/, 'it names the marker for this card');
+  assert.match(t.S.composer.textContent, /Only the main session can message these agents/);
+  assert.equal(t.S.composer.querySelectorAll('.input').length, 0);
+  assert.equal(t.requests.length, 0, 'nothing to ask the server');
+});
+
+test('the card workspace: tasks and ideas open it, a milestone keeps its page, a thread keeps its own, and nothing is set as markup', () => {
+  assert.match(html, /const ws = page && !isMs;/);
+  assert.match(html, /\} else mountDrawer\(P, page\);/);
+  assert.match(html, /workspaceShell\(P, \{ lead: h\('span', 'idchip', card\.id\)/, 'the thread workspace uses the same shell');
+  assert.match(html, /workspaceShell\(P, \{ lead: h\('span', 'ws-ids'\)/);
+  assert.match(html, /'cards\/' \+ encodeURIComponent\(c\.id\) \+ '\/runs\/' \+ run\.n \+ '\/activity\?offset=' \+ d\.offset/, 'the page names a card and a run, never a path');
+  assert.doesNotMatch(html, /transcript/i, 'the page knows nothing of transcript paths');
+  assert.ok(Buffer.byteLength(html) < 256 * 1024);
+});
+
+test('run views: the step count is the run\'s own, the newest events are kept with a marker, and a reset starts the list over', async () => {
+  const t = runViews();
+  const view = t.page.attachRuns(t.P, t.S);
+  const tool = (i) => ({ kind: 'tool', id: 't' + i, name: 'Read', summary: 'f' + i });
+  t.world.card = { id: 'c1', kind: 'task', title: 'T', status: 'new', source: 'user', createdAt: 'T0', runs: [RUN1()] };
+  t.world.answers = [
+    { run: 1, running: true, events: Array.from({ length: 1500 }, (_, i) => tool(i)), next: 10, more: true },
+    { run: 1, running: true, events: Array.from({ length: 1500 }, (_, i) => tool(1500 + i)), next: 20, more: false },
+  ];
+  view.update(t.world.card);
+  await vm_cycle(t);
+  const d = Object.values(t.page.runData)[0];
+  assert.equal(d.events.length, 2000, 'the newest 2000 are kept');
+  assert.equal(d.dropped, 1000);
+  assert.equal(d.events[1999].summary, 'f2999', 'the end of the run is what is shown');
+  assert.equal(d.final, false, 'a running run is still followed after the cap');
+  assert.match(t.scTrace.textContent, /Earlier steps are not shown\./);
+  assert.match(t.scConvo.textContent, /earlier:/, 'the list starts with the marker');
+  // later events keep coming in at the end
+  t.world.answers = [{ run: 1, running: true, events: [tool(3000)], next: 30, more: false }];
+  await vm_cycle(t);
+  assert.equal(d.events[d.events.length - 1].summary, 'f3000');
+  assert.equal(d.events.length, 2000);
+  // the file was replaced by a shorter one: the answer says reset, and the list is rebuilt, not added to
+  t.world.answers = [{ run: 1, running: true, events: [tool(1)], next: 5, more: false, reset: true }];
+  await vm_cycle(t);
+  assert.equal(d.events.length, 1);
+  assert.equal(d.dropped, 0);
+  assert.equal(d.offset, 5);
+  // a finished run with 3000 steps says 3000, not the 1 or 2001 events at hand
+  t.world.card = { ...t.world.card, runs: [RUN1({ state: 'done', finishedAt: 'T1', ok: true, result: 'r', steps: 3000 })] };
+  t.world.answers = [{ run: 1, running: false, events: [{ kind: 'earlier', dropped: 5 }, ...Array.from({ length: 2000 }, (_, i) => tool(i))], next: null, more: false }];
+  view.update(t.world.card);
+  await vm_cycle(t);
+  assert.match(t.scConvo.textContent, /3000 steps/);
+  assert.equal(d.events[0].kind, 'earlier', 'the marker the snapshot carries is kept');
+  assert.equal(d.events.length, 2001, 'the marker and the 2000 events the server kept');
+});
+
+test('run views: a quiet running run says so, every running run can be marked as stopped, a stopped one says it was', async () => {
+  const t = runViews();
+  const view = t.page.attachRuns(t.P, t.S);
+  t.world.card = { id: 'c1', kind: 'task', title: 'T', status: 'new', source: 'user', createdAt: 'T0', runs: [RUN1()] };
+  t.world.answers = [{ run: 1, running: true, events: [], next: 0, more: false, quietMs: 3 * 60 * 1000 }];
+  view.update(t.world.card);
+  await vm_cycle(t);
+  const stopBtn = () => t.scConvo.querySelectorAll('.run-stop')[0];
+  assert.ok(stopBtn(), 'a running run offers Mark as stopped');
+  assert.equal(stopBtn().textContent, 'Mark as stopped');
+  assert.doesNotMatch(t.scConvo.textContent, /No activity for/);
+  t.world.answers = [{ run: 1, running: true, events: [], next: 0, more: false, quietMs: 15 * 60 * 1000 + 5000 }];
+  await vm_cycle(t);
+  assert.match(t.scConvo.textContent, /No activity for 15 min; it may have stopped\./);
+  // the click posts to the run's own route and takes the card the server returns
+  const after = { ...t.world.card, runs: [RUN1({ state: 'stopped', ok: false, finishedAt: 'T9', note: 'Marked as stopped on the board: no stop was reported for this run.' })] };
+  t.world.answers = [after];
+  stopBtn().click();
+  await tick(); await tick();
+  assert.deepEqual(plain(t.env.posts), [['/api/p/k1/cards/c1/runs/1/stop', {}]]);
+  assert.equal(t.world.card, after);
+  t.world.answers = [{ run: 1, running: false, events: [], next: null, more: false }];
+  view.update(after);
+  await vm_cycle(t);
+  assert.equal(t.scConvo.querySelectorAll('.run-stop').length, 0, 'a stopped run offers no control');
+  assert.match(t.scConvo.textContent, /Marked as stopped on the board/);
+  assert.match(t.scTrace.textContent, /Run 1/);
+  // a finished run has none either, and on a read-only board the control is off
+  const t2 = runViews();
+  const v2 = t2.page.attachRuns(t2.P, t2.S);
+  t2.env.ro = true;
+  t2.world.card = { id: 'c1', kind: 'task', title: 'T', status: 'new', source: 'user', createdAt: 'T0', runs: [RUN1()] };
+  t2.world.answers = [{ run: 1, running: true, events: [], next: 0, more: false }];
+  v2.update(t2.world.card);
+  await vm_cycle(t2);
+  assert.equal(t2.scConvo.querySelectorAll('.run-stop')[0].disabled, true);
+});
+
+test('run views: the full prompt and report come from the run\'s route when the state holds only a preview', async () => {
+  const t = runViews();
+  const view = t.page.attachRuns(t.P, t.S);
+  const run = RUN1({ state: 'done', finishedAt: 'T1', ok: true, prompt: 'the pre', promptFile: true, result: 'the rep', reportFile: true, steps: 0 });
+  t.world.card = { id: 'c1', kind: 'task', title: 'T', status: 'new', source: 'user', createdAt: 'T0', runs: [run] };
+  t.world.answers = [
+    { run: 1, running: false, events: [], next: null, more: false },
+    { text: 'the pre and the whole prompt', full: true },
+    { text: 'the rep and the whole report', full: true },
+  ];
+  view.update(t.world.card);
+  assert.match(t.scConvo.textContent, /the pre/, 'the preview shows at once');
+  await vm_cycle(t);
+  assert.deepEqual(t.requests, ['/api/p/k1/cards/c1/runs/1/activity?offset=0', '/api/p/k1/cards/c1/runs/1/prompt', '/api/p/k1/cards/c1/runs/1/report']);
+  assert.match(t.scConvo.textContent, /the whole prompt/);
+  assert.match(t.scConvo.textContent, /the whole report/);
+  t.requests.length = 0;
+  await vm_cycle(t);
+  assert.deepEqual(t.requests, [], 'each is fetched once');
+});
+
+// ---- the card pane: the discard prompt and the start step must be where the user can see them ----
+
+function paneMemory() {
+  const m = /\/\/ ---- pane memory[^\n]*\n([\s\S]*?)\/\/ ---- end pane memory ----/.exec(html);
+  assert.ok(m, 'the pane memory block is missing from board.html');
+  return vm.runInNewContext(`${m[1]}; ({ THREAD_PANES_KEY, CARD_PANES_KEY, loadCollapsed, saveCollapsedTo, revealCardPane })`);
+}
+
+test('a task page and a thread page remember their folded panes under different keys', () => {
+  const { THREAD_PANES_KEY, CARD_PANES_KEY, loadCollapsed, saveCollapsedTo } = paneMemory();
+  assert.notEqual(THREAD_PANES_KEY, CARD_PANES_KEY);
+  assert.equal(THREAD_PANES_KEY, 'thread-board-panes', 'the thread key is the one earlier versions wrote');
+  const data = {};
+  const store = { getItem: (k) => (k in data ? data[k] : null), setItem: (k, v) => { data[k] = v; } };
+  saveCollapsedTo(store, THREAD_PANES_KEY, { left: true, right: false });
+  assert.deepEqual(plain(loadCollapsed(store, THREAD_PANES_KEY)), { left: true, right: false });
+  assert.deepEqual(plain(loadCollapsed(store, CARD_PANES_KEY)), { left: false, right: false }, 'folding a thread\'s pane does not fold a task\'s');
+  saveCollapsedTo(store, CARD_PANES_KEY, { left: false, right: true });
+  assert.deepEqual(plain(loadCollapsed(store, THREAD_PANES_KEY)), { left: true, right: false });
+  assert.deepEqual(plain(loadCollapsed({ getItem() { throw new Error('blocked'); } }, 'k')), { left: false, right: false });
+  assert.deepEqual(plain(loadCollapsed(null, 'k')), { left: false, right: false });
+  saveCollapsedTo(null, 'k', {});   // no storage: no error
+  data[CARD_PANES_KEY] = 'not json';
+  assert.deepEqual(plain(loadCollapsed(store, CARD_PANES_KEY)), { left: false, right: false });
+});
+
+test('revealing the card pane selects its tab when narrow and unfolds it when wide, and says whether it changed anything', () => {
+  const { revealCardPane } = paneMemory();
+  const narrow = { narrow: true, view: 'conversation' };
+  const mem = { left: true, right: true };
+  assert.equal(revealCardPane(narrow, mem), true);
+  assert.equal(narrow.view, 'about');
+  assert.deepEqual(plain(mem), { left: true, right: true }, 'narrow layout ignores folding');
+  assert.equal(revealCardPane(narrow, mem), false, 'already showing');
+  const wide = { narrow: false, view: 'conversation' };
+  assert.equal(revealCardPane(wide, mem), true);
+  assert.equal(mem.left, false);
+  assert.equal(mem.right, true, 'the other pane is left as it was');
+  assert.equal(wide.view, 'conversation');
+  assert.equal(revealCardPane(wide, mem), false);
+});
+
+test('the card workspace reveals its form for the discard prompt and for the start step, and the shells keep separate memories', () => {
+  assert.match(html, /P\.showDiscard = \(\) => \{\n\s+if \(ws\) S\.reveal\(\);/, 'the discard prompt first brings the form into view');
+  assert.match(html, /if \(ws\) \{ if \(P\.starting\) S\.reveal\(\); S\.applyPanes\(\); \}/, 'a page opened at the start step does too');
+  assert.match(html, /function reveal\(\) \{ if \(revealCardPane\(P, o\.panes\)\) \{ saveCollapsedTo\(paneStore, o\.key, o\.panes\); applyPanes\(\); \} \}/);
+  assert.match(html, /panes: wsCollapsed, key: THREAD_PANES_KEY/);
+  assert.match(html, /panes: cardCollapsed, key: CARD_PANES_KEY/);
+  assert.doesNotMatch(html, /sessionStorage\.(get|set)Item\(WS_KEY/);
 });

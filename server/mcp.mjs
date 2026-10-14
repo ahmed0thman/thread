@@ -159,9 +159,55 @@ const TOOLS = [
   },
   {
     name: 'board_list',
-    description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane shows it in braces, as {lane: name}; a milestone shows how many of its cards are done. ' +
+    description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane shows it in braces, as {lane: name}; a milestone shows how many of its cards are done; a card with items waiting for the user shows "(2 waiting)" (wait_list reads them). ' +
       'With parent, list only that milestone and its cards, after a summary line: the report for a milestone. Cards the user added or edited since the last listing are flagged "(new from user)". Listing marks them as seen.',
     inputSchema: { type: 'object', properties: { parent: { type: 'string', description: 'Optional: a milestone card id; list only that milestone and the cards under it.' } }, required: [] },
+  },
+  {
+    name: 'wait_add',
+    description: 'Record something you need from the user on the card for that work, so the board shows it under "Waiting for you" with a red count and a tag on the card. Add an item when you finished work the user must check (kind "review"), have a question (kind "question", or "choice" with 2 to 8 options), or need the user to do something themselves (kind "todo"). ' +
+      'If there is no card for the work yet, add one first with board_add. In the chat give one line only, for example "Waiting on you: c37.w2", not the whole question again. ' +
+      'The user answers on the board. The answer reaches this session, and only the session that asked, with the user\'s next message here; nothing arrives by itself. If the user answers in the chat instead, call wait_close with answered_in_chat. ' +
+      'It does not move the card. Refused on a milestone, inside a side thread and when the project is chat-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        card: { type: 'string', description: 'The id of the card this belongs to, for example "c37". A task, idea or thread card; not a milestone.' },
+        kind: { type: 'string', enum: core.WAIT_KINDS, description: '"question": the user types an answer. "choice": the user picks from choices. "todo": the user does something, then ticks Done. "review": the user checks your work and answers Approve or Request changes.' },
+        text: { type: 'string', description: 'What you need, written so it stands alone. Up to 2000 characters.' },
+        choices: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8, description: 'Only for kind "choice": 2 to 8 options, each up to 120 characters.' },
+        multi: { type: 'boolean', description: 'Only for kind "choice": true lets the user pick several options, false (default) exactly one.' },
+        session_id: SESSION_PROP,
+      },
+      required: ['card', 'kind', 'text'],
+    },
+  },
+  {
+    name: 'wait_list',
+    description: 'Read the items that wait for the user: id, kind, text, which card, who asked and when, and the answer once there is one. Use it to answer "what is c37.w2?", and to read an answer the session that asked will never receive. ' +
+      'With id, one item in full. Otherwise the open items and the answered ones not yet delivered; card limits it to one card, state to one state. Read only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'An item id, for example "c37.w2".' },
+        card: { type: 'string', description: 'A card id: only that card\'s items.' },
+        state: { type: 'string', enum: core.WAIT_STATES, description: 'Only items in this state. Without it: open items and answered items not yet delivered.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'wait_close',
+    description: 'Close an open waiting item that the user did not answer on the board. Either withdraw it (you no longer need it), or record that the user answered in the chat, with the answer in a note. An item answered on the board is already closed. Refused inside a side thread.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The item id, for example "c37.w2".' },
+        withdraw: { type: 'boolean', description: 'true: you no longer need it.' },
+        answered_in_chat: { type: 'string', description: 'The user answered in the chat: their answer in a few words. Give this or withdraw, not both.' },
+      },
+      required: ['id'],
+    },
   },
   {
     name: 'board_open',
@@ -371,6 +417,20 @@ function confirmText(r, state, caller) {
   ].join('\n');
 }
 
+// One waiting item as text, for wait_list: what it asks, who asked, and the answer.
+function waitText(card, item, state, caller) {
+  const by = caller && core.sameSession(caller, item.askedBy) ? 'this session' : core.sessionLabel(state, item.askedBy);
+  const when = (iso) => (ago(iso) ? ` ${ago(iso)}` : '');
+  const lines = [`${item.id} [${item.kind}] on ${card.id} "${core.clip(card.title, 60)}" — ${item.state}, asked by ${by}${when(item.askedAt)}`, item.text];
+  if (item.kind === 'choice') lines.push(`Options (${item.multi ? 'pick any' : 'pick one'}): ${(item.choices || []).map((c) => `"${c}"`).join(', ')}`);
+  if (item.state === 'answered') {
+    const where = item.answeredVia === 'chat' ? 'in the chat' : 'on the board';
+    const delivered = item.deliveredAt ? 'delivered to the asking session' : 'NOT delivered yet: the asking session has not had a message since';
+    lines.push(`Answered ${where}${when(item.answeredAt)}: ${core.answerPhrase(item)} (${delivered})`);
+  } else if (item.state === 'withdrawn') lines.push('Withdrawn: no longer needed.');
+  return lines.join('\n');
+}
+
 const ROLE_HELP = {
   start: 'a new card lands here',
   working: 'a thread whose turn is running',
@@ -383,13 +443,31 @@ const ROLE_HELP = {
 function configText(cfg) {
   const from = (s) => (s === 'default' ? 'default' : `${s} config file`);
   const file = (scope) => `${cfg.paths[scope]} (${cfg.invalid[scope] ? `IGNORED, not valid: ${cfg.invalid[scope]}` : cfg.exists[scope] ? 'exists' : 'not created'})`;
+  const stageLines = (stages) => stages.map((st) => `- ${st.id}: ${st.label}`);
+  const roleLines = (roles) => core.ROLE_NAMES.map((r) => `- ${r}: ${roles[r]} (${ROLE_HELP[r]})`);
+  const chat = cfg.mode === 'chat';
+  // In chat-only mode the board shows its own three columns; the task board's stages and roles are kept as chosen, for when it is turned on.
+  const board = chat
+    ? [
+      'Stages, in order — fixed for chat-only (what the board shows now):',
+      ...stageLines(cfg.stages),
+      'Roles in chat-only mode (fixed):',
+      ...roleLines(cfg.roles),
+      `The task board's own settings, kept for when it is turned on. Stages, in order — from ${from(cfg.source.stages)}:`,
+      ...stageLines(cfg.taskStages),
+      'Roles of the task board (the stage the plugin itself uses):',
+      ...roleLines(cfg.taskRoles),
+    ]
+    : [
+      `Stages, in order — from ${from(cfg.source.stages)}:`,
+      ...stageLines(cfg.stages),
+      'Roles (the stage the plugin itself uses):',
+      ...roleLines(cfg.roles),
+    ];
   return [
     `Set up: ${cfg.configured ? 'yes' : 'no (no config file exists; the defaults are in use)'}`,
-    `Mode: ${cfg.mode === 'chat' ? 'chat (threads only; the task board is off)' : 'tasks (threads and the task board)'} — from ${from(cfg.source.mode)}`,
-    `Stages, in order — from ${from(cfg.source.stages)}:`,
-    ...cfg.stages.map((st) => `- ${st.id}: ${st.label}`),
-    'Roles (the stage the plugin itself uses):',
-    ...core.ROLE_NAMES.map((r) => `- ${r}: ${cfg.roles[r]} (${ROLE_HELP[r]})`),
+    `Mode: ${chat ? 'chat (threads only; the task board is off)' : 'tasks (threads and the task board)'} — from ${from(cfg.source.mode)}`,
+    ...board,
     `Global config file: ${file('global')}`,
     `Project config file: ${file('project')}`,
   ].join('\n');
@@ -572,7 +650,9 @@ const HANDLERS = {
       source: 'claude',
     }));
     const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : '');
-    return `Added ${card.id} [${card.kind}] "${core.clip(card.title, 80)}" in ${card.status}${m}.`;
+    // a sub-agent's run is linked to its card by the card id at the start of the Agent call's description
+    const hand = card.kind === 'milestone' ? '' : ` When you hand this card's work to a sub-agent, start the Agent call's description with [${card.id}] (for example "[${card.id}] fix the rounding") so the board shows that run on the card.`;
+    return `Added ${card.id} [${card.kind}] "${core.clip(card.title, 80)}" in ${card.status}${m}.${hand}`;
   },
 
   async board_update(args) {
@@ -639,12 +719,43 @@ const HANDLERS = {
         const progress = c.kind === 'milestone' ? core.milestoneProgress(all, c.id, cfg) : null;
         const done = progress ? ` (${progress.done}/${progress.total} done)` : '';
         const flag = unseen.has(c.id) ? ' (new from user)' : '';
+        const waiting = chat ? 0 : core.openWaits(c).length;   // not shown on a chat-only board
+        const wait = waiting ? ` (${waiting} waiting)` : '';
         const note = c.note ? ` — ${core.clip(c.note, 200)}` : '';
-        lines.push(`- ${c.id} [${kind}] ${core.clip(c.title, 120)}${milestoneTag(all, c)}${laneTag(c)}${done}${flag}${note}`);
+        lines.push(`- ${c.id} [${kind}] ${core.clip(c.title, 120)}${milestoneTag(all, c)}${laneTag(c)}${done}${wait}${flag}${note}`);
       }
     }
     if (unseen.size) lines.push('', `${unseen.size} card(s) new from the user.`);
     return [...lines, ...stageLines].join('\n');
+  },
+
+  async wait_add(args) {
+    const sessionId = needCaller(args);
+    const { card, item } = await core.addWait(core.projectDir(), {
+      card: reqStr(args, 'card'),
+      kind: reqStr(args, 'kind'),
+      text: reqStr(args, 'text'),
+      choices: args.choices === null ? undefined : args.choices,
+      multi: args.multi === null ? undefined : args.multi,
+      sessionId,
+    });
+    return `Added ${item.id} [${item.kind}] on ${card.id} "${core.clip(card.title, 60)}". The board shows it under "Waiting for you". In the chat, say only "Waiting on you: ${item.id}". The answer reaches this session with the user's next message here.`;
+  },
+
+  async wait_list(args) {
+    const pd = core.projectDir();
+    const items = core.listWaits(pd, clean({ id: optStr(args, 'id'), card: optStr(args, 'card'), state: optStr(args, 'state') }));
+    if (!items.length) return args.id ? 'No such item.' : 'Nothing is waiting for the user.';
+    const state = core.readState(pd);
+    const caller = callerId(args);
+    return items.map(({ card, item }) => waitText(card, item, state, caller)).join('\n\n');
+  },
+
+  async wait_close(args) {
+    const withdraw = args.withdraw === undefined || args.withdraw === null ? undefined : args.withdraw;
+    if (withdraw !== undefined && typeof withdraw !== 'boolean') throw new ToolError('argument "withdraw" must be true or false');
+    const { item } = await core.closeWait(core.projectDir(), reqStr(args, 'id'), { withdraw, answeredInChat: optStr(args, 'answered_in_chat') });
+    return item.state === 'withdrawn' ? `Withdrew ${item.id}.` : `Closed ${item.id} as answered in the chat.`;
   },
 
   async lane_list() {
@@ -683,9 +794,9 @@ const HANDLERS = {
       if (mode === undefined && stages === undefined && roles === undefined) throw new ToolError('nothing to change: give mode, stages, roles or reset');
       cfg = await core.saveConfig(pd, scope, { mode, stages, roles });
     }
-    const gone = core.readState(pd).cards.filter((c) => c.kind !== 'thread' && !cfg.stages.some((st) => st.id === c.status)).length;
+    const gone = core.readState(pd).cards.filter((c) => c.kind !== 'thread' && !cfg.taskStages.some((st) => st.id === c.status)).length;
     const cards = gone
-      ? `In this project, ${gone} card(s) have a status that is no longer a stage; they show in the start stage (${cfg.roles.start}). Threads follow their state.`
+      ? `In this project, ${gone} card(s) have a status that is no longer a stage; they show in the start stage (${cfg.taskRoles.start}). Threads follow their state.`
       : 'In this project, every card is in a current stage. Threads follow their state.';
     return `${reset === true ? `The ${scope} config file was deleted.` : `Saved to the ${scope} config file.`}\n\n${configText(cfg)}\n\n${cards}`;
   },
@@ -836,6 +947,8 @@ async function shutdown() {
   } catch { /* ignore */ }
   process.exit(0);
 }
+
+core.tightenDataDir();   // once, before any request: older versions made these folders with the default modes
 
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {

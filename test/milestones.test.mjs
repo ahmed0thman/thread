@@ -53,7 +53,7 @@ test('config precedence: default, then the global file, then the project file; s
   writeGlobal(e, { mode: 'chat', stages: STAGES, roles: { start: 'todo', done: 'done' } });
   let cfg = core.readConfig(e.projectDir);
   assert.equal(cfg.mode, 'chat');
-  assert.deepEqual(cfg.stages, STAGES);
+  assert.deepEqual(cfg.taskStages, STAGES, 'the task board\'s stages are kept while chat-only shows its own');
   assert.deepEqual(cfg.source, { mode: 'global', stages: 'global' });
   assert.equal(cfg.configured, true);
 
@@ -68,9 +68,9 @@ test('config precedence: default, then the global file, then the project file; s
   const own = [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }, { id: 'c', label: 'C' }];
   writeProject(e, { stages: own });
   cfg = core.readConfig(e.projectDir);
-  assert.deepEqual(cfg.stages, own);
+  assert.deepEqual(cfg.taskStages, own);
   assert.equal(cfg.mode, 'chat');
-  assert.deepEqual(cfg.roles, { start: 'a', working: 'b', review: 'b', blocked: 'b', done: 'c' });
+  assert.deepEqual(cfg.taskRoles, { start: 'a', working: 'b', review: 'b', blocked: 'b', done: 'c' });
   assert.deepEqual(cfg.source, { mode: 'global', stages: 'project' });
 });
 
@@ -126,10 +126,10 @@ test('saveConfig merges into the file, removes a field given as null, validates,
   const file = core.configPaths(e.projectDir).global;
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).mode, 'chat', 'the earlier field is kept');
   let cfg = core.readConfig(e.projectDir);
-  assert.deepEqual(cfg.stages, STAGES);
+  assert.deepEqual(cfg.taskStages, STAGES);
 
   await assert.rejects(() => core.saveConfig(e.projectDir, 'global', { roles: { start: 'nowhere' } }), /not one of the stages/);
-  assert.deepEqual(core.readConfig(e.projectDir).roles.start, 'todo', 'a refused change writes nothing');
+  assert.deepEqual(core.readConfig(e.projectDir).taskRoles.start, 'todo', 'a refused change writes nothing');
   // Dropping the stages drops the roles chosen for them.
   cfg = await core.saveConfig(e.projectDir, 'global', { stages: null, mode: null });
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {});
@@ -390,7 +390,8 @@ test('config_get shows the defaults with no config; config_set saves, returns th
   // Global scope, then the project file hides it for stages.
   const g = await c.call('config_set', { scope: 'global', mode: 'chat' });
   assert.match(g.text, /Mode: chat .* — from global config file/);
-  assert.match(g.text, /Stages, in order — from project config file/);
+  assert.match(g.text, /Stages, in order — fixed for chat-only \(what the board shows now\):\n- new: New\n- review: Review\n- done: Done/);
+  assert.match(g.text, /The task board's own settings, kept for when it is turned on\. Stages, in order — from project config file:\n- todo: To do\n- doing: Doing\n- check: Check\n- done: Finished\nRoles of the task board[^\n]*\n- start: todo/);
   assert.equal(JSON.parse(fs.readFileSync(core.configPaths(e.projectDir).global, 'utf8')).mode, 'chat');
   assert.match(g.text, /Every card is in a current stage|no longer a stage/);
 });
@@ -538,7 +539,7 @@ test('SessionStart adds the setup hint once per machine, and not when a config f
   assert.ok(first.includes(PARENT_SESSION));
   assert.ok(first.includes('The thread plugin has not been set up.'));
   assert.ok(first.includes('/thread:setup'));
-  assert.equal(first.split('\n').length, 2, 'one added line');
+  assert.equal(first.split('\n').length, 3, 'the waiting-item sentence and one setup line added to the session note');
   assert.equal(fs.existsSync(path.join(e.dataDir, 'setup-hint')), true);
   const second = await ctx();
   assert.ok(!second.includes('/thread:setup'));
@@ -712,7 +713,7 @@ test('config_set merges a partial roles change, removes mode with null, and is r
   const roles = { start: 'todo', working: 'doing', review: 'check', blocked: 'todo', done: 'done' };
   await c.call('config_set', { scope: 'project', mode: 'chat', stages: STAGES, roles });
   await c.call('config_set', { scope: 'project', roles: { blocked: 'check' } });
-  assert.deepEqual(core.readConfig(e.projectDir).roles, { ...roles, blocked: 'check' });
+  assert.deepEqual(core.readConfig(e.projectDir).taskRoles, { ...roles, blocked: 'check' });
   const cleared = await c.call('config_set', { scope: 'project', mode: null });
   assert.equal(cleared.isError, false, cleared.text);
   assert.equal(core.readConfig(e.projectDir).mode, 'tasks');

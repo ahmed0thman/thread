@@ -20,6 +20,7 @@ The plugin also keeps a **board** of tasks, ideas, milestones and threads for ea
 - [Commands](#commands)
 - [Tools Claude uses](#tools-claude-uses)
 - [Choosing the agent and model](#choosing-the-agent-and-model)
+- [Waiting for you](#waiting-for-you)
 - [Milestones](#milestones)
 - [Delegation lanes](#delegation-lanes)
 - [Setup](#setup)
@@ -260,10 +261,10 @@ You only want side threads and have no use for cards, ideas or milestones. Run `
 | `/thread:report [id]` | Pull a thread's digest into this session. With no id, picks the one unreported thread this session started. |
 | `/thread:status` | List threads with their milestone, state, context, agent or model, turns, tokens used, reported status and who started them. |
 | `/thread:end <id>` | End a thread, stopping it if it is running, and mark its card done. |
-| `/thread:board [--stop] [--parent <id>]` | List the cards by stage and print the board link. `--parent <id>` shows the report for one milestone instead. `--stop` stops the board web page. |
+| `/thread:board [--stop] [--parent <id>]` | List the cards by stage (a card with items waiting for you shows `(2 waiting)`) and print the board link. `--parent <id>` shows the report for one milestone instead. `--stop` stops the board web page. |
 | `/thread:add [--milestone] [--parent <id>] [--lane <name>] <task or idea>` | Add a card without acting on it. `--milestone` makes the card a milestone. `--parent` puts the card under a milestone. `--lane` labels a task or idea with a [delegation lane](#delegation-lanes). |
 | `/thread:setup [--show] [--reset]` | Choose chat-only or the task board, your own stages, and whether that applies to every project or this one. `--show` prints the current settings. `--reset` deletes a settings file. |
-| `/thread:track` | Claude loads this itself, so that an instruction you give mid-task becomes a card and cards move as the work moves. You can also invoke it by hand. |
+| `/thread:track` | Claude loads this itself, so that an instruction you give mid-task becomes a card, cards move as the work moves, and anything Claude needs from you is put on the card as a [waiting item](#waiting-for-you). You can also invoke it by hand. |
 
 ```text
 /thread:new --agent critic review the retry logic in src/queue.ts for double charges
@@ -286,13 +287,16 @@ The commands call these MCP tools. Claude can also call them itself, for example
 | `thread_status` | Show threads: milestone, state, mode, context, agent, model or lane, turns, tokens, reported or not. |
 | `thread_report` | Fetch a thread's digest and mark it reported. |
 | `thread_end` | End a thread and move its card to the done stage. |
-| `board_add` | Add a task, idea or milestone card, optionally under a milestone and, for a task or idea, with a [delegation lane](#delegation-lanes). Refused when the project is chat-only. |
+| `board_add` | Add a task, idea or milestone card, optionally under a milestone and, for a task or idea, with a [delegation lane](#delegation-lanes). Refused when the project is chat-only. The reply reminds Claude to start the description of an Agent call for the card with `[cN]`, so the run [shows on the card](#task-and-idea-pages). |
 | `board_update` | Change a card's title, note, stage, milestone or lane. An empty `lane` removes it. |
 | `board_remove` | Delete a card. A running thread cannot be removed. |
-| `board_list` | List the cards by stage, with milestone tags, lanes (as `{lane: name}`) and progress. With `parent`, report on one milestone. |
+| `board_list` | List the cards by stage, with milestone tags, lanes (as `{lane: name}`), progress and `(2 waiting)` on a card with items [waiting for you](#waiting-for-you). With `parent`, report on one milestone. |
+| `wait_add` | Put something Claude needs from you on a card: a question, a choice, a to-do or a review. Refused on a milestone, inside a side thread and when the project is chat-only. See [Waiting for you](#waiting-for-you). |
+| `wait_list` | Read waiting items (one by id, or those of a card or state), with the answer once there is one. Read only. It is how Claude answers "what is c37.w2?". |
+| `wait_close` | Close an open item that you did not answer on the board: withdraw it, or note that you answered in the chat. |
 | `board_open` | Return the board link. Starts the board again if it was stopped. |
 | `board_stop` | Stop the board web page for every session. |
-| `config_get` | Show the mode, the stages, the roles, where each came from and the paths of the config files. |
+| `config_get` | Show the mode, the stages, the roles, where each came from and the paths of the config files. In [chat-only mode](#chat-only-mode) it shows both the fixed columns and roles and the task board's own stages and roles, which are kept for when it is turned on. |
 | `config_set` | Change or reset the settings in the global or the project config file. Claude uses it only when you ask to set up or change the plugin. |
 
 ## Choosing the agent and model
@@ -342,6 +346,40 @@ You find and list things in the codebase. Report facts with file paths. Do not s
 ```
 
 An agent whose description is vague gets picked for the wrong jobs, or never. An agent that should only run when you ask for it should say so in its description.
+
+## Waiting for you
+
+Sometimes Claude finishes work and then needs you: to check it, to answer a question, to pick an option, or to do something only you can do. A **waiting item** puts that on the card it belongs to, so the board shows it in one place, with the task and the milestone it belongs to, instead of leaving it in a long chat.
+
+**The four kinds.** Each has its own icon and colour, and the board has a small colour guide (a legend) that appears next to the red pill while the filter is on.
+
+| Kind | Icon, colour | You |
+|---|---|---|
+| **Question** | speech bubble, blue | type an answer |
+| **Choice** | radio dot, purple | pick one option, or several when Claude allowed that (2 to 8 options) |
+| **Review** | magnifier, teal | check Claude's work and answer **Approve** or **Request changes** |
+| **To do** | empty box, amber | do something yourself, then tick **Done** |
+
+Every kind except a question also takes an optional comment (for a question, the answer is the text). Cards in a Review stage and threads that have not been reported keep their own tags; the red count is for these explicit items only.
+
+**How Claude raises one.** With the `wait_add` tool, on the card for the work (it adds a card first when there is none). It does this when it finished something you must check, has a question, or needs you to do something. So that it does not have to guess, the note every session gets at start (in task-board mode) says so in one sentence, and the `/thread:track` skill, which describes this too, loads when work is finished for you to check as well as on a new instruction. In the chat it gives one line, such as `Waiting on you: c37.w2`, instead of repeating the question. An item has an id made of the card and a number, `c37.w2`; the number is never reused. Claude cannot put an item on a milestone, a side thread cannot add one, and a chat-only project has none. Adding an item does not move the card, change its updated time or mark it as new from you.
+
+**Where you see it.**
+
+- A red pill in the toolbar, **Waiting for you** with a count of the open items in this project. Click it, or press `w`, to show only the cards that have open items; it combines with search, Threads only, the session filter and the milestone filter, and is remembered per project like them. It is hidden when nothing waits, and a filter that is on goes away with the last item.
+- A red count on the project's tab, beside the running dot.
+- A tag in a card's foot with one small icon per kind and the count, such as `2 waiting`. A milestone shows the total of its cards as a count to look at.
+- The card's gear menu has **Answer waiting items (N)**, which opens the card's page at the section.
+
+**Answering.** Open the card. A **Waiting for you** section is at the top of its page (the left pane of a task, idea or thread; on a narrow window, the Card or About tab). Each open item shows its kind, text, the session that asked and when, the control for its kind, and **Send** (Ctrl or Cmd + Enter sends). Once sent, the item folds into a muted line with a tick, your answer, and whether it was delivered. What you typed stays while you look around, and answering never moves the card.
+
+**The id button.** Every item, open or answered, has a **Copy id** button. Paste the id in the main session to ask about it: Claude reads it with `wait_list` (`what is c37.w2?`).
+
+**How an answer reaches Claude.** Nothing is pushed into a session. The board saves the answer, and the next time you send a message in the session that asked, a hook adds a line to it, for example `The user answered c37.w2 on the board ("Which retry limit?"): "5". Continue with it.` Only the session that asked gets it, once, and long answers are cut short with a pointer to `wait_list`. At most five answers go with one message; the rest follow with the next. If you answer in the chat instead, Claude closes the item with `wait_close`.
+
+**When the session is gone** (closed, or cleared with `/clear`, which starts a new session id). The item stays **answered, not yet delivered**; its line says that the answer reaches the session that asked with that session's next message, when that session was last active, and that if it was cleared or closed any session can read the answer with `wait_list`: ask, for example, "what did I answer on c37.w2?". A session that starts in a task-board project also hears about it: if answered items were asked by another session and not delivered, its start note has one line with their count and a pointer to `wait_list`. An item can also be withdrawn by Claude when it is no longer needed.
+
+Items are never deleted, only closed, and a card keeps at most 20 open ones. They are stored in the card's `waits` list in the project's state file; an older plugin version ignores them and keeps them. Waiting items are not shown in [chat-only mode](#chat-only-mode).
 
 ## Milestones
 
@@ -558,7 +596,7 @@ If all you want is side threads, you can switch the task board off. Run `/thread
 - The note on your next message that tells Claude about new cards you added on the board.
 - `board_list` lists thread cards only and says in a line that the project is chat-only.
 
-**What still works.** Everything about threads: `/thread:new`, `/thread:continue`, `/thread:report`, `/thread:status`, `/thread:end`, the board page with thread cards, full-window threads, follow-ups from the board, and `/thread:board`. Thread cards can still be updated and removed. On the board, only thread cards are shown, in only the columns for the stages that the `working`, `review`, `blocked` and `done` roles point to, with a one-line note under the toolbar that the task board is off and `/thread:setup` turns it on.
+**What still works.** Everything about threads: `/thread:new`, `/thread:continue`, `/thread:report`, `/thread:status`, `/thread:end`, the board page with thread cards, full-window threads, follow-ups from the board, and `/thread:board`. Thread cards can still be updated and removed. On the board, only thread cards are shown, in three fixed columns, **New**, **Review** and **Done**, whatever stages the task board has: a running thread is in New, a thread whose turn finished or failed is in Review, an ended thread is in Done. A one-line note under the toolbar says that the task board is off and `/thread:setup` turns it on. The stages you set for the task board are kept as they are (`config_get` shows both) and come back when you turn the board on. [Waiting items](#waiting-for-you) are not shown.
 
 **Nothing is deleted.** Cards that already exist stay in the project's state file. Turn the board back on and they reappear.
 
@@ -591,23 +629,47 @@ The note is written by Claude. A follow-up you type on the board is sent as you 
 
 - **One board, served by one session.** The first Claude Code session to start serves the page and the others share it. When a session on a newer plugin version starts, or runs `/thread:board`, it replaces a board served by an older version; a session that is already running does the same within a few seconds. So after an update you reload one session's window, then the browser tab. Sessions that were open before the update keep running the old plugin code until their window is reloaded: until then they ignore newer settings such as your own stages or chat-only mode. A board from before 0.8.2 cannot be replaced this way (see [Troubleshooting](#troubleshooting)). `/thread:board --stop` stops the page for every session until someone runs `/thread:board` again; cards and threads are not touched.
 - **One board for every project.** Each project has a tab, with a dot when one of its threads is running. A project whose folder was deleted is shown read-only and can be forgotten, which removes its saved cards and logs.
-- **Columns follow your stages.** There is one column per stage, in order, labelled with the stage labels. With the defaults there are six; with [custom stages](#custom-stages) there are 2 to 10. In [chat-only mode](#chat-only-mode) only the columns that threads use are shown.
+- **Columns follow your stages.** There is one column per stage, in order, labelled with the stage labels. With the defaults there are six; with [custom stages](#custom-stages) there are 2 to 10. In [chat-only mode](#chat-only-mode) there are three fixed columns instead: New, Review and Done.
 - **Cards** show their id, kind (task, idea, milestone or thread) and title. A card under a milestone shows a tag with the milestone's title; click it to filter the board to that milestone. A milestone card shows its progress, such as `3/5 done`, with a thin bar. A task or idea with a [delegation lane](#delegation-lanes) shows a lane tag (`code-codex · codex`) in its foot. Thread cards also show their state, the number of turns, the session that started them, a **Not reported** tag when they hold a result the main session has not pulled, the tokens they have used, and their agent when they run as one.
+- **Waiting for you:** a red pill in the toolbar, a red count on the project's tab, a tag on each card that has open items and a section on the card's page; see [Waiting for you](#waiting-for-you).
 - **Gear menu:** every card with an action has a small gear that opens a menu of its actions, so you do not have to open the card first. Each action does what the same action does on the card's page, with the same confirmation step.
+  - A card with open [waiting items](#waiting-for-you) starts its menu with **Answer waiting items (N)**, which opens the card's page at that section.
   - A **thread**: **End thread**, **Report to main session** (or **Cancel queued report**), **Delete**. End thread is not offered once the thread has ended and its confirmation names the stage the card moves to (the one with the done role); Report only while the main session has not pulled the result; Delete is greyed out while a turn is running.
   - A **task or idea**: **Move to** each stage (the current one is marked and cannot be chosen), **Set milestone** (each milestone, or No milestone; shown once a milestone exists), **Start as thread** and **Delete**. Start as thread opens the card's page at the start step, where you choose the session, Brief or Full copy, access and agent.
   - A **milestone**: **Copy report** and **Delete**.
   - A card with nothing to offer has no gear: on a project whose folder is missing (read-only) only a milestone keeps one, for Copy report.
   - With the keyboard, Tab to the gear and press Enter or Space (holding the key does not choose anything); the arrow keys, Home and End move through the menu, which scrolls to the focused item when it is long, Enter chooses, Esc closes it and returns to the gear, and Tab closes it. Clicking elsewhere closes it too. The gear never starts a drag or opens the card.
-- **Toolbar:** search by id, title or note; show threads only; filter by the session that started them; filter by **Milestone** (shown once a milestone exists; All, each milestone by title, or No milestone); add a card. A button in the header switches between light and dark.
+- **Toolbar:** search by id, title or note; show threads only; **Waiting for you** (the red pill; only while something waits); filter by the session that started them; filter by **Milestone** (shown once a milestone exists; All, each milestone by title, or No milestone); add a card. A button in the header switches between light and dark.
 - **Plugin version:** the header shows the version that served the page. If the server changes to a different version while the tab stays open, a note under the toolbar says so. When the board is now served by a newer version, the note shows both versions and a **Reload** button to load the current page. When it is served by an older version (a session that has not been updated took over), the note says so and tells you to run `/thread:board` in an updated session and then reload the page; there is no Reload button, since reloading would only show the older page. The note gives way to the older-session note (about missing stages and milestones) when that one is showing.
-- **Task, idea and milestone cards** open as a full page, like a thread, where you edit the title, note, status and milestone; a card with a lane also lists the lane's provider, model, effort, access and source (read-only information). Drag a card to another column to move it to that stage. A milestone's page also lists its cards, grouped by stage, each row a link to that card, with **Copy report**. In the new-card form, **Kind** can be task, idea or milestone, and a task or idea can be given a milestone.
+- **Task and idea cards** open in the same three-pane workspace as a thread (see [Task and idea pages](#task-and-idea-pages) below). **Milestone cards** open as a full page where you edit the title, note and status, with a list of the milestone's cards, grouped by stage, each row a link to that card, and **Copy report**. Drag a card to another column to move it to that stage. In the new-card form, **Kind** can be task, idea or milestone, and a task or idea can be given a milestone.
 - **Start as thread** turns a task or idea card into a thread (a milestone cannot be). You choose the session it reports to, **Brief** or **Full copy**, read-only or able to edit files, and an agent from your `.claude/agents/` (or "Same as session"). With Brief, the title is the task and the note is the brief, since nobody writes one on the board. With Full copy, the title and note are the task.
 - **Thread cards** open full-window:
   - **Centre:** the conversation, and a box to send a follow-up. A running turn shows its steps as they happen. A finished turn folds them into one line with its duration and tokens, such as "6 steps · 3m 00s · 48k tokens".
   - **Left:** the thread's session id, the session that started it, a `claude --resume <id>` command that opens the thread as a normal conversation in a terminal, its context (Brief or Full copy), its agent or model and effort (a lane thread: the lane's provider, model, effort or variant, access, source and whether a follow-up is possible, and the provider's session id in place of a `claude --resume` command), its milestone (changed with a select that saves at once), the tokens used, the brief it was given, the latest digest, and every decision across turns. The report command has a copy button. **Report to main session** queues the report: it is delivered with your next message in the session that started the thread, and repeated until that session makes it.
   - **Right:** the trace, a timeline of what the thread did, labelled Did, Found, Decided, Changed and Open, with file references. Clicking a step scrolls the conversation to that turn. For a lane thread it opens with one line about what its provider shows (see [Delegation lanes](#delegation-lanes)).
-- **Keys:** `/` focuses search, `n` adds a card, `Esc` closes a panel.
+- **Keys:** `/` focuses search, `n` adds a card, `w` shows or hides only the cards that wait for you, `Esc` closes a panel.
+
+### Task and idea pages
+
+A task or idea card opens the same way a thread does, so you can see what is happening in the task, what an agent is doing, and trace it.
+
+- **Left, "Card":** the editable title, note, status and milestone, with **Save**, **Cancel**, **Start as thread** and **Delete** pinned under them (a card with a lane also lists the lane's provider, model, effort, access and source, read-only). Below the form: a summary of the card's agent runs (agent type, running or finished, tokens, when; click one to jump to it) and the card's **History**.
+- **Centre, "Agent runs":** each sub-agent run on the card as a turn: the prompt the main session gave it, its steps live while it runs, then the agent's final report. A finished run folds its steps into one line, such as "4 steps · 12s · 27.4k tokens". A card no agent has worked on says so in one line and how to get one. There is **no message box**: only the main session can talk to a sub-agent. **Start as thread** is how you get an agent you can message.
+- **Right, "Trace":** one block per run with a step for each tool call (Read, Ran, Edited, Searched, Fetched), clipped to one line each; a call that failed is marked. Clicking a step scrolls to its run.
+- **History:** created, moved between stages, and edited (title, note, milestone, lane), each by You or Claude with the time. It keeps the last 50 entries. It records changes made through the board or Claude's tools; a card made before this feature has only its creation, and a session still running an older plugin version does not add to it.
+- On a narrow window the three panes become tabs (Agent runs, Card, Trace); a card with no run opens on Card.
+
+**Linking a run to a card.** The main session starts the Agent tool call's `description` with the card id in brackets, for example `[c24] fix the tax rounding`. The `board_add` reply, `/thread:track`, `/thread:add` and `/thread:board` remind Claude to do this whenever it hands a card's work to a sub-agent; you can also ask for it in words ("delegate c24, and put its id first in the description"). Two small hooks, `SubagentStart` and `SubagentStop`, notice the marker: at start they add a running run to the card, at stop they record the agent's report, step count and tokens and keep a snapshot of its steps (the stop hook waits about half a second for the agent's last transcript line, only for a run that is on a card). Both stay silent, never print into the session, and do nothing for a description without the marker, for a card that does not exist in this project, for a thread's own process, or in [chat-only mode](#chat-only-mode).
+
+What is and is not shown:
+
+- Only runs whose description starts with `[cN]` show. Work the main session does itself, and a delegation without the marker, shows nothing on the card (the card's History still shows its moves and edits).
+- A card that has become a thread (Start as thread) or is a milestone does not take runs.
+- What the code does for two cases nobody has seen in a live Claude Code session, so both are untested there: an agent that starts again with the same id (for example after it was sent a message) has its run reopened instead of getting a second one, and an agent started by another sub-agent is ignored.
+- The steps come from the agent's own transcript, which Claude Code keeps under `~/.claude/projects/` (under `$CLAUDE_CONFIG_DIR/projects/` when that variable is set). That folder layout is not documented, so a future Claude Code version may change it and the page would then show no steps (the prompt, the report and the other figures still come from the hooks). Claude Code can also clean transcripts up, which is why a snapshot of each finished run's steps is kept in the project's logs folder (`cN.rM.activity.jsonl`, removed with the card). A long run keeps its newest 2000 steps and tool results, with a note that earlier ones are not shown; its step count is still the real one.
+- The card's record keeps only a short preview of each run's prompt and report, with the step and token figures. The full texts are files in the logs folder (`cN.rM.prompt.txt`, `cN.rM.report.txt`), which the page loads when you open the card, so a card with many runs stays small.
+- **Mark as stopped.** A running run shows a small **Mark as stopped** button. If the agent's transcript has had no new activity for 10 minutes, the run also says "No activity for N min; it may have stopped." Use the button when a session was closed or crashed while the agent ran, or its stop was lost: the run becomes Ended, not successful, with a note, and nothing else on the card changes. If the agent's real stop arrives later it closes the run normally.
+- The board reads only the transcript file recorded on a run, and only when it is `agent-<id>.jsonl` under `~/.claude/projects/` and not behind a symlink; it never takes a path from the page.
 
 ![Starting a card as a thread: session, Brief or Full copy, read-only or editing, and the agent](docs/start-as-thread.png)
 
@@ -620,7 +682,7 @@ The note is written by Claude. A follow-up you type on the board is sent as you 
 - **Hand-back.** A thread never writes into the main session. Each of its replies ends with the four-heading digest and an ordered step map. `/thread:report` gives the digest to the main session; the step map is only drawn on the board.
 - **Reported status.** A thread counts as reported once the session that started it has pulled its newest result. A follow-up that produces a new result makes it "not reported" again. A follow-up that fails leaves it as it was.
 - **Announcements.** When a thread finishes, the session that started it is told on your next message, not in the middle of a turn.
-- **Read and write.** Read mode blocks the Edit, Write and NotebookEdit tools. It does not sandbox the thread: shell commands and MCP tools you have already allowed can still change things. Write mode allows edits in the shared working tree.
+- **Read and write.** A read thread may read and search the project, search and fetch the web, run the read-only shell commands Claude Code allows without asking (`ls`, `cat`, `git log` and the like) and report. It cannot edit files. The plugin guarantees this by passing `--permission-mode dontAsk` (Claude Code refuses everything that would need a prompt) and `--disallowedTools Edit Write NotebookEdit`, whatever your own Claude Code settings say: a default mode that skips prompts, in your user settings, does not reach a read thread, and a deny rule beats any allow rule your settings hold for those tools. It is still not a sandbox: a shell command or MCP tool that your own `permissions.allow` rules (or `THREAD_ALLOW_TOOLS`) approve by name can still change things. Write mode passes `--permission-mode acceptEdits`, so it edits files in the shared working tree.
 - **Permissions.** A thread runs headless, so it cannot answer a permission prompt. Anything that would prompt is refused, except web search and web fetch, which are pre-approved, and folders you named in the task.
 - **Cost and time.** Every thread turn is a model call over the thread's own conversation. Inside a turn, every step the thread takes sends that conversation again. A brief thread starts small. A full thread starts with the whole main session (after a compaction, with the summary and what followed), so one started late in a long session costs accordingly. Each turn's token counts (input, cache read, cache write, output) are recorded; the board and `/thread:status` show each thread's total. Threads started before version 0.7.0 have no token figures. A turn is stopped after 20 minutes.
 - **Limits on threads.** A thread cannot start, continue, report or end threads.
@@ -630,28 +692,31 @@ The note is written by Claude. A follow-up you type on the board is sent as you 
 - Each project has its own cards and its own milestones. Sessions in one project share them.
 - Settings can be shared across projects (the global file) or set for one project; cards and threads never are.
 - Reporting or ending a thread from a session that did not start it asks for confirmation first.
+- A sub-agent run is recorded on the card of the project the main session belongs to; a `[cN]` that names no card in that project is ignored.
+- A [waiting item](#waiting-for-you) is answered on the board but delivered only to the session that asked it, with that session's next message. Another session sees it with `wait_list`.
 - Thread cards are labelled with the name of the session that started them: Claude Code's title for the session, otherwise the start of its first message, otherwise a short id.
 
 ## Security
 
 What the plugin runs, sends and stores:
 
-- **Runs on your machine:** a local MCP server and two hooks (at session start and on each prompt), all plain Node scripts in this repository. For each thread turn it starts the `claude` CLI in the background, in your project folder, or, for a thread on a [delegation lane](#delegation-lanes), the provider's relay script from the delegate skills, which starts that provider's CLI. To list [delegation lanes](#delegation-lanes) it runs the `delegate-setup` skill's `config.mjs load` script with Node, without a shell and with a time limit, at most once every 30 seconds per project; the script only reads, and the plugin never writes the lane config or its approval.
-- **Flags it passes to a thread:** read mode passes `--disallowedTools Edit Write NotebookEdit`; write mode passes `--permission-mode acceptEdits`. Every thread gets `--allowedTools WebSearch WebFetch` (see `THREAD_ALLOW_TOOLS`), and `--add-dir` for folders you named. It never edits your Claude Code settings.
-- **Reads:** the end of the main session's transcript, to get the session's title and its model and effort; the agent files in `.claude/agents/`; the two `config.json` settings files; and the output of the delegate script (lane names, providers, models, efforts and whether a project's lane config is approved).
+- **Runs on your machine:** a local MCP server and four hooks (at session start, on each prompt, and when a sub-agent starts or stops), all plain Node scripts in this repository. The two sub-agent hooks run in every session. `SubagentStart` reads the project's `state.json` and settings and, only if the project has a task or idea and is not chat-only, starts a short background Node process and returns at once (Claude Code writes the agent's `agent-<id>.meta.json` file, which holds the description, only after the start hooks have returned, so the hook cannot wait for it). That process waits up to 5 s for the meta file and, when the description starts with `[cN]` for a task or idea of the project, writes the run into `state.json`, plus the prompt file in the logs folder. `SubagentStop` always reads `state.json` to see whether the agent has a run, and reads the meta file when it has none; for a tracked agent it also reads the agent's transcript, then writes the run, the snapshot and the report file. Without a marker they write nothing and print nothing. For each thread turn it starts the `claude` CLI in the background, in your project folder, or, for a thread on a [delegation lane](#delegation-lanes), the provider's relay script from the delegate skills, which starts that provider's CLI. To list [delegation lanes](#delegation-lanes) it runs the `delegate-setup` skill's `config.mjs load` script with Node, without a shell and with a time limit, at most once every 30 seconds per project; the script only reads, and the plugin never writes the lane config or its approval.
+- **Flags it passes to a thread:** read mode passes `--permission-mode dontAsk` and `--disallowedTools Edit Write NotebookEdit`, so a read thread stays read-only even when your own Claude Code settings skip permission prompts; write mode passes `--permission-mode acceptEdits`. It never passes a flag that skips permissions. Every thread gets `--allowedTools WebSearch WebFetch` (see `THREAD_ALLOW_TOOLS`), and `--add-dir` for folders you named. It never edits your Claude Code settings.
+- **Reads:** the end of the main session's transcript, to get the session's title and its model and effort; for a sub-agent run recorded on a card, that agent's transcript and meta file under `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`) (read-only, only the file recorded on the run, never a symlink or a path from the board page); the agent files in `.claude/agents/`; the two `config.json` settings files; and the output of the delegate script (lane names, providers, models, efforts and whether a project's lane config is approved).
 - **A lane run sends your work to another company.** A thread on a lane runs `codex` (OpenAI), `agy` (Google Antigravity), `opencode` (whatever provider its model uses) or a separate `claude` session, through the delegate skills' relay. That CLI sends the brief, your task and whatever files it reads to its own provider, under that provider's terms; the plugin does not control or see this. A write-mode lane lets that provider's CLI edit files in your project and, for `codex` and `claude` lanes, run shell commands there, under that CLI's own sandbox and permission rules and not Claude Code's; a write-mode `opencode` run approves its own actions without asking, and a codex lane whose sandbox is `danger-full-access` has no sandbox at all. The board can start such a run: **Start as thread** on a card that has a lane runs on that lane, in write mode if you choose it in the start step (the lane comes from the card, not from the page, and the page cannot set one). Use read mode for a lane unless you want edits, and do not give a lane to a card whose note should not leave your machine.
 - **Sends nothing itself.** The plugin makes no network requests and has no telemetry. Its only listener is the board on `127.0.0.1`, and the board page loads nothing from the internet. Threads are ordinary Claude Code sessions, so they talk to Anthropic as any session does and can search and fetch the web.
 - **Stores,** all in the data directory on your machine:
-  - each project's cards, thread replies and logs (`projects/<key>/state.json` and `logs/`);
+  - each project's cards, thread replies and logs (`projects/<key>/state.json` and `logs/`), including each card's sub-agent runs (a preview of the prompt and report, tokens, the path of the agent's transcript), its history, and, in the logs folder, each run's full prompt, full report and a snapshot of its steps;
+  - each card's [waiting items](#waiting-for-you) and your answers to them, in the same state file;
   - the settings files, `config.json` (global) and `projects/<key>/config.json`, if you ran `/thread:setup`;
   - `setup-hint`, an empty marker file that records that the setup hint was shown;
   - `board.token`, the board's access token;
   - `board.stopped`, a marker that exists while the board is stopped with `/thread:board --stop`.
 
 - **Web access is pre-approved for threads, with no prompt per site.** A full thread holds your whole conversation, and any thread can read the project, so a malicious page could try to talk it into sending that content somewhere. If that matters for your project, set `THREAD_ALLOW_TOOLS=none`.
-- **The board is local.** It listens on `127.0.0.1` only, checks the request's host and origin, and requires the access token that is in the link from `/thread:board`. The token is stored in `board.token` in the data directory, readable only by you. The board page cannot change the settings. They change through `/thread:setup` (Claude calls the `config_set` tool, which a side thread is not allowed to use) or by editing the files yourself.
-- **Read mode is not a sandbox**, as described above.
-- **Thread and card contents are stored unencrypted** in the data directory, including each thread's replies.
+- **The board is local.** It listens on `127.0.0.1` only, checks the request's host and origin, and requires the access token that is in the link from `/thread:board`. The token is stored in `board.token` in the data directory, readable only by you. The board page cannot change the settings. Its only writes besides cards and threads are your answers to [waiting items](#waiting-for-you), through `POST /api/p/<project>/cards/<card>/waits/<item>`, which passes the same token, host, origin and JSON checks as every write, takes only an answer for an item that is still open (the text, the chosen options, the tick or the verdict, and a comment), validates it for the item's kind and writes nothing else. They change through `/thread:setup` (Claude calls the `config_set` tool, which a side thread is not allowed to use) or by editing the files yourself.
+- **Read mode keeps a thread from editing files, but is not a sandbox**, as described in [How threads work](#how-threads-work): a shell command or tool that your own allow rules approve by name still runs.
+- **Thread and card contents are stored unencrypted** in the data directory, including each thread's replies. On macOS and Linux the data directory and the folders in it are readable only by you (mode 0700) and the files the plugin writes are 0600: the state, settings, logs, briefs, run prompts and reports, and the board token. The plugin makes the folders owner-only when it creates them and, once each time a session starts its MCP server, narrows the ones an older version made with the default modes. It changes only what you own, follows no symlink, skips hard-linked files and touches nothing outside the data directory; when `THREAD_DATA_DIR` names a folder, only the plugin's own files and its `projects` folder in it are changed, not the folder itself. A session still on an older plugin version writes new files with the default modes until a newer session next starts, so the owner-only folder is what keeps them private in the meantime. On Windows it does nothing of this kind, and a filesystem that ignores modes (some network or FAT-style mounts) keeps whatever it gives.
 
 ## Configuration
 
@@ -666,6 +731,8 @@ Behaviour of the board and the stages is set with [`/thread:setup`](#setup). Eve
 | `THREAD_DATA_DIR` | Where cards, thread results, settings and logs are kept. Default is the plugin's data directory, otherwise `~/.claude/thread-data`. |
 | `THREAD_LOCK_WAIT_MS` | How long to wait for the state lock. Default `5000`. |
 | `THREAD_CLAUDE_BIN` | Binary to run in place of `claude`. Used by the tests. |
+| `CLAUDE_CONFIG_DIR` | Set by Claude Code's own users, not by this plugin: when it is set (to an absolute path), sub-agent transcripts are looked for in `$CLAUDE_CONFIG_DIR/projects` instead of `~/.claude/projects`. |
+| `THREAD_CLAUDE_PROJECTS_DIR` | Test-only: replaces both as the only place the board and the sub-agent hooks accept a sub-agent transcript from. Tests and demos set it; leave it unset. |
 | `THREAD_DELEGATE_DIR` | The folder that holds the `delegate-setup` skill and the providers' relays (`<provider>-delegate`). Default `~/.claude/skills`. |
 
 Set by the plugin itself, not by you: `THREAD_PROJECT_DIR` (the project a server belongs to) and `THREAD_DEPTH` (marks a thread's own process). `CLAUDE_CODE_SESSION_ID` is used as a fallback when a tool call carries no session id.
@@ -681,7 +748,7 @@ Files in the data directory:
   projects/<key>/
     state.json                 cards and threads of one project
     config.json               settings for that project (optional)
-    logs/                      each thread's raw output
+    logs/                      each thread's raw output, and for a card's sub-agent runs cN.rM.activity.jsonl (steps), cN.rM.prompt.txt and cN.rM.report.txt
 ```
 
 ## Troubleshooting
@@ -690,6 +757,8 @@ Files in the data directory:
 |---|---|
 | A thread fails with "claude CLI not found on PATH" | The standalone CLI is not installed or not on `PATH` for Claude Code. Install it and restart. |
 | A full thread fails with "No conversation found with session ID" | The session it was copied from no longer exists, for example after its history was cleared. Start the thread again from the current session. Brief threads do not depend on the old session. |
+| A read thread says a command was refused ("permission denied", "don't ask mode") | Read mode runs with `--permission-mode dontAsk`: only reading, searching, web search and fetch, and the read-only shell commands Claude Code allows without asking run; any other command is refused, since a headless thread cannot answer a prompt. Ask for a write thread (`--write`) if the work needs it, or add an allow rule for that exact command to your Claude Code permissions. |
+| Another user or a service account of yours cannot read the plugin's data folder, or a backup or sync tool reports permission errors on it | The data folder and what is in it are owner-only (0700 and 0600) on macOS and Linux. Run that tool as the same user, or copy the files out as that user. The plugin does not loosen the modes. On a filesystem that ignores modes (some network shares and FAT-style disks) the modes cannot be applied, and the plugin carries on without them; keep the data folder on a local disk (`THREAD_DATA_DIR`). |
 | Starting a thread fails with "Unknown agent" | The name is not a file in the project's `.claude/agents/` or in `~/.claude/agents/`. The message lists the names that exist. Built-in and plugin agents cannot run a thread. |
 | Claude picked an agent or model you did not want | Name it yourself with `--agent` or `--model`. If it keeps happening, make the agent's `description` say what it is for and what it is not for; that text is all Claude chooses by. See [Choosing the agent and model](#choosing-the-agent-and-model). |
 | Starting a thread fails with "give an agent, or a model and effort, not both" | An agent brings its own model and effort. Drop `--model` and `--effort`, or drop `--agent`. |
@@ -714,10 +783,17 @@ Files in the data directory:
 | The board says it needs its access link | The link was opened without its token, or from an old bookmark. Run `/thread:board` and open the link it prints. |
 | `/thread:report` lists threads instead of reporting | This session started none or several unreported threads. Pass the id. |
 | A thread shows "running" for a long time | Check its card on the board. A thread whose process died is marked failed the next time the board or a command looks at it. |
+| A task's page shows no agent run although an agent worked on it | Only an Agent call whose `description` starts with the card id in brackets, such as `[c24] fix it`, is linked, and only to a task or idea of this project. Ask Claude to put the id first. The hooks need the plugin version with them (reload the window after an update). If Claude Code changes where it keeps sub-agent transcripts, the run still shows its prompt, report and tokens but no steps. |
+| A run's steps say "The activity of this run was not kept" | Its snapshot could not be written and Claude Code has since removed the transcript. The prompt and report are still shown. |
+| A run shows "Running" long after the agent finished, or says "No activity for N min; it may have stopped" | Claude Code did not send the stop event (the session was closed or crashed while the agent ran, or the stop hook could not get the state lock in time). Press **Mark as stopped** on the run: it becomes Ended, not successful, with a note. |
+| The red **Waiting for you** pill is not there | Nothing is waiting, or the project is in [chat-only mode](#chat-only-mode), or the session serving the board runs a plugin version from before waiting items (reload that window; see the older-session note). |
+| I answered an item but Claude did not react | Nothing is pushed into a session. The answer arrives with your next message in the session that asked; until then its line says "not yet delivered". Ask in the chat (`what is c37.w2?`) and Claude reads it with `wait_list`. If that session was cleared or closed, ask any session, for example "what did I answer on c37.w2?". |
+| `wait_add` is refused | The message says why: the card is a milestone, the project is chat-only, a side thread called it, a choice needs 2 to 8 distinct options, or the card already has 20 open items. |
 | A finished thread was not announced | Announcements arrive with your next message to the session that started the thread. |
 
 ## What's new
 
+- **0.11.0** [Waiting for you](#waiting-for-you): Claude puts a question, a choice, a to-do or a review on a card, a red pill shows how many wait on you, and you answer on the board; the answer reaches the session that asked with your next message. Task and idea cards open as a [workspace like a thread's](#task-and-idea-pages), showing the sub-agent runs Claude starts for the card (live steps, report, trace) and the card's history. Chat-only mode has three fixed columns: New, Review, Done. The board has a new look. Read threads now always run with `--permission-mode dontAsk` and cannot use edit tools or start sub-agents, whatever your own permission settings say; and the plugin's data folder is owner-only.
 - **0.10.0** [Delegation lanes](#delegation-lanes): with the delegate skills installed, a thread can run on another coding CLI (codex, agy, opencode or claude) with the lane's model and effort, follow-ups continue that CLI's session, and a task card with a lane starts on it from the board. Cards show the lane and their page shows its details; `lane_list` lets Claude see and choose lanes. A thread report no longer shows a malformed step map as raw text.
 - **0.9.1** A gear on every board card opens a menu of its actions (end or delete a thread, move a task to a stage, set its milestone, start it as a thread, copy a milestone's report) without opening the card. The board header shows the plugin version, and a note says when the page and the session serving it are on different versions.
 - **0.9.0** Milestones: a card that groups tasks, ideas and threads, with a tag, progress, a board filter and a report (`/thread:board --parent`). Your own board stages and `/thread:setup` to choose them. A chat-only mode that turns the task board off. Follow-ups open with a "Since your last turn:" note when the main session has changed something the thread needs.
@@ -740,15 +816,20 @@ server/
   config.mjs        settings: mode, stages and roles, and the two config files
   sessions.mjs      session names, and the model a session runs on
   core.mjs          cards, milestones, threads, the wrong-session guard, project listing
+  lanes.mjs         delegation lanes: reads the lane settings from the delegate skills
+  runs.mjs          sub-agent runs on a card, recorded by hooks, and their transcripts
+  waits.mjs         the questions a session asks the user on the board, and their answers
   runner.mjs        the detached process that runs one thread turn
   mcp.mjs           the MCP server and its tools
   http.mjs          the board server
   board.html        the board page
 test/               node:test suites, with a stub in place of the claude CLI
+  fake-delegate/    fake delegate skills and relay for the lane tests
+  fixtures/         data and small scripts the tests run
 ```
 
 ```bash
-node --test test/*.test.mjs
+node --test
 claude plugin validate .
 ```
 

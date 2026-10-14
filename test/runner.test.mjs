@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import {
   setupThreadEnv, waitFor, sleep, isAlive, cleanAmbientEnv, writeStateFile, emptyState, threadCard,
-  PARENT_SESSION, THREAD_SESSION,
+  PARENT_SESSION, THREAD_SESSION, TEST_DIR,
 } from './helpers.mjs';
 import * as core from '../server/core.mjs';
 
@@ -248,7 +248,7 @@ test('startThread throws when task is empty', async (t) => {
 
 test('reconcile marks a running thread with a dead pid as failed', async (t) => {
   const e = setupThreadEnv(t);
-  const dead = spawn(process.execPath, ['-e', '']);
+  const dead = spawn(process.execPath, [path.join(TEST_DIR, 'fixtures', 'noop.mjs')]);
   await new Promise((r) => dead.on('close', r));
   const deadPid = dead.pid;
   assert.equal(isAlive(deadPid), false);
@@ -393,7 +393,25 @@ test('threads pre-approve web search and fetch by default, in read and write mod
   setupThreadEnv(t, { THREAD_ALLOW_TOOLS: undefined });
   assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard()), '--allowedTools'), ['WebSearch', 'WebFetch']);
   assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard({ mode: 'write' })), '--allowedTools'), ['WebSearch', 'WebFetch']);
-  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard()), '--disallowedTools'), ['Edit', 'Write', 'NotebookEdit']);
+  assert.deepEqual(flagValues(core.buildClaudeArgs(argsCard()), '--disallowedTools'), ['Edit', 'Write', 'NotebookEdit', 'Agent']);
+});
+
+test('a read thread names the dontAsk permission mode, so the user\'s own default cannot let it edit or run commands', (t) => {
+  setupThreadEnv(t, { THREAD_ALLOW_TOOLS: undefined });
+  const argv = core.buildClaudeArgs(argsCard());
+  assert.deepEqual(flagValues(argv, '--permission-mode'), ['dontAsk']);
+  assert.ok(!argv.includes('--dangerously-skip-permissions') && !argv.includes('--allow-dangerously-skip-permissions'));
+  assert.ok(!argv.includes('bypassPermissions'));
+  assert.deepEqual(flagValues(argv, '--disallowedTools'), ['Edit', 'Write', 'NotebookEdit', 'Agent']);
+  // the variadic tool lists come after the mode, so they cannot swallow it
+  assert.ok(argv.indexOf('--permission-mode') < argv.indexOf('--allowedTools'));
+});
+
+test('a write thread keeps acceptEdits and no deny list', (t) => {
+  setupThreadEnv(t, { THREAD_ALLOW_TOOLS: undefined });
+  const argv = core.buildClaudeArgs(argsCard({ mode: 'write' }));
+  assert.deepEqual(flagValues(argv, '--permission-mode'), ['acceptEdits']);
+  assert.equal(flagValues(argv, '--disallowedTools'), null);
 });
 
 test('THREAD_ALLOW_TOOLS replaces the list, "none" removes it, and a dash-led entry is dropped', (t) => {

@@ -1,0 +1,96 @@
+# CLAUDE.md
+
+Guidance for Claude Code when working in this repository. `README.md` is the user-facing reference for every feature; read the section for the area you are about to change. This file holds what the README does not: how to work here.
+
+## What this is
+
+`thread` is a Claude Code plugin. It starts side threads (background `claude -p` sessions that get a brief, work on one task and report back only when asked) and serves a local kanban board of tasks, ideas, milestones and threads. Plain Node ES modules, no dependencies, no build step.
+
+```text
+.claude-plugin/     plugin.json (the version lives only here), marketplace.json, icon.png
+.mcp.json           starts server/mcp.mjs as the plugin's MCP server
+hooks/, scripts/    SessionStart and UserPromptSubmit hooks (scripts/hook.mjs)
+skills/             the slash commands; each SKILL.md tells Claude which tool to call
+server/
+  state.mjs         paths, the state file and its lock
+  config.mjs        settings: mode, stages and roles, global and per-project files
+  sessions.mjs      session names, and the model a session runs on
+  core.mjs          cards, milestones, threads, the wrong-session guard, project listing
+  lanes.mjs         delegation lanes: reads the lane settings from the delegate skills (never writes them)
+  runs.mjs          sub-agent runs on a card: recorded by hooks, their transcripts read for the board
+  waits.mjs         the questions a session asks the user on the board, and their answers
+  runner.mjs        the detached process that runs one thread turn
+  mcp.mjs           the MCP server and its tools
+  http.mjs          the board server (loopback only, token, Host and Origin checks)
+  board.html        the board page: one self-contained file, no framework
+test/               node:test suites; fake-claude.mjs stands in for the claude CLI
+  fake-delegate/    fake delegate skills and relay for the lane tests
+  fixtures/         data and small scripts the tests run; node --test also runs every .mjs here, so a script must exit 0 with no arguments
+docs/               README screenshots
+```
+
+## Done test
+
+Run both from the repository root after every change, and report the real output:
+
+```bash
+node --test
+claude plugin validate .
+```
+
+A change to `server/board.html` also needs a look in a browser (see "Checking the board page"); the page tests only read its source. So does a CSS-only change: no test sees it.
+
+A test never passes an inline script to `node -e`; put the script in `test/fixtures/` (the plugin directory's validator flags it).
+
+## Rules that are easy to break
+
+- **The running plugin is not this folder.** Sessions load the installed copy under `~/.claude/plugins/cache/thread-marketplace/thread/<version>/`. An edit here changes nothing for a running session until it is released and installed (see "Releasing"). To try the working tree without releasing, start a separate session with `claude --plugin-dir .`.
+- **Never test against the owner's real data or boards.** Real data is in the plugin's data directory (`~/.claude/plugins/data/thread-thread-marketplace`, or `~/.claude/thread-data`). Tests and probe scripts set `THREAD_DATA_DIR` to a temporary folder (`setupThreadEnv` in `test/helpers.mjs` does it). Ports from 47800 up are the owner's live boards: use port 0 or another free port, and stop any server you start.
+- **Never run the real `claude` CLI from tests.** Set `THREAD_CLAUDE_BIN` to `test/fake-claude.mjs`. If a check truly needs the real CLI, say so first; it costs tokens and leaves a session file under `~/.claude/projects/` that must be deleted afterwards.
+- **Several plugin versions share one data directory.** Each open Claude Code session keeps the plugin version it started with until its window is reloaded, so an old process and a new one read and write the same state file. A new field must be safe for an older version to ignore, a stored value an older version writes must still be handled, and nothing may be migrated in place. The board is served by one session; from 0.8.2 a newer version replaces an older board.
+- **The data directory is owner-only.** A folder the plugin makes there goes through `mkdirPrivate`/`mkdirPrivateSync` and a file it writes gets `mode: PRIVATE_FILE` (both in `server/state.mjs`); `tightenDataDir()` narrows older ones at MCP start. Do not write into the data directory with the default modes.
+- **Stages are not fixed.** Never hard-code `in_progress`, `done` and so on outside the defaults in `server/config.mjs`. Use the project's effective config (`readConfig`) and its roles. A thread card's stage is always derived from its run state.
+- **The board's guarantees:** it listens on `127.0.0.1` only, requires the access token, checks Host and Origin on writes, makes no network calls, and cannot change settings. Do not weaken any of them.
+- **Text that reaches the page is set as text, never as HTML.** `board.html` has no `innerHTML` sinks; keep it that way.
+- **Cross-version tests run released code.** They take it from a git tag or a release commit (`RELEASED_REFS` in `test/helpers.mjs`), never `HEAD`, which stops meaning a release once new work is committed. A missing ref fails the test; only a checkout with no git history skips.
+- **No over-engineering.** Build what was asked. If a request is unclear or turns out to need a design decision, stop and ask.
+- **Secrets:** never print or log environment values, tokens or the contents of `board.token`.
+
+## Working agreements with the owner
+
+- **Commit or push only when the owner asks.** Work in the tree, verify, report, then wait for the word. Never push without it.
+- **The README changes with the feature.** Any change that adds, removes or alters a feature updates `README.md` in the same piece of work: the feature's own section, the Commands table, Troubleshooting, and "What's new". Keep it comprehensive: a reader should find every feature and be able to use it from the README alone. Internal changes (tests, refactors) need no README change.
+- **Real CLI checks.** When correctness depends on how Claude Code or a provider CLI behaves (hooks, transcripts and their timing, permissions, session continuation, relays), a fake is not proof: run the real CLI, at most a few runs. Set `THREAD_DATA_DIR` to a scratch folder and `THREAD_NO_HTTP=1`, work in a scratch project, never pass a permission-skipping flag, and afterwards delete the scratch session folders under `~/.claude/projects/` and check the listing is back as it was.
+- **Report plainly.** Say what was tested and what was not. A claim of "works" needs a run behind it.
+- **Delegation.** The owner prefers the lead to split work into bounded briefs for the sub-agents in `.claude/agents/` (`worker`, `worker-high`, `analyst`, `critic`; the models and efforts fixed in their files are the maintainer's defaults, change them to suit your own plan), run a `critic` pass on each finished chunk, and track each delegated task as a card on this project's board (`board_add`, `board_update`; never `done` unless verified). Write briefs that stand alone: files to touch, behaviour, the done test, and what not to do.
+- **Routing.** The delegation lanes are in `.delegate/config.json` (git-ignored; run through the `*-delegate` skills). Most work goes to the Claude sub-agents; the Codex lanes get a small share, for a hard problem a sub-agent got stuck on or an independent read-only second opinion. Never use the opencode "go" lanes (that plan is gone). No review or debate through the astra model unless the owner asks. Google models only for low-stakes bulk work.
+- **Side questions** the owner starts with `/thread:new` run as threads; do not wait for them or poll them.
+
+## Checking the board page
+
+The page is checked with headless Chrome against a demo server, never against the live board:
+
+1. A small script outside the repository sets `THREAD_DATA_DIR` to its own folder, writes a state file with invented data, and calls `startBoardServer(projectDir, { port, token })` from `server/http.mjs`.
+2. Screenshot: `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1 --user-data-dir=<temp> --window-size=1440,900 --virtual-time-budget=4000 --screenshot=<file>.png "http://127.0.0.1:<port>/?t=<token>#/<project key>"`. Add `/<card id>` to open a card. Headless Chrome will not go narrower than about 500 px.
+3. Clicks and typing need Chrome's DevTools protocol (`--remote-debugging-port`); plain screenshots cannot do them. Say what was not exercised.
+4. Check light and dark, a narrow width, a project with custom stages, and a chat-only project.
+
+Screenshots for `docs/` use invented data only (a fictional shop), and the header path is replaced with a neutral one such as `~/code/acme-shop`. Look at every image before it is committed: no real project names, paths, session ids or usernames.
+
+## Releasing
+
+1. Bump `version` in `.claude-plugin/plugin.json` (the only place it lives). Keep the `description` there and in `.claude-plugin/marketplace.json` in step.
+2. Add a line to "What's new" in the README.
+3. Run the done test.
+4. When the owner asks: commit, push, then `git tag vX.Y.Z && git push origin vX.Y.Z` and `gh release create vX.Y.Z` with notes written for users.
+5. Update the owner's install: `claude plugin marketplace update thread-marketplace`, then `claude plugin update thread@thread-marketplace`. Tell them which sessions still run the old version (`pgrep -fl "server/mcp.mjs"` shows the version folder of each) and that those windows need a reload.
+
+The repository is also submitted to Anthropic's plugin directory, whose validator scans every file in it. What it has flagged before, so do not reintroduce it: an inline `node -e` script in a test (use a file), a remote-looking URL next to a `${...}` placeholder, a missing icon. Keep every non-image file under 256 KiB and the repository under 512 files. `server/board.html` is the largest file, about 240 KiB when this was written (`wc -c server/board.html`; the limit is 262144 bytes): check it after every change to the page and trim before it gets near the limit.
+
+## Not yet tested
+
+Known gaps, so nobody assumes otherwise: real drag and drop between custom stages; a real clipboard write for "Copy report"; `/thread:setup` and the one-time setup hint in a live session; `--full` together with `--agent`; threads started from the board with the real CLI; screen readers; Windows.
+
+## What is planned
+
+Ideas and their notes are cards on this project's board (`/thread:board`), grouped under the milestone "Project management in thread". None is started; each needs the owner's go, and the larger ones need a design agreed first.

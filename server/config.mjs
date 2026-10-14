@@ -2,10 +2,10 @@
 // Two optional files with the same shape, <data dir>/config.json and <project data>/config.json.
 // Imports only state.mjs.
 import { randomBytes } from 'node:crypto';
-import { mkdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { dataDir, projectPaths } from './state.mjs';
+import { PRIVATE_FILE, dataDir, mkdirPrivate, projectPaths } from './state.mjs';
 
 export const DEFAULT_STAGES = [
   { id: 'idea', label: 'Idea' },
@@ -23,6 +23,11 @@ const MIN_STAGES = 2;
 const MAX_STAGES = 10;
 const MAX_LABEL = 30;
 const DEFAULT_ROLES = { start: 'new', working: 'in_progress', review: 'review', blocked: 'blocked', done: 'done' };
+
+// Chat-only mode has its own three columns, whatever stages the task board has. A thread runs in New, a thread whose turn
+// finished or failed waits in Review, an ended one is Done. The stored stage settings are not touched, so the task board gets its own back.
+export const CHAT_STAGES = [{ id: 'new', label: 'New' }, { id: 'review', label: 'Review' }, { id: 'done', label: 'Done' }];
+const CHAT_ROLES = { start: 'new', working: 'new', review: 'review', blocked: 'review', done: 'done' };
 
 export const CHAT_ONLY_MESSAGE = 'The task board is off for this project (chat-only). Run /thread:setup to turn it on.';
 
@@ -123,7 +128,8 @@ function readFile(path) {
 }
 
 // The effective config of a project: defaults, then the global file, then the project file.
-// stages and roles come together from the same file; mode is chosen on its own.
+// stages and roles come together from the same file; mode is chosen on its own. In chat-only mode `stages` and `roles`
+// are the fixed chat-only ones; the task board's own stay in `taskStages` and `taskRoles`.
 export function readConfig(projectDirArg) {
   const paths = configPaths(projectDirArg);
   const files = { global: readFile(paths.global), project: readFile(paths.project) };
@@ -133,10 +139,16 @@ export function readConfig(projectDirArg) {
   const stagesFrom = pick((c) => c.stages !== undefined);
   const stagesFile = stagesFrom === 'default' ? {} : files[stagesFrom].config;
   const stages = stagesFile.stages || DEFAULT_STAGES;
+  const mode = modeFrom === 'default' ? 'tasks' : files[modeFrom].config.mode;
+  const taskStages = stages.map((s) => ({ ...s }));
+  const taskRoles = fillRoles(stagesFile.roles, stages, stages.map((s) => s.id).join() === DEFAULT_STAGES.map((s) => s.id).join());
+  const chat = mode === 'chat';
   return {
-    mode: modeFrom === 'default' ? 'tasks' : files[modeFrom].config.mode,
-    stages: stages.map((s) => ({ ...s })),
-    roles: fillRoles(stagesFile.roles, stages, stages.map((s) => s.id).join() === DEFAULT_STAGES.map((s) => s.id).join()),
+    mode,
+    stages: chat ? CHAT_STAGES.map((s) => ({ ...s })) : taskStages,
+    roles: chat ? { ...CHAT_ROLES } : taskRoles,
+    taskStages,
+    taskRoles,
     source: { mode: modeFrom, stages: stagesFrom },
     exists: { global: files.global.exists, project: files.project.exists },
     invalid: { global: files.global.invalid, project: files.project.invalid },
@@ -148,7 +160,7 @@ export function readConfig(projectDirArg) {
 async function writeAtomic(path, text) {
   const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   try {
-    await writeFile(tmp, text, 'utf8');
+    await writeFile(tmp, text, { encoding: 'utf8', mode: PRIVATE_FILE });
     await rename(tmp, path);
   } catch (e) {
     await unlink(tmp).catch(() => {});
@@ -174,7 +186,7 @@ export async function saveConfig(projectDirArg, scope, patch) {
   if (patch.stages !== undefined && patch.roles === undefined) delete merged.roles;
   else if (patch.stages === undefined && isObject(patch.roles) && current.roles) merged.roles = { ...current.roles, ...patch.roles };
   const valid = validateConfig(merged);
-  await mkdir(join(path, '..'), { recursive: true });
+  await mkdirPrivate(join(path, '..'));
   await writeAtomic(path, JSON.stringify(valid, null, 2) + '\n');
   return readConfig(projectDirArg);
 }

@@ -14,4 +14,4 @@ Call the `board_add` tool for the task or idea in the arguments.
 
 Flags may appear anywhere in the arguments. Remove them from the text. If the tool says the task board is off, pass that on and stop.
 
-Confirm in one line with the card id, then return to the current work. Do not start working on the card.
+Confirm in one line with the card id, then return to the current work. Do not start working on the card. If the user then asks you to hand the card to a sub-agent, start the Agent call's description with the card id in brackets, for example `[c12] fix the rounding`: the board shows that agent's prompt, steps and report on the card.

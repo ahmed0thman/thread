@@ -1,20 +1,19 @@
 // thread plugin: detached process that runs one thread turn.
 // usage: node runner.mjs <projectDir> <cardId>
 import { spawn } from 'node:child_process';
-import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, createWriteStream, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { UUID_RE, activityPath, buildClaudeArgs, buildPrompt, buildRelayArgs, clip, findThread, isThread, projectPaths, readStateLocked, setRunState, tail, updateState } from './core.mjs';
 import { relayPath, resumeIdOf, unusableLane } from './lanes.mjs';
+import { MAX_EVENTS, MAX_TEXT, resultText, summarize } from './runs.mjs';
+import { PRIVATE_FILE, mkdirPrivateSync } from './state.mjs';
 
 const [projectDir, cardId] = process.argv.slice(2);
 const bin = process.env.THREAD_CLAUDE_BIN || 'claude';
 const LANE_GRACE_MS = Number(process.env.THREAD_LANE_GRACE_MS) > 0 ? Number(process.env.THREAD_LANE_GRACE_MS) : 20000;   // the runner's own limit comes this long after the relay's --timeout
 const LANE_KILL_MS = 15000;    // a relay told to stop gets this long to stop its child and write its result
 const MAX_LANE_EVENTS = 50 * 1024 * 1024;
-const MAX_EVENTS = 1000;
-const MAX_TEXT = 4000;
 const OUT_TAIL = 2000;
-const SUMMARY_KEYS = ['file_path', 'path', 'command', 'pattern', 'query', 'url', 'description', 'prompt'];
 const timeoutMs = (() => {
   const n = Number(process.env.THREAD_TIMEOUT_MS);
   return Number.isFinite(n) && n > 0 ? n : 1200000;
@@ -51,7 +50,7 @@ let laneRead = null;    // result.json, read once: { result: object or null }
 function startHeartbeat(logsDir) {
   const file = join(logsDir, `${cardId}.alive`);
   const beat = () => {
-    try { writeFileSync(file, JSON.stringify({ pid: process.pid, at: Date.now() })); } catch { /* ignore */ }
+    try { writeFileSync(file, JSON.stringify({ pid: process.pid, at: Date.now() }), { mode: PRIVATE_FILE }); } catch { /* ignore */ }
   };
   beat();
   setInterval(beat, 3000);
@@ -81,17 +80,6 @@ function writeActivity(event) {
   events += 1;
   const line = events > MAX_EVENTS ? { kind: 'truncated' } : event;
   try { appendFileSync(activityFile, JSON.stringify({ at: new Date().toISOString(), ...line }) + '\n'); } catch { /* the board's view is not worth failing the turn */ }
-}
-
-function summarize(input) {
-  const src = input && typeof input === 'object' ? input : {};
-  const key = SUMMARY_KEYS.find((k) => typeof src[k] === 'string' && src[k].trim());
-  return key ? clip(src[key], 300) : clip(JSON.stringify(src), 200);
-}
-
-function resultText(content) {
-  if (typeof content === 'string') return content;
-  return Array.isArray(content) ? content.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join(' ') : '';
 }
 
 // One line of the CLI's event stream: remember a result, note what the turn did.
@@ -387,14 +375,14 @@ async function main() {
 
   const paths = projectPaths(projectDir);
   try {
-    mkdirSync(paths.logs, { recursive: true });
+    mkdirPrivateSync(paths.logs);
     startHeartbeat(paths.logs);
-    outStream = createWriteStream(join(paths.logs, `${cardId}.out`), { flags: 'a' });
-    errStream = createWriteStream(join(paths.logs, `${cardId}.err`), { flags: 'a' });
+    outStream = createWriteStream(join(paths.logs, `${cardId}.out`), { flags: 'a', mode: PRIVATE_FILE });
+    errStream = createWriteStream(join(paths.logs, `${cardId}.err`), { flags: 'a', mode: PRIVATE_FILE });
     outStream.on('error', () => {});
     errStream.on('error', () => {});
     const activity = activityPath(projectDir, cardId, card.thread.turns.length);
-    writeFileSync(activity, ''); // a rerun of this turn starts clean
+    writeFileSync(activity, '', { mode: PRIVATE_FILE }); // a rerun of this turn starts clean
     activityFile = activity;
     const header = `--- turn ${card.thread.turns.length} ${new Date().toISOString()} ---\n`;
     outStream.write(header);
@@ -419,8 +407,8 @@ async function main() {
     const briefFile = join(paths.logs, `${cardId}.t${turnNo}.brief.txt`);
     try {
       rmSync(laneOut, { recursive: true, force: true });
-      mkdirSync(laneOut, { recursive: true });
-      writeFileSync(briefFile, prompt, { mode: 0o600 });
+      mkdirPrivateSync(laneOut);
+      writeFileSync(briefFile, prompt, { mode: PRIVATE_FILE });
     } catch (e) {
       spawnError = e;
       return finish();

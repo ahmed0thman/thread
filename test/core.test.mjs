@@ -2,9 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { CORE_PATH, setupThreadEnv, cleanAmbientEnv, statePathFor, REPLY_WITH_MAP, writeStateFile, emptyState, threadCard } from './helpers.mjs';
+import { CORE_PATH, TEST_DIR, setupThreadEnv, cleanAmbientEnv, statePathFor, REPLY_WITH_MAP, writeStateFile, emptyState, threadCard } from './helpers.mjs';
 import * as core from '../server/core.mjs';
 
 cleanAmbientEnv();
@@ -130,17 +129,11 @@ test('updateState returns the value returned by fn', async (t) => {
 
 test('concurrency: 20 processes x 10 updateState increments end at 200', { timeout: 50000 }, async (t) => {
   const e = setupThreadEnv(t);
-  const code = `
-    const core = await import(process.env.CORE_URL);
-    for (let i = 0; i < 10; i++) {
-      await core.updateState(process.env.PROJ, (s) => { s.counter = (s.counter || 0) + 1; });
-    }
-  `;
   const children = [];
   t.after(() => children.forEach((c) => c.kill('SIGKILL')));
   const runs = Array.from({ length: 20 }, () => new Promise((resolve, reject) => {
-    const c = spawn(process.execPath, ['--input-type=module', '-e', code], {
-      env: { ...process.env, CORE_URL: pathToFileURL(CORE_PATH).href, PROJ: e.projectDir },
+    const c = spawn(process.execPath, [path.join(TEST_DIR, 'fixtures', 'increment.mjs'), CORE_PATH, e.projectDir], {
+      env: process.env,
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     children.push(c);
@@ -200,8 +193,7 @@ function plantStaleLock(lock, { nonEmpty = false } = {}) {
 
 function runAddCard(projectDir) {
   return new Promise((resolve, reject) => {
-    const code = `import(${JSON.stringify(CORE_PATH)}).then((m) => m.addCard(${JSON.stringify(projectDir)}, { title: 'x' })).then((c) => console.log(c.id)).catch((e) => { console.error(e.message); process.exit(1); });`;
-    const p = spawn(process.execPath, ['-e', code], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const p = spawn(process.execPath, [path.join(TEST_DIR, 'fixtures', 'add-card.mjs'), CORE_PATH, projectDir], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = ''; let err = '';
     p.stdout.on('data', (d) => { out += d; });
     p.stderr.on('data', (d) => { err += d; });

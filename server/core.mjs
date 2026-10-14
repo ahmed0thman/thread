@@ -11,11 +11,13 @@ import { fileURLToPath } from 'node:url';
 import { dataDir, envValue, now, projectKey, projectPaths, readState, updateState, withLock } from './state.mjs';
 import { EFFORTS, cleanEffort, cleanModel, collapse, sameSession, sessionModel } from './sessions.mjs';
 import { ChatOnlyError, DEFAULT_STAGES, readConfig } from './config.mjs';
+import { openWaits } from './waits.mjs';
 import { RESUME, laneSnapshot, requireRunnableLane, unusableLane } from './lanes.mjs';
 
 export * from './state.mjs';
 export * from './sessions.mjs';
 export * from './config.mjs';
+export * from './waits.mjs';
 
 // The default stage ids. A project's own stages come from readConfig.
 export const STATUSES = DEFAULT_STAGES.map((s) => s.id);
@@ -58,8 +60,10 @@ function listedProject(key) {
     let newest = NaN;
     let threads = 0;
     let running = 0;
+    let waiting = 0;
     for (const c of s.cards) {
       if (!c || typeof c !== 'object') continue;
+      waiting += openWaits(c).length;
       const t = Date.parse(c.updatedAt);
       if (Number.isFinite(t) && !(t <= newest)) newest = t;
       if (c.kind === 'thread') {
@@ -76,6 +80,8 @@ function listedProject(key) {
       cards: s.cards.length,
       threads,
       running,
+      // items waiting for the user; chat-only projects do not show them
+      waiting: readConfig(s.projectDir).mode === 'chat' ? 0 : waiting,
       lastActivity: new Date(Number.isFinite(newest) ? newest : st.mtimeMs).toISOString(),
     };
   } catch {
@@ -188,22 +194,26 @@ function statusForRunState(roles, runState) {
 
 export function setRunState(projectDirArg, card, runState) {
   card.thread.runState = runState;
-  card.status = statusForRunState(readConfig(projectDirArg).roles, runState);
+  // The stored stage is always one of the task board's own, also in chat-only mode (which shows other columns): an older plugin version reads it.
+  card.status = statusForRunState(readConfig(projectDirArg).taskRoles, runState);
   card.updatedAt = now();
 }
 
 // The stage a card is shown in. A thread: always the stage for its run state, so it follows a
 // change of roles and a status written by an older plugin version. Any other card: its own
-// stage when that is still one, else the start stage. The stored status is not rewritten.
+// stage when that is still one of the task board's, else its start stage (in chat-only mode too: those cards
+// are hidden there, and the stage they come back in is the task board's). The stored status is not rewritten.
 export function effectiveStatus(card, cfg) {
   if (isThread(card)) return statusForRunState(cfg.roles, card.thread.runState);
-  return cfg.stages.some((s) => s.id === card.status) ? card.status : cfg.roles.start;
+  return cfg.taskStages.some((s) => s.id === card.status) ? card.status : cfg.taskRoles.start;
 }
 
 // done and total over the cards under a milestone.
 export function milestoneProgress(cards, milestoneId, cfg) {
   const kids = cards.filter((c) => c.parent === milestoneId);
-  return { done: kids.filter((c) => effectiveStatus(c, cfg) === cfg.roles.done).length, total: kids.length };
+  // A thread is done in the stage its run state maps to; any other card in the task board's done stage, in chat-only mode too.
+  const done = (c) => effectiveStatus(c, cfg) === (isThread(c) ? cfg.roles.done : cfg.taskRoles.done);
+  return { done: kids.filter(done).length, total: kids.length };
 }
 
 // Checks a parent for `card` (kind, or null when not known yet) against the state.
@@ -244,6 +254,15 @@ export const tail = (s, n = 500) => collapse(s).slice(-n);
 
 // ---------------------------------------------------------------- board cards
 
+// What happened to a task or idea card: created, moved, edited, by the user or by Claude. Newest last, at most
+// MAX_HISTORY entries. An older plugin version ignores the field and keeps it.
+export const MAX_HISTORY = 50;
+function addHistory(card, by, entry, at = now()) {
+  if (!Array.isArray(card.history)) card.history = [];
+  card.history.push({ at, by: by === 'user' ? 'user' : 'claude', ...entry });
+  if (card.history.length > MAX_HISTORY) card.history.splice(0, card.history.length - MAX_HISTORY);
+}
+
 export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent, lane } = {}) {
   const cfg = readConfig(projectDirArg);
   requireTasks(cfg);
@@ -274,6 +293,7 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
     };
     if (parentId) card.parent = parentId;
     if (laneName) card.lane = laneName;
+    addHistory(card, source, { type: 'created', to: status }, ts);
     state.cards.push(card);
     return card;
   });
@@ -284,7 +304,8 @@ export async function updateCard(projectDirArg, id, { title, note, status, paren
   if (title !== undefined) {
     if (typeof title !== 'string' || !title.trim()) throw new Error('title must not be empty');
   }
-  if (status !== undefined) checkStatus(cfg, status);
+  // Chat-only has its own columns; a task card's stage is refused there (below) for the board being off, not for its name.
+  if (status !== undefined && cfg.mode !== 'chat') checkStatus(cfg, status);
   const parentId = cleanParent(parent);
   const laneName = cleanLane(lane);
   return updateState(projectDirArg, (state) => {
@@ -295,18 +316,27 @@ export async function updateCard(projectDirArg, id, { title, note, status, paren
       throw new Error('thread status follows the thread');
     }
     let changed = false;
+    const fields = [];
     if (parentId) {
-      if (card.parent !== parentId) { checkParent(state, parentId, card.kind); card.parent = parentId; changed = true; }
-    } else if (parentId === null && card.parent !== undefined) { delete card.parent; changed = true; }
+      if (card.parent !== parentId) { checkParent(state, parentId, card.kind); card.parent = parentId; changed = true; fields.push('milestone'); }
+    } else if (parentId === null && card.parent !== undefined) { delete card.parent; changed = true; fields.push('milestone'); }
     if (laneName) {
-      if (card.lane !== laneName) { checkLaneKind(card.kind); card.lane = laneName; changed = true; }
-    } else if (laneName === null && card.lane !== undefined) { delete card.lane; changed = true; }
-    if (title !== undefined && title.trim() !== card.title) { card.title = title.trim(); changed = true; }
-    if (note !== undefined && String(note) !== card.note) { card.note = String(note ?? ''); changed = true; }
-    if (status !== undefined && status !== card.status) { card.status = status; changed = true; }
+      if (card.lane !== laneName) { checkLaneKind(card.kind); card.lane = laneName; changed = true; fields.push('lane'); }
+    } else if (laneName === null && card.lane !== undefined) { delete card.lane; changed = true; fields.push('lane'); }
+    if (title !== undefined && title.trim() !== card.title) { card.title = title.trim(); changed = true; fields.push('title'); }
+    if (note !== undefined && String(note) !== card.note) { card.note = String(note ?? ''); changed = true; fields.push('note'); }
+    const from = card.status;
+    // A thread's stored stage is set by its run state only: a status it may be sent (its own, or the one it is shown in) is no change.
+    if (status !== undefined && !isThread(card) && status !== card.status) { card.status = status; changed = true; }
     if (changed) {
-      card.updatedAt = now();
+      const ts = now();
+      card.updatedAt = ts;
       if (source === 'user') card.seenByClaude = false;
+      // a thread's own page shows its turns, not this
+      if (!isThread(card)) {
+        if (card.status !== from) addHistory(card, source, { type: 'moved', from, to: card.status }, ts);
+        if (fields.length) addHistory(card, source, { type: 'edited', fields }, ts);
+      }
     }
     return card;
   });
@@ -501,9 +531,11 @@ export function listAgents(projectDirArg, userDir = join(homedir(), '.claude', '
 
 export function buildClaudeArgs(card) {
   const t = card.thread;
+  // Read mode names its permission mode too, since the CLI otherwise takes the user's own default (a settings file may skip prompts
+  // altogether). dontAsk refuses everything that would prompt; the deny rule beats any allow rule the user's settings add for an edit tool.
   const modeArgs = t.mode === 'write'
     ? ['--permission-mode', 'acceptEdits']
-    : ['--disallowedTools', 'Edit', 'Write', 'NotebookEdit'];
+    : ['--permission-mode', 'dontAsk', '--disallowedTools', 'Edit', 'Write', 'NotebookEdit', 'Agent'];
   const allow = allowedTools();
   const allowArgs = allow.length ? ['--allowedTools', ...allow] : [];
   const dirs = Array.isArray(t.dirs) ? t.dirs.filter((d) => typeof d === 'string' && isAbsolute(d)) : [];
@@ -723,7 +755,7 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
       kind: 'thread',
       title: t,
       note: '',
-      status: readConfig(projectDirArg).roles.working,
+      status: readConfig(projectDirArg).taskRoles.working,
       source: 'claude',
       seenByClaude: true,
       createdAt: ts,
