@@ -4,13 +4,14 @@
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readdir, rm } from 'node:fs/promises';
-import { readFileSync, statSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dataDir, envValue, now, projectKey, projectPaths, readState, updateState, withLock } from './state.mjs';
 import { EFFORTS, cleanEffort, cleanModel, collapse, sameSession, sessionModel } from './sessions.mjs';
 import { ChatOnlyError, DEFAULT_STAGES, readConfig } from './config.mjs';
+import { RESUME, laneSnapshot, requireRunnableLane, unusableLane } from './lanes.mjs';
 
 export * from './state.mjs';
 export * from './sessions.mjs';
@@ -220,6 +221,18 @@ const cleanParent = (parent) => {
   return parent.trim();
 };
 
+// A lane (see lanes.mjs) belongs to a task or an idea. undefined: not given; null: given empty, which removes it.
+const cleanLane = (lane) => {
+  if (lane === undefined) return undefined;
+  if (lane === null || (typeof lane === 'string' && !lane.trim())) return null;
+  if (typeof lane !== 'string') throw new Error('lane must be a lane name');
+  return lane.trim();
+};
+export function checkLaneKind(kind) {
+  if (kind === 'milestone') throw new Error('a milestone cannot have a lane');
+  if (kind === 'thread') throw new Error('a thread\'s lane is chosen when it starts (thread_start with lane, or start a card that has one)');
+}
+
 // The first n characters of a collapsed text, with an ellipsis when cut.
 export function clip(s, n) {
   const t = collapse(s);
@@ -231,7 +244,7 @@ export const tail = (s, n = 500) => collapse(s).slice(-n);
 
 // ---------------------------------------------------------------- board cards
 
-export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent } = {}) {
+export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent, lane } = {}) {
   const cfg = readConfig(projectDirArg);
   requireTasks(cfg);
   const t = typeof title === 'string' ? title.trim() : '';
@@ -242,6 +255,8 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
   if (!KINDS.includes(kind)) throw new Error(`invalid kind "${kind}" (use ${KINDS.join(', ')})`);
   if (source !== 'claude' && source !== 'user') throw new Error(`invalid source "${source}"`);
   const parentId = cleanParent(parent);
+  const laneName = cleanLane(lane);
+  if (laneName) checkLaneKind(kind);
   return updateState(projectDirArg, (state) => {
     if (parentId) checkParent(state, parentId, kind);
     state.seq += 1;
@@ -258,18 +273,20 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
       updatedAt: ts,
     };
     if (parentId) card.parent = parentId;
+    if (laneName) card.lane = laneName;
     state.cards.push(card);
     return card;
   });
 }
 
-export async function updateCard(projectDirArg, id, { title, note, status, parent } = {}, { source = 'claude' } = {}) {
+export async function updateCard(projectDirArg, id, { title, note, status, parent, lane } = {}, { source = 'claude' } = {}) {
   const cfg = readConfig(projectDirArg);
   if (title !== undefined) {
     if (typeof title !== 'string' || !title.trim()) throw new Error('title must not be empty');
   }
   if (status !== undefined) checkStatus(cfg, status);
   const parentId = cleanParent(parent);
+  const laneName = cleanLane(lane);
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, id);
     if (!isThread(card)) requireTasks(cfg);
@@ -281,6 +298,9 @@ export async function updateCard(projectDirArg, id, { title, note, status, paren
     if (parentId) {
       if (card.parent !== parentId) { checkParent(state, parentId, card.kind); card.parent = parentId; changed = true; }
     } else if (parentId === null && card.parent !== undefined) { delete card.parent; changed = true; }
+    if (laneName) {
+      if (card.lane !== laneName) { checkLaneKind(card.kind); card.lane = laneName; changed = true; }
+    } else if (laneName === null && card.lane !== undefined) { delete card.lane; changed = true; }
     if (title !== undefined && title.trim() !== card.title) { card.title = title.trim(); changed = true; }
     if (note !== undefined && String(note) !== card.note) { card.note = String(note ?? ''); changed = true; }
     if (status !== undefined && status !== card.status) { card.status = status; changed = true; }
@@ -310,10 +330,31 @@ export async function removeCard(projectDirArg, id) {
   const { logs } = projectPaths(projectDirArg);
   try {
     for (const name of await readdir(logs)) {
-      if (name.startsWith(`${id}.`)) await rm(join(logs, name), { force: true });
+      if (name.startsWith(`${id}.`)) await rm(join(logs, name), { recursive: true, force: true });
     }
   } catch { /* no logs folder, or a file that cannot be removed */ }
+  await sweepOrphanLogs(projectDirArg).catch(() => {});
   return true;
+}
+
+// Log files and folders of cards that are no longer in the state: an older plugin version deletes a card without a lane thread's folders.
+// Only entries named c<digits>.<anything> whose card id is not in the state are removed, under the state lock; a symlink is removed itself, never followed.
+const CARD_LOG_RE = /^(c[0-9]+)\./;
+export async function sweepOrphanLogs(projectDirArg) {
+  const { logs, state: stateFile } = projectPaths(projectDirArg);
+  if (!existsSync(logs) || !existsSync(stateFile)) return 0;   // no state: nothing says which logs are orphans
+  return withLock(projectDirArg, async () => {
+    if (!existsSync(stateFile)) return 0;   // gone since the check above: readState would report no cards
+    const ids = new Set(readState(projectDirArg).cards.map((c) => c.id));
+    let n = 0;
+    for (const name of await readdir(logs)) {
+      const m = CARD_LOG_RE.exec(name);
+      if (!m || ids.has(m[1])) continue;
+      await rm(join(logs, name), { recursive: true, force: true });
+      n += 1;
+    }
+    return n;
+  });
 }
 
 export async function markSeen(projectDirArg) {
@@ -331,8 +372,10 @@ export async function markSeen(projectDirArg) {
 
 // ---------------------------------------------------------------- threads
 
+const LANE_READ_NOTE = 'This run is read-only: answer from reading and reporting, without editing files and without trying to leave plan mode.';
 const MAP_INSTRUCTION = 'After the digest, add a fenced code block tagged thread-map holding a JSON array of at most 12 steps in the order they happened, each {"kind":"did|found|decided|changed|open","text":"one short sentence","ref":"optional path:line"}.';
-const MAP_BLOCK_RE = /```thread-map[^\n]*\n([\s\S]*?)```/i;
+// The step map's fence: `thread-map`, and the spellings other providers wrote (`threadmap`, `thread_map`). A fence that is never closed runs to the end.
+const MAP_BLOCK_RE = /```thread[-_]?map[^\n]*\n([\s\S]*?)(?:```|$)/i;
 const MAP_KINDS = ['did', 'found', 'decided', 'changed', 'open'];
 const SECTION_KEYS = ['happened', 'decided', 'changed', 'open'];
 
@@ -478,6 +521,18 @@ export function buildClaudeArgs(card) {
   return [...base, '--output-format', 'stream-json', '--verbose', ...who, ...modeArgs, ...allowArgs, ...dirArgs];
 }
 
+// The arguments for a lane thread's relay. The brief goes in a file, never in argv. A follow-up resumes the provider's session.
+export function buildRelayArgs(projectDirArg, card, { brief, outDir, timeoutMs }) {
+  const t = card.thread;
+  const l = t.lane;
+  const args = ['--brief', brief, '--cd', projectDirArg, '--lane', l.name, '--out-dir', outDir, '--timeout', `${Math.max(1, Math.round(timeoutMs / 1000))}s`];
+  if (t.mode !== 'write') args.push('--read-only');
+  // codex applies its sandbox on a resumed turn only when one is passed, so every turn passes it.
+  else if (l.implementer === 'codex') args.push('--sandbox', l.sandbox || 'workspace-write');
+  if (l.session) args.push(RESUME[l.implementer].flag, l.session);
+  return args;
+}
+
 // One turn's activity file. Shared by the runner (writes) and readActivity (reads).
 export function activityPath(projectDirArg, cardId, turnNumber) {
   if (!CARD_ID_RE.test(String(cardId))) throw new Error(`invalid card id: ${cardId}`);
@@ -504,7 +559,9 @@ export function buildPrompt(card) {
   const t = card.thread;
   const turn = t.turns[t.turns.length - 1];
   const text = turn ? turn.prompt : '';
-  if (!t.sessionId) {
+  // A lane's read-only turn runs in the provider's plan or read-only mode: say what that asks of the answer.
+  const laneRead = t.lane != null && t.mode !== 'write' ? [LANE_READ_NOTE] : [];
+  if (!t.sessionId && !(t.lane && t.lane.session)) {
     const brief = threadContext(t) === 'brief';
     const context = brief && typeof t.brief === 'string' && t.brief.trim() ? ['## Context', t.brief.trim()] : [];
     return [
@@ -517,6 +574,7 @@ export function buildPrompt(card) {
       t.mode === 'write'
         ? 'You may edit files. Keep changes limited to this task.'
         : 'Do not modify any files. Read, search and analyse only.',
+      ...laneRead,
       'End your reply with a hand-back digest using exactly these headings: "## Happened", "## Decided", "## Changed", "## Open".',
       MAP_INSTRUCTION,
     ].join('\n');
@@ -524,6 +582,7 @@ export function buildPrompt(card) {
   return [
     `[side thread ${card.id}: follow-up]`,
     text,
+    ...laneRead,
     'End your reply with the same four-heading hand-back digest.',
     MAP_INSTRUCTION,
   ].join('\n');
@@ -587,7 +646,7 @@ function launchRunner(projectDirArg, card) {
 }
 
 // The checks both ways of starting a thread share. Returns what beginThread stores.
-async function launchOptions(projectDirArg, { sessionId, mode, extraDirs, context = 'brief', brief, agent, model, effort }) {
+async function launchOptions(projectDirArg, { sessionId, mode, extraDirs, context = 'brief', brief, agent, model, effort, lane }) {
   if (typeof sessionId !== 'string' || !UUID_RE.test(sessionId)) {
     throw new Error('session_id must be a UUID (the main session id)');
   }
@@ -599,6 +658,15 @@ async function launchOptions(projectDirArg, { sessionId, mode, extraDirs, contex
   }
   const dirs = normalizeDirs(extraDirs);
   const name = typeof agent === 'string' ? agent.trim() : '';
+  const laneName = typeof lane === 'string' ? lane.trim() : '';
+  if (laneName) {
+    const given = (v) => typeof v === 'string' && v.trim();
+    if (name || given(model) || given(effort)) throw new Error('a lane brings its own provider, model and effort: give lane without agent, model or effort');
+    if (context === 'full') throw new Error('a lane thread cannot be a full copy of the conversation: use context "brief" with a lane');
+    if (dirs.length) throw new Error('a lane thread cannot take extra_dirs: the provider\'s relay has no option for them');
+    const l = await requireRunnableLane(projectDirArg, laneName, mode);
+    return { context: 'brief', brief: text, dirs, agent: null, model: null, effort: null, lane: laneSnapshot(l) };
+  }
   if (name) {
     const known = listAgents(projectDirArg).map((a) => a.name);
     if (!known.includes(name)) {
@@ -638,11 +706,11 @@ function beginThread(projectDirArg, card, { sessionId, mode, prompt, ...opts }) 
   launchRunner(projectDirArg, card);
 }
 
-export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs, context, brief, agent, model, effort, parent } = {}) {
+export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs, context, brief, agent, model, effort, parent, lane } = {}) {
   refuseInsideThread('start');
   const t = typeof title === 'string' ? title.trim() : '';
   const k = typeof task === 'string' ? task.trim() : '';
-  const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief, agent, model, effort });
+  const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief, agent, model, effort, lane });
   if (!t) throw new Error('title must not be empty');
   if (!k) throw new Error('task must not be empty');
   const parentId = cleanParent(parent);
@@ -670,20 +738,24 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
 
 // Turns a task or idea card into a thread in place: same id, title, note and source.
 // Nobody writes a brief on the board, so in brief mode the card's note is the brief.
+// A card that has a lane runs on it; the lane is read from the card, never from the caller.
 export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mode = 'read', extraDirs, context, agent } = {}) {
   refuseInsideThread('start');
   requireTasks(readConfig(projectDirArg));
   const existing = readState(projectDirArg).cards.find((c) => c.id === cardId);
-  const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief: existing && existing.note, agent });
+  const cardLane = existing && existing.kind !== 'thread' && existing.kind !== 'milestone' && typeof existing.lane === 'string' ? existing.lane : '';
+  const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief: existing && existing.note, agent, lane: cardLane });
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, cardId);
     if (card.kind === 'thread') throw new Error(`card ${cardId} is already a thread`);
     if (card.kind === 'milestone') throw new Error(`card ${cardId} is a milestone and cannot be started as a thread`);
+    if ((typeof card.lane === 'string' ? card.lane : '') !== cardLane) throw new Error(`card ${cardId} changed while it was starting; try again`);
     const text = typeof card.note === 'string' ? card.note.trim() : '';
     card.kind = 'thread';
     // In brief mode the note already travels as the brief, so the task is the title alone.
     const prompt = text && opts.context === 'full' ? `${card.title}\n\n${text}` : card.title;
     beginThread(projectDirArg, card, { sessionId, mode, prompt, ...opts });
+    delete card.lane;   // the thread holds it now
     return card;
   });
 }
@@ -692,12 +764,29 @@ export async function continueThread(projectDirArg, id, message, { sessionId } =
   refuseInsideThread('continue');
   const m = typeof message === 'string' ? message.trim() : '';
   if (!m) throw new Error('message must not be empty');
+  // A lane thread is checked against the lanes as they are now, before the lock is taken (loading them can take seconds).
+  let fresh = null;
+  const before = readState(projectDirArg).cards.find((c) => c.id === id);
+  if (isThread(before) && before.thread.lane != null && (before.thread.runState === 'idle' || before.thread.runState === 'failed')) {
+    const l = before.thread.lane;
+    const bad = unusableLane(l);
+    if (bad) throw new Error(`thread ${id} cannot continue: ${bad}; start a new thread instead`);
+    if (!l.session) throw new Error(`thread ${id} has no session to continue: the ${l.implementer} provider gave none; start a new thread instead`);
+    fresh = await requireRunnableLane(projectDirArg, l.name, before.thread.mode);
+    if (fresh.implementer !== l.implementer) {
+      throw new Error(`lane "${l.name}" now runs on ${fresh.implementer}, which cannot continue a ${l.implementer} session; start a new thread instead`);
+    }
+  }
   return updateState(projectDirArg, (state) => {
     const card = findThread(state, id);
     const th = card.thread;
     if (th.runState === 'running') throw new Error(`thread ${id} is still running`);
     if (th.runState === 'ended') throw new Error(`thread ${id} has ended`);
-    if (!th.sessionId) throw new Error(`thread ${id} has no session yet (its first turn did not finish); start a new thread instead`);
+    if (th.lane != null) {
+      if (!fresh) throw new Error(`thread ${id} changed while the follow-up was starting; try again`);
+      if (!th.lane.session) throw new Error(`thread ${id} has no session to continue: the ${th.lane.implementer} provider gave none; start a new thread instead`);
+      th.lane = laneSnapshot(fresh, th.lane.session);
+    } else if (!th.sessionId) throw new Error(`thread ${id} has no session yet (its first turn did not finish); start a new thread instead`);
     const turn = { prompt: m, startedAt: now(), finishedAt: null, ok: null, result: null, error: null };
     if (typeof sessionId === 'string' && sessionId && !sameSession(sessionId, th.parentSessionId)) turn.sentBy = sessionId.toLowerCase();
     th.turns.push(turn);
@@ -739,7 +828,8 @@ export async function reportThread(projectDirArg, id, { sessionId, confirmCode }
     const card = findThread(state, id);
     const th = card.thread;
     if (th.lastResult == null) {
-      throw new Error(`thread ${id} has no successful turn yet (state: ${th.runState})`);
+      const last = th.turns[th.turns.length - 1];
+      throw new Error(`thread ${id} has no successful turn yet (state: ${th.runState})${last && last.ok === false && last.error ? `; its last turn failed: ${clip(last.error, 300)}` : ''}`);
     }
     let otherSession = false;
     if (sessionId != null) {

@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as core from './core.mjs';
+import { listLanesWithRelay } from './lanes.mjs';
 
 const MAX_BODY = 64 * 1024;
 const MAX_PORT_TRIES = 20;
@@ -133,13 +134,14 @@ async function handleProject(req, res, projectDir, sub, query) {
   const method = req.method;
   const isState = method === 'GET' && sub === '/state';
   const isAgents = method === 'GET' && sub === '/agents';
+  const isLanes = method === 'GET' && sub === '/lanes';
   const isCardCreate = method === 'POST' && sub === '/cards';
   const cm = /^\/cards\/([A-Za-z0-9_-]{1,64})$/.exec(sub);
   const sm = /^\/cards\/([A-Za-z0-9_-]{1,64})\/start$/.exec(sub);
   const tm = /^\/threads\/([A-Za-z0-9_-]{1,64})\/(messages|end|activity|report-request)$/.exec(sub);
   const threadRoute = tm ? `${method} ${tm[2]}` : '';
   const isActivity = threadRoute === 'GET activity';
-  const known = isState || isAgents || isCardCreate || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
+  const known = isState || isAgents || isLanes || isCardCreate || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
   if (!known) {
     req.resume();
     send(res, 404, { error: 'not found' });
@@ -148,7 +150,7 @@ async function handleProject(req, res, projectDir, sub, query) {
 
   const viewOf = (card) => withViews(card, core.readConfig(projectDir), core.readState(projectDir).cards);
   const present = core.dirExists(projectDir);
-  if (!isState && !isAgents && !isActivity && !present) {
+  if (!isState && !isAgents && !isLanes && !isActivity && !present) {
     req.resume();
     send(res, 409, { error: `project folder not found: ${projectDir}` });
     return;
@@ -170,6 +172,11 @@ async function handleProject(req, res, projectDir, sub, query) {
 
   if (isAgents) {
     send(res, 200, { agents: core.listAgents(projectDir) });
+    return;
+  }
+
+  if (isLanes) {
+    send(res, 200, await listLanesWithRelay(projectDir));
     return;
   }
 
@@ -419,6 +426,7 @@ export async function startBoardServer(projectDir, { port = 0, token } = {}) {
     throw e;
   }
   server.on('error', (e) => log('server error:', e && e.message));
+  core.sweepOrphanLogs(projectDir).catch(() => {});   // logs an older version left behind
   const actual = server.address().port;
   return { server, port: actual, url: `http://127.0.0.1:${actual}/` };
 }

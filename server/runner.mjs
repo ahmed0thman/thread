@@ -1,12 +1,16 @@
 // thread plugin: detached process that runs one thread turn.
 // usage: node runner.mjs <projectDir> <cardId>
 import { spawn } from 'node:child_process';
-import { appendFileSync, createWriteStream, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { UUID_RE, activityPath, buildClaudeArgs, buildPrompt, clip, findThread, isThread, projectPaths, readStateLocked, setRunState, tail, updateState } from './core.mjs';
+import { UUID_RE, activityPath, buildClaudeArgs, buildPrompt, buildRelayArgs, clip, findThread, isThread, projectPaths, readStateLocked, setRunState, tail, updateState } from './core.mjs';
+import { relayPath, resumeIdOf, unusableLane } from './lanes.mjs';
 
 const [projectDir, cardId] = process.argv.slice(2);
 const bin = process.env.THREAD_CLAUDE_BIN || 'claude';
+const LANE_GRACE_MS = Number(process.env.THREAD_LANE_GRACE_MS) > 0 ? Number(process.env.THREAD_LANE_GRACE_MS) : 20000;   // the runner's own limit comes this long after the relay's --timeout
+const LANE_KILL_MS = 15000;    // a relay told to stop gets this long to stop its child and write its result
+const MAX_LANE_EVENTS = 50 * 1024 * 1024;
 const MAX_EVENTS = 1000;
 const MAX_TEXT = 4000;
 const OUT_TAIL = 2000;
@@ -36,6 +40,11 @@ let killTimer = null;
 let timeoutTimer = null;
 let outStream = null;
 let errStream = null;
+let lane = null;        // the thread's lane while this turn runs on one: { implementer, ... }
+let laneOut = null;     // that turn's relay output folder
+let laneMode = 'read';   // the thread's access, for the note about files
+let laneBad = '';       // why the thread's lane record cannot run (then nothing runs at all)
+let laneRead = null;    // result.json, read once: { result: object or null }
 
 // Heartbeat: core treats the runner as alive only while this file is fresh and
 // names our pid, so a reused pid is never mistaken for a live runner.
@@ -56,7 +65,7 @@ function killChild() {
       if (child && !exitInfo) {
         try { child.kill('SIGKILL'); } catch { /* ignore */ }
       }
-    }, 3000);
+    }, lane ? LANE_KILL_MS : 3000);
   }
 }
 
@@ -122,11 +131,136 @@ function onStdout(chunk) {
   for (const l of lines) onStreamLine(l);
 }
 
+// What a lane turn left in its folder: result.json, parsed once; null when it is missing or unreadable.
+function laneResult() {
+  if (laneRead) return laneRead.result;
+  let result = null;
+  try {
+    const v = JSON.parse(readFileSync(join(laneOut, 'result.json'), 'utf8'));
+    if (v && typeof v === 'object' && !Array.isArray(v)) result = v;
+  } catch { /* no result: the relay stopped before it wrote one */ }
+  laneRead = { result };
+  return result;
+}
+
+const firstLine = (text) => (String(text).split('\n').map((l) => l.trim()).find(Boolean) || '');
+const lastLine = (lines) => (Array.isArray(lines) ? lines.map((l) => String(l).trim()).filter(Boolean).pop() || '' : '');
+const MAX_FILES = 8;
+
+// The file names in a relay's touchedFiles (git porcelain lines such as " M a.txt" or "?? b.txt"), capped.
+function touchedNames(r) {
+  if (!Array.isArray(r.touchedFiles)) return [];
+  return r.touchedFiles.filter((l) => typeof l === 'string' && l.trim()).map((l) => clip(l.trim().replace(/^\S+\s+/, ''), 80));
+}
+const fileList = (names) => names.slice(0, MAX_FILES).join(', ') + (names.length > MAX_FILES ? ` and ${names.length - MAX_FILES} more` : '');
+
+// The relays fill touchedFiles from `git status` after the run: everything uncommitted in the working tree, not only what this turn did.
+const treeChanges = (names) => `Uncommitted changes in the working tree after this turn (from the relay): ${fileList(names)}.`;
+
+// One plain line about files, from what the relay reported: a read-only turn that may have changed files (true, or null for a
+// provider whose read-only mode is only a tripwire), or the working tree's uncommitted files after a write turn. '' when there is nothing to say.
+function filesNote(r, who) {
+  const names = touchedNames(r);
+  if (laneMode === 'read') {
+    if (r.readOnlyViolation === true || (r.readOnlyViolation === null && 'readOnlyViolation' in r)) {
+      return `Note: ${who} reported that it may have changed files during this read-only turn.${names.length ? ' ' + treeChanges(names) : ''} Check the working tree.`;
+    }
+    return '';
+  }
+  return names.length ? treeChanges(names) : '';
+}
+
+// The last failure message a provider wrote into its events.jsonl, for a result that gives no reason of its own (a codex run with a bad
+// model has no error and an empty stderrTail). codex: turn.failed, else the last top-level error event; opencode: an error event;
+// claude: a result event with is_error. A message that is itself a JSON error body is reduced to its inner message. '' when there is none.
+function eventsFailure(who) {
+  try {
+    const file = join(laneOut, 'events.jsonl');
+    if (statSync(file).size > MAX_LANE_EVENTS) return '';
+    let failed = '', errored = '';
+    for (const l of readFileSync(file, 'utf8').split('\n')) {
+      let e;
+      try { e = JSON.parse(l); } catch { continue; }
+      if (!e || typeof e !== 'object') continue;
+      if (who === 'codex') {
+        if (e.type === 'turn.failed') failed = eventMessage(e.error) || failed;
+        else if (e.type === 'error') errored = eventMessage(e) || errored;
+      } else if (who === 'opencode') {
+        if (e.type === 'error') errored = eventMessage(e.error && e.error.data) || eventMessage(e.error) || eventMessage(e) || (e.error && typeof e.error.name === 'string' ? e.error.name : '') || errored;
+      } else if (who === 'claude') {
+        if (e.type === 'result' && e.is_error === true) failed = eventMessage({ message: e.result }) || (typeof e.subtype === 'string' ? e.subtype : '') || failed;
+      }
+    }
+    return firstLine(failed || errored);
+  } catch { return ''; }
+}
+
+// A message string from an event object; a JSON error body ({"error":{"message":...}}) gives its inner message.
+function eventMessage(o) {
+  let m = o && typeof o === 'object' && typeof o.message === 'string' ? o.message : '';
+  if (!m.trim()) return '';
+  try {
+    const j = JSON.parse(m);
+    const inner = j && typeof j === 'object' ? (j.error && typeof j.error.message === 'string' ? j.error.message : typeof j.message === 'string' ? j.message : '') : '';
+    if (inner.trim()) m = inner;
+  } catch { /* plain text */ }
+  return m.trim();
+}
+
+// A turn's error from a result that is not "completed": its status, then the relay's own error, else the last line of the provider's
+// stderr tail, else the last failure the provider wrote into its events, else the first line the relay itself printed.
+// Never anything from the provider's log file.
+function failureError(r, who, detail) {
+  const status = typeof r.status === 'string' ? r.status : 'unknown';
+  const why = typeof r.error === 'string' && r.error.trim() ? firstLine(r.error) : lastLine(r.stderrTail) || eventsFailure(who) || detail;
+  return status === 'timeout' ? `${who} timed out${why ? ': ' + tail(why, 300) : ''}` : `${who} ${status}${why ? ': ' + tail(why, 300) : ''}`;
+}
+
+// A claude lane's events.jsonl is the stream the plugin already reads: it gives the turn its steps and token use.
+function feedLaneEvents() {
+  try {
+    const file = join(laneOut, 'events.jsonl');
+    if (statSync(file).size > MAX_LANE_EVENTS) return;
+    for (const l of readFileSync(file, 'utf8').split('\n')) onStreamLine(l);
+  } catch { /* no events: the turn has no trace */ }
+}
+
+// Tokens of the turn: the result event's usage, else the relay's own result.json. Never both.
+function turnUsage() {
+  const fromEvents = usageOf(resultLine);
+  if (fromEvents || !lane || lane.implementer !== 'claude') return fromEvents;
+  return usageOf({ usage: (laneResult() || {}).usage });
+}
+
+function laneOutcome() {
+  const r = laneResult();
+  const who = lane.implementer;
+  const detail = firstLine(stderr);
+  if (!r) return { ok: false, error: `the ${who} relay exited with code ${exitInfo.code}${exitInfo.signal ? ` (${exitInfo.signal})` : ''} and wrote no result${detail ? ': ' + tail(detail, 300) : ''}` };
+  const note = filesNote(r, who);
+  if (r.status === 'completed') {
+    const text = typeof r.finalMessage === 'string' ? r.finalMessage.trim() : '';
+    // A provider may finish without a written report (agy can): the turn still succeeded.
+    const body = text || `${who} finished the turn without a written report.`;
+    return { ok: true, result: note ? `${note}\n\n${body}` : body };
+  }
+  const error = failureError(r, who, detail);
+  return { ok: false, error: note ? `${error} ${note}` : error };
+}
+
+// The relay's own summary: kept in the log, and its end for an error message. Lane events are read from the folder, not from here.
+function onRelayStdout(chunk) {
+  if (outStream) outStream.write(chunk);
+  outTail = (outTail + chunk).slice(-OUT_TAIL);
+}
+
 function computeOutcome(crash) {
   if (crash) return { ok: false, error: `runner error: ${tail(crash && crash.message ? crash.message : crash, 300)}` };
   if (userEnded) return { ok: false, error: 'ended by user' };
   if (missingDir) return { ok: false, error: `project folder not found: ${projectDir}` };
+  if (laneBad) return { ok: false, error: `this thread's lane cannot run: ${laneBad}. Start a new thread instead.` };
   if (spawnError) {
+    if (lane) return { ok: false, error: `could not start the ${lane.implementer} relay: ${tail(spawnError.message, 300)}` };
     if (spawnError.code === 'ENOENT') {
       return {
         ok: false,
@@ -137,6 +271,7 @@ function computeOutcome(crash) {
   }
   if (timedOut) return { ok: false, error: `timed out after ${Math.round(timeoutMs / 1000)}s` };
   if (!exitInfo) return { ok: false, error: 'runner stopped before the child exited' };
+  if (lane) return laneOutcome();
   const detail = tail(stderr) || tail(outTail);
   if (exitInfo.signal) {
     return { ok: false, error: `killed by signal ${exitInfo.signal}${detail ? ': ' + detail : ''}` };
@@ -181,9 +316,12 @@ async function record(outcome) {
       turn.result = outcome.ok ? outcome.result : null;
       turn.error = outcome.ok ? null : outcome.error;
       turn.steps = steps;
-      const usage = usageOf(resultLine);
+      const usage = turnUsage();
       if (usage) turn.usage = usage;
     }
+    // The provider's id to continue with, kept on a failed turn too.
+    const session = lane ? resumeIdOf(lane.implementer, laneResult()) : null;
+    if (session && th.lane) th.lane.session = session;
     if (outcome.ok) {
       if (outcome.sessionId) th.sessionId = outcome.sessionId;
       th.lastResult = outcome.result;
@@ -216,6 +354,7 @@ async function finish(crash) {
   let recorded = false;
   try {
     onStreamLine(partialLine); // a result line the CLI did not end with a newline
+    if (lane && lane.implementer === 'claude') feedLaneEvents();
     recorded = await record(computeOutcome(crash));
   } catch (e) {
     process.stderr.write(`thread runner: ${e && e.message}\n`);
@@ -262,8 +401,37 @@ async function main() {
     errStream.write(header);
   } catch { /* logging is best effort */ }
 
-  const args = buildClaudeArgs(card);
   const prompt = buildPrompt(card);
+  // A lane record that is present but unusable must never fall through to running claude.
+  const tl = card.thread.lane;
+  if (tl != null) {
+    laneBad = unusableLane(tl);
+    if (laneBad) return finish();
+    lane = tl;
+    laneMode = card.thread.mode === 'write' ? 'write' : 'read';
+  }
+  let cmd = bin;
+  let args;
+  if (lane) {
+    // The prompt goes to the relay in a file next to the logs, so it never shows in a process list.
+    const turnNo = card.thread.turns.length;
+    laneOut = join(paths.logs, `${cardId}.t${turnNo}.lane`);
+    const briefFile = join(paths.logs, `${cardId}.t${turnNo}.brief.txt`);
+    try {
+      rmSync(laneOut, { recursive: true, force: true });
+      mkdirSync(laneOut, { recursive: true });
+      writeFileSync(briefFile, prompt, { mode: 0o600 });
+    } catch (e) {
+      spawnError = e;
+      return finish();
+    }
+    cmd = process.execPath;
+    args = [relayPath(lane.implementer), ...buildRelayArgs(projectDir, card, { brief: briefFile, outDir: laneOut, timeoutMs })];
+    if (!existsSync(args[0])) {
+      spawnError = new Error(`${args[0]} was not found`);
+      return finish();
+    }
+  } else args = buildClaudeArgs(card);
 
   if (userEnded) return finish();
 
@@ -276,10 +444,11 @@ async function main() {
   }
 
   try {
-    child = spawn(bin, args, {
+    // THREAD_DEPTH marks a thread's own process; the relay passes it on to a claude child, so this plugin's hooks leave that session alone.
+    child = spawn(cmd, args, {
       cwd: projectDir,
       env: { ...process.env, THREAD_DEPTH: '1' },
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: [lane ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
   } catch (e) {
     spawnError = e;
@@ -293,10 +462,10 @@ async function main() {
       finish();
     }
   });
-  child.stdin.on('error', () => {}); // EPIPE if the child exits before reading
+  if (child.stdin) child.stdin.on('error', () => {}); // EPIPE if the child exits before reading
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
-  child.stdout.on('data', onStdout);
+  child.stdout.on('data', lane ? onRelayStdout : onStdout);
   child.stderr.on('data', (d) => { stderr += d; if (errStream) errStream.write(d); });
   child.on('exit', (code, signal) => {
     exitInfo = { code, signal };
@@ -306,14 +475,16 @@ async function main() {
   });
   child.on('close', () => { finish(); });
 
-  try {
-    child.stdin.end(prompt);
-  } catch { /* EPIPE handled by the error listener */ }
+  if (!lane) {
+    try {
+      child.stdin.end(prompt);
+    } catch { /* EPIPE handled by the error listener */ }
+  }
 
   timeoutTimer = setTimeout(() => {
     timedOut = true;
     killChild();
-  }, timeoutMs);
+  }, lane ? timeoutMs + LANE_GRACE_MS : timeoutMs);
 
   if (userEnded) killChild();
 }

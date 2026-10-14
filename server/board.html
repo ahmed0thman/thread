@@ -228,6 +228,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .s-square { border-radius: 2px; background: currentColor; }
 .s-tri { background: currentColor; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 .s-diamond { background: currentColor; transform: rotate(45deg) scale(0.82); }
+.s-hex { background: currentColor; clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0 50%); }
 .s-hdiamond { border: 2px solid currentColor; transform: rotate(45deg) scale(0.82); }
 .s-pulse { border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
 .s-check { width: 6px; height: 10px; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(45deg) translate(-1px, -2px); margin: 0 2px; }
@@ -343,6 +344,13 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
 .card-note { margin: 0; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-from { margin: 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); font-size: 12px; color: var(--muted); }
+/* delegation lanes: the tag in a card's foot */
+.tag.lane-tag { min-width: 0; max-width: 100%; }
+.tag.lane-ok { color: var(--text); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.lane-tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.lane-tag-state { flex: none; }
+.lane-start { margin: 0; display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.lane-note { margin: 0 0 var(--s3); font-size: 12.5px; }
 .card-agent { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
 .unseen { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--warn); }
 .unseen .shape { color: var(--warn); width: 7px; height: 7px; }
@@ -831,6 +839,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   let selKey = '';           // the selected project
   let projectsAt = 0;
   let projectsBusy = false;
+  let lanes = null;          // the selected project's delegation lanes: { available, projectTrusted, lanes }, null until loaded
+  let lanesSig = '';         // lanes as text, to tell a change
+  let lanesAt = 0;           // when the lanes were last asked for
   const filterMemo = {};     // per project: { q, threadsOnly, session, milestone }
 
   let current = null;        // newest state from the server
@@ -957,6 +968,120 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   // A thread without the field is an old one: a full copy.
   function isBrief(t) { return t.context === 'brief'; }
   // ---- end tokens and agents ----
+  // ---- delegation lanes (page.test.mjs runs this block against a small fake DOM) ----
+  // `lanes` is the server's { available, projectTrusted, lanes }, or null until it has answered.
+  // The state of a card's lane: loading, ok, missing (not in the loaded lanes, or no delegate skills) or unapproved. null: no lane.
+  // A thread shows the lane it started on (its snapshot), whatever the lanes are now.
+  function laneInfo(card) {
+    const tl = card && card.kind === 'thread' && card.thread ? card.thread.lane : null;
+    if (tl && typeof tl.name === 'string' && tl.name) return { name: tl.name, state: 'ok', lane: tl };
+    if (!card || typeof card.lane !== 'string' || !card.lane || (card.kind !== 'task' && card.kind !== 'idea')) return null;
+    if (!lanes) return { name: card.lane, state: 'loading', lane: null };
+    const lane = lanes.lanes.find((l) => l.name === card.lane) || null;
+    if (!lane) return { name: card.lane, state: 'missing', lane: null };
+    return { name: card.lane, state: lane.approved === false ? 'unapproved' : 'ok', lane };
+  }
+  function laneHint(info) {
+    if (info.state === 'missing') return lanes && !lanes.available ? 'The delegate skills could not be read, so this lane cannot be checked.' : 'No lane has this name. Pick another one or set it up with the delegate-setup skill.';
+    if (info.state === 'unapproved') return 'This lane comes from the project’s lane config, which is not approved yet. Approve it with the delegate-setup skill.';
+    return '';
+  }
+  // The tag's text in two parts: the name (which a long name may cut short) and what follows it, which is never cut:
+  // 'code-codex' and ' · codex', or the name with its problem.
+  function laneTagParts(info) {
+    if (info.state === 'ok') return [info.name, ' · ' + info.lane.implementer];
+    if (info.state === 'missing') return [info.name, ' · not found'];
+    if (info.state === 'unapproved') return [info.name, ' · not approved'];
+    return [info.name, ''];
+  }
+  function laneTagText(info) { return laneTagParts(info).join(''); }
+  // The icon (a hexagon) tells the tag from the milestone and agent ones without colour; a problem also says so in words.
+  function laneTag(card) {
+    const info = laneInfo(card);
+    if (!info) return null;
+    const tag = h('span', 'tag lane-tag' + (info.state === 'ok' || info.state === 'loading' ? ' lane-ok' : ' attn'));
+    const parts = laneTagParts(info);
+    tag.appendChild(shape('s-hex'));
+    tag.appendChild(h('span', 'lane-tag-name', parts[0]));
+    if (parts[1]) tag.appendChild(h('span', 'lane-tag-state', parts[1]));
+    tag.title = info.state === 'ok'
+      ? 'Delegation lane ' + info.name + ': ' + [info.lane.implementer, info.lane.model, info.lane.variant || effortText(info.lane.effort)].filter(Boolean).join(' · ') + (card.kind === 'thread' ? '. This thread runs on that lane.' : '. Starting this card as a thread runs it on that lane.')
+      : 'Delegation lane ' + info.name + (laneHint(info) ? '. ' + laneHint(info) : '');
+    return tag;
+  }
+  // What a lane's thread or card may do: agy is read-only in this version, a codex lane without a sandbox has full access.
+  function laneAccess(card, l) {
+    if (l.readOnly || l.implementer === 'agy' || (card.kind === 'thread' && card.thread.mode !== 'write')) return 'Read-only';
+    return l.sandbox === 'danger-full-access' ? 'Full access (no sandbox)' : 'Can edit files';
+  }
+  // The rows on a task's or idea's page: [label, text]. A lane that is not found or not approved gets its Lane row and a hint.
+  function laneRows(card) {
+    const info = laneInfo(card);
+    if (!info) return [];
+    if (info.state === 'loading') return [['Lane', info.name]];
+    if (info.state !== 'ok') return [['Lane', info.name + (info.state === 'missing' ? ' (not found)' : ' (not approved)')], ['Hint', laneHint(info)]];
+    const l = info.lane;
+    return [
+      ['Lane', info.name], ['Provider', l.implementer], ['Model', l.model || 'CLI default'],
+      l.variant ? ['Variant', l.variant] : ['Effort', effortText(l.effort) || 'CLI default'],
+      ['Access', laneAccess(card, l)], ['Source', l.source === 'project' ? 'This project' : 'All projects'],
+    ].concat(card.kind === 'thread' ? [['Follow-up', laneFollowUp(card).text]] : []);
+  }
+  // Whether a lane thread can take a follow-up: it needs the provider's session, and the lane must still be found, approved, on the same
+  // provider, with its relay installed (once the lanes have loaded). `why` is the reason when it cannot, in a sentence of its own.
+  function laneFollowUp(card) {
+    const t = card.thread, l = t && t.lane;
+    if (!l) return { ok: false, text: '', why: '' };
+    const no = (why) => ({ ok: false, text: 'Not possible: ' + why, why: why.charAt(0).toUpperCase() + why.slice(1) });
+    if (!l.session) {
+      if (t.runState === 'running') return { ok: false, text: 'Not yet: the provider gives its session when the first turn ends', why: 'A turn is still running.' };
+      return no(l.implementer + ' gave no session to continue. Start a new thread instead.');
+    }
+    if (lanes) {
+      const now = lanes.available ? lanes.lanes.find((x) => x.name === l.name) : null;
+      if (!lanes.available) return no('the delegate skills could not be read, so the lane cannot be checked.');
+      if (!now) return no('lane “' + l.name + '” is no longer one of the loaded lanes.');
+      if (now.approved === false) return no('lane “' + l.name + '” is not approved. Approve this project’s lane config with the delegate-setup skill.');
+      if (now.implementer !== l.implementer) return no('lane “' + l.name + '” now runs on ' + now.implementer + ', which cannot continue a ' + l.implementer + ' session. Start a new thread instead.');
+      if (now.relay === false) return no('the ' + now.implementer + ' relay (the ' + now.implementer + '-delegate skill) is not installed.');
+      if (t.mode === 'write' && (now.readOnly || now.implementer === 'agy')) return no('lane “' + l.name + '” is read-only now.');
+    }
+    return { ok: true, text: 'Possible', why: '' };
+  }
+  // The one line over a lane thread's Trace: what the provider shows of a turn. '' when there is nothing to say.
+  function laneTraceNote(card) {
+    const t = card && card.thread, l = t && t.lane;
+    if (!l) return '';
+    if (l.implementer !== 'claude') return l.implementer + ' gives no live steps in this version. The report appears when the turn ends; any steps shown here come from that report.';
+    return t.runState === 'running' ? 'The steps and token use of this turn appear when it ends.' : '';
+  }
+  // What the card page's start step shows for a card that has a lane: the line, the dials, whether it is read-only (and the note for
+  // the Mode choice), what runs it, and why it cannot start.
+  function laneStartPlan(card) {
+    const info = laneInfo(card);
+    if (!info || card.kind === 'thread') return null;
+    if (info.state !== 'ok') {
+      return { name: info.name, provider: '', line: 'Lane ' + info.name, detail: '', readOnly: false, modeNote: '', blocked: info.state === 'loading' ? 'The lane is still loading.' : (info.state === 'missing' ? 'Lane “' + info.name + '” was not found. ' : 'Lane “' + info.name + '” is not approved. ') + laneHint(info) };
+    }
+    const l = info.lane;
+    const readOnly = l.readOnly === true || l.implementer === 'agy';
+    const modeNote = l.implementer === 'agy' ? 'agy lanes are read-only in this version.' : readOnly ? 'This lane is read-only.' : l.sandbox === 'danger-full-access' ? 'This lane has no sandbox: in write mode it has full access.' : '';
+    return { name: info.name, provider: l.implementer, line: 'Runs on lane ' + info.name + ' · ' + l.implementer, detail: [l.model, l.variant || effortText(l.effort)].filter(Boolean).join(' · '), readOnly, modeNote, blocked: '' };
+  }
+  // Puts the card's lane rows at the end of a details list, in place of the ones put there before. Returns the new nodes.
+  function showLaneRows(dl, before, card) {
+    before.forEach((n) => n.remove());
+    const nodes = [];
+    laneRows(card).forEach(([k, v]) => {
+      const dt = h('dt', null, k), dd = h('dd', null, v);
+      dl.append(dt, dd);
+      nodes.push(dt, dd);
+    });
+    return nodes;
+  }
+  // What the lanes change on a card or its page, for the keys that decide whether they are drawn again.
+  const laneSig = (card) => JSON.stringify([laneInfo(card), card && card.thread ? laneFollowUp(card) : null]);
+  // ---- end delegation lanes ----
   // ---- milestones and stages (page.test.mjs runs this block on its own) ----
   const NO_MS = ':none';     // the Milestone filter's "No milestone"; a colon is not valid in a card id
   const CHAT_ROLES = ['working', 'review', 'blocked', 'done'];
@@ -1204,6 +1329,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     if (halted) return;
     if (Date.now() - versionAt >= PROJECTS_MS) await refreshVersion();
     if (halted) return;
+    if (Date.now() - lanesAt >= PROJECTS_MS) refreshLanes();   // not awaited: the delegate script may take seconds
     loopTimer = setTimeout(tick, POLL_MS);
   }
   // ---- end tick ----
@@ -1300,6 +1426,26 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       projectsAt = Date.now();
       if (projectsAgain) { projectsAgain = false; refreshProjects(); }
     }
+  }
+  // The lanes of the selected project, on the slow cycle and when a project is shown. A lane is only read here, never set.
+  let lanesBusy = false;
+  async function refreshLanes() {
+    lanesAt = Date.now();
+    const key = selKey;
+    if (halted || !key || lanesBusy) return;
+    lanesBusy = true;
+    let data = null;
+    try {
+      const { res, text } = await request('GET', pp(key, 'lanes'), null, 9000);
+      data = res.ok ? parseJson(text) : null;
+    } catch (e) { /* the lanes are optional: keep what is shown */ }
+    finally { lanesBusy = false; }
+    if (key !== selKey || !data || typeof data.available !== 'boolean' || !Array.isArray(data.lanes)) return;
+    const sig = JSON.stringify(data);
+    if (sig === lanesSig) return;
+    lanes = data;
+    lanesSig = sig;
+    if (current) { renderBoard(false); updatePanel(); }
   }
   // a write went through: counts and activity in the tabs have changed
   function wrote() { refreshProjects(); }
@@ -1412,6 +1558,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     closeMenu(false);
     saveFilters();
     selKey = key;
+    lanes = null; lanesSig = ''; lanesAt = 0;
     current = null; currentKey = ''; lastRaw = null; boardKey = null; synced = false; pendingRender = false;
     loadFilters();
     const p = projectByKey(key);
@@ -1424,6 +1571,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     updateToolbar();
     renderNotice();
     poll();
+    refreshLanes();
   }
 
   function saveFilters() {
@@ -1622,7 +1770,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     updateSessionOptions();
     updateMilestoneOptions();
     const f = filterState();
-    const key = currentKey + '|' + f.q + '|' + f.threadsOnly + '|' + f.session + '|' + f.milestone;
+    const key = currentKey + '|' + f.q + '|' + f.threadsOnly + '|' + f.session + '|' + f.milestone + '|' + lanesSig;
     if (!force && key === boardKey) return;
     boardKey = key;
     pendingRender = false;
@@ -1760,11 +1908,13 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       if (tk) { const e = h('span', 'tnum', totalText(tk)); e.title = tokensText(tk); foot.appendChild(e); }
       if (t.agent) { const e = h('span', 'card-agent', t.agent); e.title = 'Runs as the ' + t.agent + ' agent'; foot.appendChild(e); }
     }
+    const lt = laneTag(card);
+    if (lt) foot.appendChild(lt);
     if (card.seenByClaude === false) foot.appendChild(unseenEl('span'));
     if (foot.childNodes.length) el.appendChild(foot);
 
     const rs = thread ? reportState(card) : '';
-    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (ms ? ', in milestone ' + ms.title : '') + (prog ? ', ' + prog.done + ' of ' + prog.total + ' done' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
+    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (ms ? ', in milestone ' + ms.title : '') + (laneInfo(card) ? ', lane ' + laneTagText(laneInfo(card)) : '') + (prog ? ', ' + prog.done + ' of ' + prog.total + ' done' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
 
     el.addEventListener('click', () => {
       if (Date.now() - lastDragEnd < 200) return;
@@ -2445,6 +2595,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
   // A panel also shows the stages, the milestones to pick from and, on a milestone, its cards: a change in any of them redraws it.
   function panelCtx(card) {
     const ctx = [current.config, milestoneChoices()];
+    if (card.lane || (card.thread && card.thread.lane)) ctx.push(laneSig(card));
     if (card.kind === 'milestone') ctx.push(childrenOf(current.cards, card.id).map((k) => [k.id, k.kind, k.title, k.status, k.thread && k.thread.runState]));
     return ctx;
   }
@@ -2550,8 +2701,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     if (msSection) { body.appendChild(msSection); P.root.classList.add('is-ms'); fNote.rows = 3; }
 
     const metaKind = h('dd'), metaBy = h('dd'), metaCreated = h('dd'), metaUpdated = h('dd');
+    let metaDl = null, laneNodes = [];
     if (!create) {
-      const dl = h('dl', 'meta-grid');
+      const dl = metaDl = h('dl', 'meta-grid');
       [['Kind', metaKind], ['Added by', metaBy], ['Created', metaCreated], ['Updated', metaUpdated]].forEach(([k, dd]) => { dl.appendChild(h('dt', null, k)); dl.appendChild(dd); });
       body.appendChild(dl);
     }
@@ -2650,7 +2802,8 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     // The Start as thread button, or its Start button once the step is open: both wait for saved fields.
     let startBtn = null, goBtn = null, whyEl = null;
     function syncStart() {
-      const why = isRO() ? READONLY_WHY : P.isDirty() ? 'Save or discard your changes first' : '';
+      const lp = laneStartPlan(findCard(P.target) || card);
+      const why = isRO() ? READONLY_WHY : P.isDirty() ? 'Save or discard your changes first' : lp && lp.blocked ? lp.blocked : '';
       if (startBtn) { startBtn.disabled = !!why; startBtn.title = why; }
       if (goBtn) { setOff(goBtn, !!why); whyEl.textContent = why; }
     }
@@ -2681,7 +2834,8 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       startBtn = goBtn = whyEl = null;
       if (P.starting) {
         const step = h('div', 'start-step');
-        step.appendChild(h('p', null, 'This card becomes a thread: a background Claude session working on this card’s title and note.'));
+        const lp0 = laneStartPlan(findCard(P.target) || card);
+        step.appendChild(h('p', null, lp0 ? 'This card becomes a thread: a background ' + (lp0.provider ? lp0.provider + ' session' : 'session') + ' on lane ' + lp0.name + ', working on this card’s title and note.' : 'This card becomes a thread: a background Claude session working on this card’s title and note.'));
         const list = startSessions();
         const cancel = plainBtn('Cancel', null, () => { P.starting = false; renderFoot(); startBtn.focus(); });
         if (!list.length) {
@@ -2697,17 +2851,29 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
           });
           step.appendChild(field('Started from session', sel, 'f-start-session'));
 
-          const ctx = radioGroup('start-context', 'Context', [['brief', 'Brief'], ['full', 'Full copy']]);
-          const ctxNote = h('p', 'foot-note', CONTEXT_NOTE.brief);
-          ctxNote.id = 'f-start-context-note';
-          ctx.box.setAttribute('aria-describedby', ctxNote.id);
-          ctx.box.appendChild(ctxNote);
-          ctx.box.addEventListener('change', () => { ctxNote.textContent = CONTEXT_NOTE[ctx.value()]; });
+          // A card with a lane runs on it: no Full copy and no agent, and read-only only when the lane is.
+          const lp = laneStartPlan(findCard(P.target) || card);
+          let ctx = null;
+          if (lp) {
+            const lt = h('p', 'lane-start');
+            lt.append(shape('s-hex'), h('span', null, lp.line));
+            step.appendChild(lt);
+            if (lp.detail) step.appendChild(h('p', 'foot-note', lp.detail));
+            step.appendChild(h('p', 'foot-note', 'The lane’s own CLI runs it and sends the brief, and the files it reads, to that provider.'));
+          } else {
+            ctx = radioGroup('start-context', 'Context', [['brief', 'Brief'], ['full', 'Full copy']]);
+            const ctxNote = h('p', 'foot-note', CONTEXT_NOTE.brief);
+            ctxNote.id = 'f-start-context-note';
+            ctx.box.setAttribute('aria-describedby', ctxNote.id);
+            ctx.box.appendChild(ctxNote);
+            ctx.box.addEventListener('change', () => { ctxNote.textContent = CONTEXT_NOTE[ctx.value()]; });
+          }
 
-          const mode = radioGroup('start-mode', 'Mode', [['read', 'Read-only'], ['write', 'Can edit files']]);
-          mode.box.appendChild(h('p', 'foot-note', 'Edits the same files as your main session.'));
+          const mode = radioGroup('start-mode', 'Mode', lp && lp.readOnly ? [['read', 'Read-only']] : [['read', 'Read-only'], ['write', 'Can edit files']]);
+          mode.box.appendChild(h('p', 'foot-note', lp ? lp.modeNote || 'Edits the same files as your main session.' : 'Edits the same files as your main session.'));
           const opts = h('div', 'start-opts');
-          opts.append(ctx.box, mode.box);
+          if (ctx) opts.appendChild(ctx.box);
+          opts.appendChild(mode.box);
           step.appendChild(opts);
 
           // The agents of this project and of the user; if they cannot be listed, "Same as session" is still there.
@@ -2715,9 +2881,9 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
           const same = h('option', null, 'Same as session');
           same.value = '';
           agentSel.appendChild(same);
-          step.appendChild(field('Agent', agentSel, 'f-start-agent'));
+          if (!lp) step.appendChild(field('Agent', agentSel, 'f-start-agent'));
           const pk = selKey;
-          api('GET', pp(pk, 'agents')).then((r) => {
+          if (!lp) api('GET', pp(pk, 'agents')).then((r) => {
             if (panel !== P || !agentSel.isConnected) return;
             ((r && r.agents) || []).forEach((a) => {
               const o = h('option', null, agentLabel(a));
@@ -2727,7 +2893,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
             });
           }).catch(() => { /* the list is optional */ });
 
-          goBtn = actionBtn('Start', 'primary', 'start:' + selKey + ':' + card.id, () => doStart({ sessionId: sel.value, mode: mode.value(), context: ctx.value(), agent: agentSel.value }));
+          goBtn = actionBtn('Start', 'primary', 'start:' + selKey + ':' + card.id, () => doStart({ sessionId: sel.value, mode: mode.value(), context: ctx ? ctx.value() : 'brief', agent: lp ? '' : agentSel.value }));
           whyEl = h('span', 'foot-note');
           whyEl.setAttribute('role', 'status');
           step.appendChild(h('div', 'start-btns')).append(goBtn, cancel, whyEl);
@@ -2828,6 +2994,10 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       metaBy.textContent = c.source === 'user' ? 'You' : 'Claude';
       metaCreated.replaceChildren(timeEl(c.createdAt));
       metaUpdated.replaceChildren(timeEl(c.updatedAt));
+      if (metaDl) laneNodes = showLaneRows(metaDl, laneNodes, c);
+      const ls = laneSig(c);
+      if (P.laneSig !== undefined && P.laneSig !== ls) { if (P.starting) renderFoot(); else syncStart(); }   // the lane changed: the start step, or the button, follows
+      P.laneSig = ls;
       if (msSection) renderMsCards(c);
       refreshConflict();
       applyRO();
@@ -2921,6 +3091,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
     if (isRO()) return READONLY_WHY;
     if (t.runState === 'ended') return 'This thread has ended, so it cannot take new messages.';
     if (t.runState === 'running') return 'A turn is still running. You can send a message when it finishes.';
+    if (t.lane) { const f = laneFollowUp(card); return f.ok ? '' : 'This thread cannot take a follow-up. ' + f.why; }
     if (!t.sessionId) {
       return t.runState === 'failed'
         ? 'This thread never started a session because its first turn failed, so there is nothing to continue.'
@@ -3207,12 +3378,14 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
           filters.appendChild(b);
         });
         out.push(filters);
+        const laneNote = laneTraceNote(c);
+        if (laneNote) { const ln = h('p', 'muted lane-note', laneNote); ln.setAttribute('role', 'status'); out.push(ln); }
 
         const anything = all.some((x) => x.steps.length || x.state === 'failed' || x.state === 'running');
         if (!anything) {
           const e = h('div', 'empty-state');
           e.appendChild(h('strong', null, 'No steps yet'));
-          e.appendChild(document.createTextNode('Steps appear here once the thread reports back with what it did.'));
+          e.appendChild(document.createTextNode(laneNote ? 'Steps from the report appear here once the thread reports back.' : 'Steps appear here once the thread reports back with what it did.'));
           out.push(e);
           return out;
         }
@@ -3551,7 +3724,7 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
           return r;
         };
         const row = (k, v, what, fid, lead) => { ids.appendChild(mkRow(k, v, what, fid, lead)); };
-        row('Session id', t.sessionId, 'session id', 'c-session');
+        row(t.lane ? 'Session id (' + t.lane.implementer + ')' : 'Session id', t.lane ? t.lane.session : t.sessionId, 'session id', 'c-session');
         {
           let lead = null, seen = null;
           if (t.parentSessionId) {
@@ -3595,7 +3768,8 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
           facts.appendChild(r);
         };
         fact('Context', isBrief(t) ? 'Brief' : 'Full copy');
-        if (t.agent) fact('Agent', t.agent);
+        if (t.lane) laneRows(c).forEach(([k, v]) => fact(k, v));
+        else if (t.agent) fact('Agent', t.agent);
         else if (modelText(t)) fact('Model', modelText(t));
         const tk = threadTokens(turns);
         if (tk) fact('Tokens', tokensText(tk));
@@ -3746,10 +3920,10 @@ kbd.hint { font: 11px var(--mono); opacity: 0.8; border: 1px solid currentColor;
       const sess = sessionInfo(t.parentSessionId);
       const k = {
         head: JSON.stringify([c.title, t.runState, t.mode, turns.length, turns[0] && turns[0].startedAt, c.seenByClaude, reportState(c), sess && sess.label, ro]),
-        about: JSON.stringify([t.sessionId, t.parentSessionId, turns, reportState(c), sess, t.context, t.brief, t.agent, t.model, t.effort, c.parent, milestoneChoices(), ro]),
-        trace: JSON.stringify([turns, t.runState]),
+        about: JSON.stringify([t.sessionId, t.lane, laneFollowUp(c), t.parentSessionId, turns, reportState(c), sess, t.context, t.brief, t.agent, t.model, t.effort, c.parent, milestoneChoices(), ro]),
+        trace: JSON.stringify([turns, t.runState, t.lane && t.lane.implementer]),
         convo: JSON.stringify([turns, t.runState]),
-        composer: t.runState + '|' + t.sessionId + '|' + ro,
+        composer: t.runState + '|' + t.sessionId + '|' + (t.lane ? laneSig(c) : '') + '|' + ro,
         foot: t.runState + '|' + ro,
       };
       if (k.head !== P.keys.head) { renderHead(c); P.keys.head = k.head; }

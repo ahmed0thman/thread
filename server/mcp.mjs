@@ -1,6 +1,8 @@
 // Hand-written MCP server over stdio (newline-delimited JSON-RPC 2.0).
 // stdout carries JSON-RPC only; every log line goes to stderr.
 import * as core from './core.mjs';
+import { accessText, listLanes, relayPath, requireLane } from './lanes.mjs';
+import { existsSync } from 'node:fs';
 
 const SERVER_INFO = { name: 'thread', version: core.VERSION };
 const DEFAULT_PROTOCOL = '2025-06-18';
@@ -34,6 +36,7 @@ const ID_PROP = { type: 'string', description: 'Card id, for example "c4".' };
 const SESSION_PROP = { type: 'string', description: 'This session\'s id (a UUID), taken from the "[thread plugin]" note added at session start. Falls back to the CLAUDE_CODE_SESSION_ID environment variable if omitted.' };
 const STATUS_NOTE = 'one of the board\'s stage ids (board_list shows them)';
 const PARENT_PROP = { type: 'string', description: 'Optional: the id of a milestone card this card belongs to.' };
+const LANE_PROP = { type: 'string', description: 'Optional: the name of a delegation lane (a coding CLI, model and effort set up with the delegate skills) to label this task or idea with. Starting the card as a thread then runs it on that lane. lane_list shows the names. Needs the delegate skills, and a project lane needs its config approved.' };
 const CONFIRM_PROP = { type: 'string', description: 'The confirm code from a "CONFIRMATION REQUIRED" answer. Pass it only after the user agreed to continue.' };
 
 const TOOLS = [
@@ -67,13 +70,14 @@ const TOOLS = [
         mode: { type: 'string', enum: MODES, description: '"read" (default) forbids file edits. "write" lets the thread edit files; use it only when the user asks for that.' },
         extra_dirs: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Absolute paths of folders outside the project that the task needs to read, for example another repository the user named. Only list folders the task actually requires.' },
         parent: { type: 'string', description: 'Optional: the id of a milestone card this thread belongs to.' },
+        lane: { type: 'string', description: 'Optional: the name of a delegation lane (see lane_list) to run the thread on: another coding CLI (codex, agy, opencode or claude) with its own model and effort. Use it only when the user or the project\'s instructions say which lane suits the work. It cannot be combined with agent, model, effort or context "full", and extra_dirs are not supported. The lane\'s CLI sends the brief and the files it reads to its own provider. Mode "write" needs a lane that can edit files.' },
       },
       required: ['title', 'task'],
     },
   },
   {
     name: 'thread_continue',
-    description: 'Send a follow-up message to a finished (idle or failed-after-first-turn) thread so it runs another turn in the background. Fails if the thread is still running, has ended, or has not completed a first turn. Fetch the result with thread_report. The thread\'s "finished" notice goes to the session that started it. ' +
+    description: 'Send a follow-up message to a finished (idle or failed-after-first-turn) thread so it runs another turn in the background. Fails if the thread is still running, has ended, or has not completed a first turn. A thread on a delegation lane continues its provider\'s session; that fails when the provider gave none, or when the lane is now unknown, not approved or missing its relay. Fetch the result with thread_report. The thread\'s "finished" notice goes to the session that started it. ' +
       'A thread knows only its own history. When things that matter to the thread changed in this session since its last turn (a decision, a file it read that was edited, a changed requirement), ' +
       'start the message with a short catch-up headed "Since your last turn:" before the request. Leave it out when nothing relevant changed.',
     inputSchema: {
@@ -123,13 +127,14 @@ const TOOLS = [
         status: { type: 'string', description: `Column: ${STATUS_NOTE}. Defaults to the board's start stage.` },
         kind: { type: 'string', enum: KINDS, description: 'Defaults to "task".' },
         parent: PARENT_PROP,
+        lane: LANE_PROP,
       },
       required: ['title'],
     },
   },
   {
     name: 'board_update',
-    description: 'Change a board card\'s title, note, status or milestone. Thread cards follow their thread and should not be moved by hand.',
+    description: 'Change a board card\'s title, note, status, milestone or lane. Thread cards follow their thread and should not be moved by hand.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -138,6 +143,7 @@ const TOOLS = [
         note: { type: 'string', description: 'New note (replaces the old one).' },
         status: { type: 'string', description: `New column: ${STATUS_NOTE}.` },
         parent: { type: 'string', description: 'The id of the milestone card this card belongs to, or an empty string to take it out of its milestone.' },
+        lane: { type: 'string', description: 'The name of a delegation lane to label this task or idea with, or an empty string to remove its lane. Milestones and threads cannot have one.' },
       },
       required: ['id'],
     },
@@ -153,13 +159,18 @@ const TOOLS = [
   },
   {
     name: 'board_list',
-    description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a milestone shows how many of its cards are done. ' +
+    description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane shows it in braces, as {lane: name}; a milestone shows how many of its cards are done. ' +
       'With parent, list only that milestone and its cards, after a summary line: the report for a milestone. Cards the user added or edited since the last listing are flagged "(new from user)". Listing marks them as seen.',
     inputSchema: { type: 'object', properties: { parent: { type: 'string', description: 'Optional: a milestone card id; list only that milestone and the cards under it.' } }, required: [] },
   },
   {
     name: 'board_open',
     description: 'Return the URL of the local board web page for this project. Starts the board again if it was stopped.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'lane_list',
+    description: 'List the delegation lanes of this project: name, provider (codex, agy, opencode or claude), model, effort or variant, access, where it comes from and whether it can be used. A lane can be given to thread_start, or to a task or idea with board_add. Say so to the user and choose a lane yourself only when they or the project\'s instructions say which lanes suit which work. Answers that the delegate skills are not installed when they are not.',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -268,8 +279,16 @@ function startedBy(state, c, caller) {
   return core.sessionLabel(state, parent);
 }
 
+// 'lane code-codex (codex, model gpt-6, effort high)'
+function laneText(l) {
+  if (!l || typeof l !== 'object') return 'lane (unusable record)';
+  const dials = [l.implementer, l.model && `model ${l.model}`, l.variant ? `variant ${l.variant}` : l.effort && `effort ${l.effort}`].filter(Boolean).join(', ');
+  return `lane ${l.name} (${dials})`;
+}
+
 // Who a thread runs as: its agent, else the model and effort it was given, else the CLI default.
 function runsAs(t) {
+  if (t.lane != null) return laneText(t.lane);
   if (t.agent) return `agent ${t.agent}`;
   return [t.model && `model ${t.model}`, t.effort && `effort ${t.effort}`].filter(Boolean).join(', ') || 'default model';
 }
@@ -291,9 +310,14 @@ function milestoneTag(cards, c) {
   return m ? ` [${core.clip(m.title, 30)}]` : '';
 }
 
+// ` {lane: name}` for a task or idea with a delegation lane, else ''.
+function laneTag(c) {
+  return c.lane && c.kind !== 'thread' && c.kind !== 'milestone' ? ` {lane: ${core.clip(c.lane, 40)}}` : '';
+}
+
 function threadLine(c, state, caller) {
   const t = c.thread;
-  return `${c.id} "${core.clip(c.title, 80)}"${milestoneTag(state.cards, c)} — ${t.runState}, mode ${t.mode}, ${core.threadContext(t)} context, ${runsAs(t)}, ${t.turns.length} turn(s)${usageText(t)}, reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, session ${t.sessionId || 'not known yet'}${t.reportRequestedAt ? ', report requested' : ''}`;
+  return `${c.id} "${core.clip(c.title, 80)}"${milestoneTag(state.cards, c)} — ${t.runState}, mode ${t.mode}, ${core.threadContext(t)} context, ${runsAs(t)}, ${t.turns.length} turn(s)${usageText(t)}, reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, ${t.lane ? `${t.lane.implementer} session ${t.lane.session || 'not known (no follow-up possible)'}` : `session ${t.sessionId || 'not known yet'}`}${t.reportRequestedAt ? ', report requested' : ''}`;
 }
 
 // The answer to a report or end that came from a session other than the one
@@ -445,10 +469,11 @@ const HANDLERS = {
       model: optStr(args, 'model'),
       effort: optEnum(args, 'effort', EFFORTS),
       parent: optStr(args, 'parent'),
+      lane: optStr(args, 'lane'),
     });
     const t = card.thread;
     const extra = t.dirs.length ? `, extra folders: ${t.dirs.join(', ')}` : '';
-    return `Thread ${card.id} "${core.clip(card.title, 80)}" started in the background (mode ${mode}, ${t.context} context, ${runsAs(t)}${extra}). Results come back only through thread_report; call it with id ${card.id} when the user asks or the result is needed.`;
+    return `Thread ${card.id} "${core.clip(card.title, 80)}" started in the background (mode ${mode}, ${t.lane ? 'brief' : t.context} context, ${runsAs(t)}${extra}). Results come back only through thread_report; call it with id ${card.id} when the user asks or the result is needed.`;
   },
 
   async thread_continue(args) {
@@ -509,7 +534,8 @@ const HANDLERS = {
     }
     const r = await core.reportThread(pd, id, { sessionId: caller, confirmCode: optStr(args, 'confirm_code') });
     if (r.needsConfirm) return confirmText(r, core.readState(pd), caller);
-    const body = `Thread ${r.card.id} "${core.clip(r.card.title, 80)}" (${r.card.thread.runState}):\n\n${r.text}`;
+    const via = r.card.thread.lane ? `, ${laneText(r.card.thread.lane)}` : '';
+    const body = `Thread ${r.card.id} "${core.clip(r.card.title, 80)}" (${r.card.thread.runState}${via}):\n\n${r.text}`;
     if (r.otherSession) {
       const label = core.sessionLabel(core.readState(pd), r.card.thread.parentSessionId);
       return `Reported into a different session than the one that started this thread (${label}).\n${body}`;
@@ -531,27 +557,41 @@ const HANDLERS = {
 
   async board_add(args) {
     const pd = core.projectDir();
+    const lane = optStr(args, 'lane');
+    if (lane && lane.trim()) {
+      core.checkLaneKind(optEnum(args, 'kind', KINDS) || 'task');
+      await requireLane(pd, lane.trim());
+    }
     const card = await core.addCard(pd, clean({
       title: reqStr(args, 'title'),
       note: optStr(args, 'note'),
       status: optStr(args, 'status'),
       kind: optEnum(args, 'kind', KINDS),
       parent: optStr(args, 'parent'),
+      lane,
       source: 'claude',
     }));
-    const m = card.parent ? `, milestone ${card.parent}` : '';
+    const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : '');
     return `Added ${card.id} [${card.kind}] "${core.clip(card.title, 80)}" in ${card.status}${m}.`;
   },
 
   async board_update(args) {
     const pd = core.projectDir();
-    const card = await core.updateCard(pd, reqStr(args, 'id'), clean({
+    const id = reqStr(args, 'id');
+    const lane = optStr(args, 'lane');
+    if (lane && lane.trim()) {
+      const existing = core.readState(pd).cards.find((c) => c.id === id);
+      if (existing) core.checkLaneKind(existing.kind);
+      await requireLane(pd, lane.trim());
+    }
+    const card = await core.updateCard(pd, id, clean({
       title: optStr(args, 'title'),
       note: optStr(args, 'note'),
       status: optStr(args, 'status'),
       parent: optStr(args, 'parent'),
+      lane,
     }), { source: 'claude' });
-    const m = card.parent ? `, milestone ${card.parent}` : '';
+    const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : '');
     return `Updated ${card.id} "${core.clip(card.title, 80)}" (${card.status}${m}).`;
   },
 
@@ -600,11 +640,27 @@ const HANDLERS = {
         const done = progress ? ` (${progress.done}/${progress.total} done)` : '';
         const flag = unseen.has(c.id) ? ' (new from user)' : '';
         const note = c.note ? ` — ${core.clip(c.note, 200)}` : '';
-        lines.push(`- ${c.id} [${kind}] ${core.clip(c.title, 120)}${milestoneTag(all, c)}${done}${flag}${note}`);
+        lines.push(`- ${c.id} [${kind}] ${core.clip(c.title, 120)}${milestoneTag(all, c)}${laneTag(c)}${done}${flag}${note}`);
       }
     }
     if (unseen.size) lines.push('', `${unseen.size} card(s) new from the user.`);
     return [...lines, ...stageLines].join('\n');
+  },
+
+  async lane_list() {
+    const pd = core.projectDir();
+    const { available, lanes } = await listLanes(pd);
+    if (!available) return 'The delegate skills are not installed (or their lane list could not be read), so there are no lanes. Without them lanes cannot be used.';
+    if (!lanes.length) return 'The delegate skills are installed, but no lane is set up for this project (see the delegate-setup skill).';
+    return [
+      'Delegation lanes. Give a name as lane to thread_start, or to a task or idea with board_add. A lane cannot be combined with agent, model, effort or a full copy.',
+      ...lanes.map((l) => {
+        const dials = [l.implementer, l.model && `model ${l.model}`, l.variant ? `variant ${l.variant}` : l.effort && `effort ${l.effort}`, accessText(l), l.source === 'project' ? 'this project' : 'all projects'].filter(Boolean).join(', ');
+        const state = l.approved ? 'approved' : 'not approved: approve this project\'s lane config with the delegate-setup skill';
+        const relay = !existsSync(relayPath(l.implementer)) ? ` (cannot be used: the ${l.implementer} relay is not installed)` : '';
+        return `- ${l.name}: ${dials}, ${state}${relay}`;
+      }),
+    ].join('\n');
   },
 
   async config_get() {
@@ -801,7 +857,10 @@ process.on('SIGINT', shutdown);
 
 try {
   // Inside a side thread the main session already serves the board.
-  if (!process.env.THREAD_DEPTH) startBoard(core.projectDir());
+  if (!process.env.THREAD_DEPTH) {
+    startBoard(core.projectDir());
+    core.sweepOrphanLogs(core.projectDir()).catch((e) => log('log sweep failed:', e));   // logs an older version left behind
+  }
 } catch (e) {
   log('startup failed:', e);
 }

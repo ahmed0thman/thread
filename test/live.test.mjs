@@ -145,10 +145,12 @@ test('readActivity: missing file, a partial last line, and ids that are not card
 test('removeCard deletes that card\'s log and activity files and leaves other cards\' files', async (t) => {
   const e = setupThreadEnv(t);
   const a = await core.addCard(e.projectDir, { title: 'A' });
+  await core.addCard(e.projectDir, { title: 'Other' });   // c2
   fs.mkdirSync(logsDir(e), { recursive: true });
   for (const n of ['c1.out', 'c1.err', 'c1.alive', 'c1.t1.activity.jsonl', 'c10.out', 'c2.t1.activity.jsonl']) fs.writeFileSync(path.join(logsDir(e), n), 'x');
   await core.removeCard(e.projectDir, a.id);
-  assert.deepEqual(fs.readdirSync(logsDir(e)).sort(), ['c10.out', 'c2.t1.activity.jsonl']);
+  // c10 belongs to no card: the sweep that follows a removal clears it; c2's files stay (c1 is never mistaken for c10)
+  assert.deepEqual(fs.readdirSync(logsDir(e)).sort(), ['c2.t1.activity.jsonl']);
   const b = await core.addCard(e.projectDir, { title: 'B' });
   fs.rmSync(logsDir(e), { recursive: true });
   assert.equal(await core.removeCard(e.projectDir, b.id), true, 'no logs folder is fine');

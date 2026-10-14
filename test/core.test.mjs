@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { CORE_PATH, setupThreadEnv, cleanAmbientEnv, statePathFor, REPLY_WITH_MAP } from './helpers.mjs';
+import { CORE_PATH, setupThreadEnv, cleanAmbientEnv, statePathFor, REPLY_WITH_MAP, writeStateFile, emptyState, threadCard } from './helpers.mjs';
 import * as core from '../server/core.mjs';
 
 cleanAmbientEnv();
@@ -272,4 +272,40 @@ test('the prompt asks for the step map on first and follow-up turns', () => {
   assert.match(core.buildPrompt(card), /thread-map/);
   card.thread.sessionId = '11111111-2222-4333-8444-555555555555';
   assert.match(core.buildPrompt(card), /thread-map/);
+});
+
+// ------------------------------------------------------------ the step map, in any spelling
+
+const MAP_JSON = '[{"kind":"did","text":"read the plan","ref":"PLAN.md:12"}]';
+const withFence = (fence, body = MAP_JSON, close = '```') => `Intro.\n## Happened\n- read\n## Open\n- one\n\`\`\`${fence}\n${body}\n${close}`;
+
+test('the step map is found under thread-map, threadmap and thread_map, in any case', () => {
+  for (const fence of ['thread-map', 'threadmap', 'thread_map', 'THREADMAP', 'Thread-Map', 'threadmap json']) {
+    const v = core.parseHandback(withFence(fence));
+    assert.deepEqual(JSON.parse(JSON.stringify(v.map)), [{ kind: 'did', text: 'read the plan', ref: 'PLAN.md:12' }], fence);
+    assert.equal(v.sections.open, '- one', `${fence}: the block is not part of the Open section`);
+    assert.ok(!JSON.stringify([v.body, v.sections]).includes('PLAN.md'), `${fence}: no raw JSON is left in the text`);
+  }
+});
+
+test('a map block that cannot be parsed is removed from the text, closed or not, in every spelling', () => {
+  for (const fence of ['thread-map', 'threadmap', 'thread_map']) {
+    for (const close of ['```', '']) {
+      const v = core.parseHandback(withFence(fence, '[{"kind": "did", "text": ', close));
+      assert.deepEqual(v.map, []);
+      assert.equal(v.sections.open, '- one', `${fence} ${close ? 'closed' : 'unclosed'}`);
+      assert.ok(!JSON.stringify(v).includes('"kind"'));
+    }
+  }
+});
+
+test('thread_report text has no step map block: not a valid one, not a malformed one, not another spelling', async (t) => {
+  for (const [fence, body, close] of [['thread-map', MAP_JSON, '```'], ['threadmap', MAP_JSON, '```'], ['threadmap', '[{"kind": "did", "te', '```'], ['thread_map', '[broken', '']]) {
+    const e = setupThreadEnv(t);
+    const text = withFence(fence, body, close);
+    writeStateFile(e.dataDir, e.projectDir, emptyState(e.projectDir, [threadCard({}, { lastResult: text, turns: [{ prompt: 'p', startedAt: 'x', finishedAt: 'y', ok: true, result: text, error: null }] })]));
+    const r = await core.reportThread(e.projectDir, 'c1');
+    assert.ok(!/```|"kind"|PLAN\.md/.test(r.text), `${fence}: ${r.text}`);
+    assert.ok(r.text.includes('## Open'));
+  }
 });

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 export const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(TEST_DIR, '..');
 export const FAKE_CLAUDE = path.join(TEST_DIR, 'fake-claude.mjs');
+export const FAKE_DELEGATE = path.join(TEST_DIR, 'fake-delegate');
 export const SERVER_DIR = path.join(ROOT, 'server');
 export const CORE_PATH = path.join(SERVER_DIR, 'core.mjs');
 export const MCP_PATH = path.join(SERVER_DIR, 'mcp.mjs');
@@ -31,7 +32,7 @@ export const REPLY_WITH_MAP = [
 
 /** Remove environment that would change behaviour when the suite runs inside a Claude session. */
 export function cleanAmbientEnv() {
-  for (const k of ['THREAD_DEPTH', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PROJECT_DIR', 'CLAUDE_PLUGIN_DATA', 'THREAD_PROJECT_DIR', 'THREAD_NO_HTTP', 'THREAD_TIMEOUT_MS', 'FAKE_CLAUDE_MODE', 'FAKE_CLAUDE_DELAY_MS']) {
+  for (const k of ['THREAD_DEPTH', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PROJECT_DIR', 'CLAUDE_PLUGIN_DATA', 'THREAD_PROJECT_DIR', 'THREAD_NO_HTTP', 'THREAD_TIMEOUT_MS', 'FAKE_CLAUDE_MODE', 'FAKE_CLAUDE_DELAY_MS', 'THREAD_DELEGATE_DIR', 'FAKE_DELEGATE_MODE', 'FAKE_DELEGATE_LOG', 'FAKE_DELEGATE_SANDBOX', 'FAKE_RELAY_MODE', 'FAKE_RELAY_LOG', 'FAKE_RELAY_VIOLATION', 'FAKE_RELAY_TOUCHED', 'FAKE_RELAY_STDERR_TAIL', 'FAKE_RELAY_EVENTS', 'FAKE_RELAY_EVENTS_FILE']) {
     delete process.env[k];
   }
 }

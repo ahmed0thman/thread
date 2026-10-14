@@ -128,20 +128,22 @@ test('the poll loop asks for the server version every few seconds and stops once
   assert.ok(m, 'the tick block is missing from board.html');
   const run = async (state) => {
     const calls = [];
-    const g = { halted: false, projects: [], projectsAt: Date.now(), versionAt: 0, selKey: 'k', PROJECTS_MS: 5000, POLL_MS: 2000, loopTimer: 1, ...state };
+    const g = { halted: false, projects: [], projectsAt: Date.now(), versionAt: 0, lanesAt: 0, selKey: 'k', PROJECTS_MS: 5000, POLL_MS: 2000, loopTimer: 1, ...state };
     const ctx = vm.createContext({
       ...g,
       poll: async () => { calls.push('poll'); if (g.haltAfterPoll) ctx.halted = true; },
       refreshProjects: async () => { calls.push('projects'); },
       refreshVersion: async () => { calls.push('version'); },
+      refreshLanes: () => { calls.push('lanes'); return new Promise(() => {}); },   // never settles: the loop must not wait for it
       setTimeout: () => { calls.push('timer'); return 7; },
     });
     vm.runInContext(m[1].replace(/^\s*async function tick/m, 'globalThis.tick = async function tick'), ctx);
     await ctx.tick();
     return calls;
   };
-  assert.deepEqual(await run({}), ['poll', 'version', 'timer']);
-  assert.deepEqual(await run({ versionAt: Date.now() }), ['poll', 'timer'], 'asked at most every PROJECTS_MS');
+  assert.deepEqual(await run({}), ['poll', 'version', 'lanes', 'timer']);
+  assert.deepEqual(await run({ versionAt: Date.now(), lanesAt: Date.now() }), ['poll', 'timer'], 'asked at most every PROJECTS_MS');
+  assert.deepEqual(await run({ lanesAt: Date.now() }), ['poll', 'version', 'timer'], 'the lanes have a clock of their own');
   assert.deepEqual(await run({ haltAfterPoll: true }), ['poll'], 'no more requests after the access page shows');
 });
 
@@ -687,4 +689,266 @@ test('gear menu (fake DOM): the menu stays inside the window and a long menu scr
   t.page.menu.el.fire('keydown', { key: 'Home', preventDefault() {}, stopPropagation() {} });
   assert.equal(el.scrollTop, 0, 'and the first one back');
   assert.match(html, /item\.focus\(\{ preventScroll: true \}\)/, 'the page itself is never scrolled');
+});
+
+// ------------------------------------------------------------ delegation lanes
+
+const LANES = {
+  available: true, projectTrusted: false,
+  lanes: [
+    { name: 'code-codex', implementer: 'codex', model: 'gpt-fake', effort: 'high', variant: null, readOnly: false, source: 'global', approved: true },
+    { name: 'ui-open', implementer: 'opencode', model: 'vendor/model-x', effort: null, variant: 'max', readOnly: false, source: 'global', approved: true },
+    { name: 'review-ro', implementer: 'claude', model: null, effort: 'xhigh', variant: null, readOnly: true, source: 'project', approved: false },
+  ],
+};
+
+function lanePage(lanes = null) {
+  const m = /\/\/ ---- delegation lanes[^\n]*\n([\s\S]*?)\/\/ ---- end delegation lanes ----/.exec(html);
+  const t = /\/\/ ---- tokens and agents[^\n]*\n([\s\S]*?)\/\/ ---- end tokens and agents ----/.exec(html);
+  assert.ok(m && t, 'the lanes block is missing from board.html');
+  const doc = { createElement: (tag) => new FakeEl(doc, tag) };
+  doc.body = new FakeEl(doc, 'body');
+  const env = {
+    h(tag, cls, text) { const e = doc.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== null) e.textContent = text; return e; },
+    shape(cls) { const s = doc.createElement('span'); s.className = 'shape ' + cls; s.setAttribute('aria-hidden', 'true'); return s; },
+  };
+  const page = vm.runInNewContext(`let lanes = ${JSON.stringify(lanes)};\n${t[1]}\n${m[1]}\n({ laneInfo, laneTag, laneRows, showLaneRows, laneSig, laneFollowUp, laneTraceNote, laneStartPlan, setLanes(v) { lanes = v; } })`, vm.createContext(env));
+  return { page, doc };
+}
+const lcard = (lane, extra = {}) => ({ id: 'c3', kind: 'task', title: 'T', note: '', status: 'todo', lane, ...extra });
+
+test('lane tag: a hexagon icon and "name · provider", with the model and what the lane does in the title', () => {
+  const { page } = lanePage(LANES);
+  const tag = page.laneTag(lcard('code-codex'));
+  assert.match(tag.className, /\btag\b.*\blane-tag\b/);
+  assert.equal(tag.className.includes('attn'), false);
+  assert.deepEqual(tag.children.map((c) => c.className), ['shape s-hex', 'lane-tag-name', 'lane-tag-state']);
+  assert.equal(tag.children[0].getAttribute('aria-hidden'), 'true', 'the icon is decoration');
+  assert.equal(tag.textContent, 'code-codex · codex');
+  assert.equal(tag.title, 'Delegation lane code-codex: codex · gpt-fake · high. Starting this card as a thread runs it on that lane.');
+  assert.match(page.laneTag(lcard('ui-open', { kind: 'idea' })).title, /^Delegation lane ui-open: opencode · vendor\/model-x · max\./, 'a variant stands in for the effort');
+  assert.equal(page.laneTag(lcard('ui-open')).textContent, 'ui-open · opencode');
+});
+
+test('lane tag: a lane that is not found or not approved says so in words, and a card without a lane has no tag', () => {
+  const { page } = lanePage(LANES);
+  const missing = page.laneTag(lcard('gone'));
+  assert.equal(missing.textContent, 'gone · not found');
+  assert.match(missing.className, /\battn\b/);
+  assert.match(missing.title, /No lane has this name/);
+  const un = page.laneTag(lcard('review-ro'));
+  assert.equal(un.textContent, 'review-ro · not approved');
+  assert.match(un.className, /\battn\b/);
+  assert.match(un.title, /not approved yet\. Approve it with the delegate-setup skill/);
+  assert.equal(page.laneTag(lcard(undefined)), null);
+  assert.equal(page.laneTag(lcard('')), null);
+  assert.equal(page.laneTag(lcard('code-codex', { kind: 'milestone' })), null, 'milestones have no lane');
+  assert.equal(page.laneTag(lcard('code-codex', { kind: 'thread' })), null, 'neither do threads (yet)');
+});
+
+test('lane tag: until the lanes have loaded the name is shown plain, and without the delegate skills a card\'s lane shows as not found', () => {
+  const { page } = lanePage(null);
+  const loading = page.laneTag(lcard('code-codex'));
+  assert.equal(loading.textContent, 'code-codex');
+  assert.equal(loading.className.includes('attn'), false);
+  assert.deepEqual(plain(page.laneRows(lcard('code-codex'))), [['Lane', 'code-codex']]);
+  page.setLanes({ available: false, projectTrusted: false, lanes: [] });
+  const none = page.laneTag(lcard('code-codex'));
+  assert.equal(none.textContent, 'code-codex · not found');
+  assert.match(none.title, /delegate skills could not be read/);
+  assert.equal(page.laneTag(lcard(undefined)), null, 'a card with no lane shows nothing about lanes');
+  assert.deepEqual(plain(page.laneRows(lcard(undefined))), []);
+});
+
+test('lane rows on a card page: lane, provider, model, effort or variant, access and source', () => {
+  const { page } = lanePage(LANES);
+  assert.deepEqual(plain(page.laneRows(lcard('code-codex'))), [
+    ['Lane', 'code-codex'], ['Provider', 'codex'], ['Model', 'gpt-fake'], ['Effort', 'high'], ['Access', 'Can edit files'], ['Source', 'All projects'],
+  ]);
+  assert.deepEqual(plain(page.laneRows(lcard('ui-open'))).slice(2, 4), [['Model', 'vendor/model-x'], ['Variant', 'max']], 'Variant takes the place of Effort');
+  const ro = plain(page.laneRows(lcard('review-ro')));
+  assert.deepEqual(ro, [['Lane', 'review-ro (not approved)'], ['Hint', 'This lane comes from the project’s lane config, which is not approved yet. Approve it with the delegate-setup skill.']]);
+  const gone = plain(page.laneRows(lcard('gone')));
+  assert.deepEqual(gone.map((r) => r[0]), ['Lane', 'Hint']);
+  assert.equal(gone[0][1], 'gone (not found)');
+  page.setLanes({ ...LANES, lanes: [{ ...LANES.lanes[2], approved: true }] });
+  assert.deepEqual(plain(page.laneRows(lcard('review-ro'))), [
+    ['Lane', 'review-ro'], ['Provider', 'claude'], ['Model', 'CLI default'], ['Effort', 'extra-high'], ['Access', 'Read-only'], ['Source', 'This project'],
+  ]);
+  assert.deepEqual(plain(page.laneRows(lcard(undefined))), [], 'no lane, no rows');
+});
+
+test('lane rows are set as text, replace the earlier ones and leave the other rows alone', () => {
+  const { page, doc } = lanePage(LANES);
+  const dl = doc.createElement('dl');
+  const kind = doc.createElement('dd');
+  kind.textContent = 'task';
+  dl.append(doc.createElement('dt'), kind);
+  let nodes = page.showLaneRows(dl, [], lcard('code-codex'));
+  assert.equal(nodes.length, 12);
+  assert.equal(dl.children.length, 14);
+  nodes = page.showLaneRows(dl, nodes, lcard('<b>x</b>'));
+  assert.equal(dl.children.length, 2 + 4, 'the old rows went, the new ones came');
+  assert.equal(dl.children[2].textContent, 'Lane');
+  assert.equal(dl.children[3].textContent, '<b>x</b> (not found)', 'markup in a name stays text');
+  assert.equal(dl.children[3].children.length, 0);
+  nodes = page.showLaneRows(dl, nodes, lcard(undefined));
+  assert.equal(dl.children.length, 2, 'no lane, no rows');
+  assert.equal(dl.children[1], kind);
+});
+
+test('the lane signature changes when the lanes change what a card shows, and not otherwise', () => {
+  const { page } = lanePage(LANES);
+  const a = page.laneSig(lcard('review-ro'));
+  page.setLanes({ ...LANES, projectTrusted: true, lanes: LANES.lanes.map((l) => ({ ...l, approved: true })) });
+  assert.notEqual(page.laneSig(lcard('review-ro')), a, 'approving it changes the card');
+  page.setLanes({ ...LANES, lanes: [...LANES.lanes, { ...LANES.lanes[0], name: 'extra' }] });
+  const b = page.laneSig(lcard('code-codex'));
+  page.setLanes({ ...LANES, lanes: [...LANES.lanes, { ...LANES.lanes[0], name: 'another' }] });
+  assert.equal(page.laneSig(lcard('code-codex')), b, 'a lane the card does not use changes nothing');
+});
+
+test('the page wires lanes in: read on the slow cycle and when a project shows, drawn in the foot and on the page, never written', () => {
+  assert.match(html, /request\('GET', pp\(key, 'lanes'\), null, 9000\)/);
+  assert.match(html, /lanes = null; lanesSig = ''; lanesAt = 0;/);
+  assert.match(html, /const lt = laneTag\(card\);\n\s+if \(lt\) foot\.appendChild\(lt\);/);
+  assert.match(html, /laneNodes = showLaneRows\(metaDl, laneNodes, c\);/);
+  assert.match(html, /f\.milestone \+ '\|' \+ lanesSig/, 'the board is drawn again when the lanes change');
+  assert.match(html, /if \(card\.lane \|\| \(card\.thread && card\.thread\.lane\)\) ctx\.push\(laneSig\(card\)\)/, 'so is a card page');
+  assert.doesNotMatch(html, /\blane\s*:\s*(fMs|fTitle|fNote|fStatus)|patch\.lane|bodyObj\.lane/, 'no write sends a lane');
+  assert.ok(Buffer.byteLength(html) < 256 * 1024);
+});
+
+const SNAP = (over = {}) => ({ name: 'code-codex', implementer: 'codex', model: 'gpt-fake', effort: 'high', variant: null, readOnly: false, source: 'global', session: 'codex-sess-1', ...over });
+const lthread = (lane, runState = 'idle', extra = {}) => ({ id: 'c4', kind: 'thread', title: 'Lane thread', note: '', status: 'review', thread: { runState, lane, turns: [], ...extra } });
+
+test('lane thread: the tag and the page rows come from the snapshot taken when it started, whatever the lanes are now', () => {
+  const { page } = lanePage(LANES);
+  const tag = page.laneTag(lthread(SNAP({ name: 'long-gone', implementer: 'agy', model: 'gemini-fake' })));
+  assert.equal(tag.textContent, 'long-gone · agy', 'not "not found": a thread keeps what it ran on');
+  assert.equal(tag.className.includes('attn'), false);
+  assert.match(tag.title, /^Delegation lane long-gone: agy · gemini-fake · high\. This thread runs on that lane\.$/);
+  assert.deepEqual(plain(page.laneRows(lthread(SNAP(), 'idle', { mode: 'read' }))), [
+    ['Lane', 'code-codex'], ['Provider', 'codex'], ['Model', 'gpt-fake'], ['Effort', 'high'], ['Access', 'Can edit files'], ['Source', 'All projects'], ['Follow-up', 'Possible'],
+  ].map((r) => (r[0] === 'Access' ? ['Access', 'Read-only'] : r)), 'a thread started in read mode is read-only, whatever the lane could do');
+  assert.equal(plain(page.laneRows(lthread(SNAP(), 'idle', { mode: 'write' })))[4][1], 'Can edit files');
+  const v = plain(page.laneRows(lthread(SNAP({ effort: null, variant: 'max', readOnly: true, source: 'project' }), 'idle', { mode: 'write' })));
+  assert.deepEqual(v.slice(3), [['Variant', 'max'], ['Access', 'Read-only'], ['Source', 'This project'], ['Follow-up', 'Possible']]);
+  page.setLanes(null);
+  assert.equal(page.laneTag(lthread(SNAP())).textContent, 'code-codex · codex', 'also before the lanes have loaded');
+  assert.equal(page.laneInfo(lthread(undefined)), null, 'a thread without a lane shows nothing');
+});
+
+test('lane thread: a follow-up is possible with the provider\'s session, and the page says why not otherwise', () => {
+  const { page } = lanePage(LANES);
+  assert.deepEqual(plain(page.laneFollowUp(lthread(SNAP()))), { ok: true, text: 'Possible', why: '' });
+  assert.equal(page.laneFollowUp(lthread(SNAP({ session: null }), 'running')).ok, false);
+  assert.match(page.laneFollowUp(lthread(SNAP({ session: null }), 'running')).text, /^Not yet:/);
+  assert.match(page.laneFollowUp(lthread(SNAP({ session: null, implementer: 'agy' }))).text, /^Not possible: agy gave no session to continue\. Start a new thread instead\.$/);
+  assert.equal(page.laneFollowUp(lthread(undefined)).ok, false);
+});
+
+test('lane thread: the trace says in one line what the provider shows of a turn', () => {
+  const { page } = lanePage(LANES);
+  for (const p of ['codex', 'agy', 'opencode']) {
+    const line = p + ' gives no live steps in this version. The report appears when the turn ends; any steps shown here come from that report.';
+    assert.equal(page.laneTraceNote(lthread(SNAP({ implementer: p }), 'idle')), line);
+    assert.equal(page.laneTraceNote(lthread(SNAP({ implementer: p }), 'running')), line);
+  }
+  assert.equal(page.laneTraceNote(lthread(SNAP({ implementer: 'claude' }), 'running')), 'The steps and token use of this turn appear when it ends.');
+  assert.equal(page.laneTraceNote(lthread(SNAP({ implementer: 'claude' }), 'idle')), '', 'a finished claude turn has its trace and tokens');
+  assert.equal(page.laneTraceNote(lthread(undefined)), '');
+});
+
+test('start step for a card with a lane: the lane line, read-only when the lane is, and the reason when it cannot start', () => {
+  const { page } = lanePage(LANES);
+  assert.deepEqual(plain(page.laneStartPlan(lcard('code-codex'))), { name: 'code-codex', provider: 'codex', line: 'Runs on lane code-codex · codex', detail: 'gpt-fake · high', readOnly: false, modeNote: '', blocked: '' });
+  const ui = page.laneStartPlan(lcard('ui-open', { kind: 'idea' }));
+  assert.equal(ui.detail, 'vendor/model-x · max');
+  page.setLanes({ ...LANES, lanes: [{ ...LANES.lanes[0], readOnly: true }] });
+  assert.equal(page.laneStartPlan(lcard('code-codex')).readOnly, true);
+  page.setLanes(LANES);
+  const un = page.laneStartPlan(lcard('review-ro'));
+  assert.equal(un.blocked, 'Lane “review-ro” is not approved. This lane comes from the project’s lane config, which is not approved yet. Approve it with the delegate-setup skill.');
+  assert.match(page.laneStartPlan(lcard('gone')).blocked, /^Lane “gone” was not found\. No lane has this name/);
+  page.setLanes({ available: false, projectTrusted: false, lanes: [] });
+  assert.match(page.laneStartPlan(lcard('code-codex')).blocked, /delegate skills could not be read/);
+  assert.equal(page.laneStartPlan(lcard(undefined)), null, 'no lane: the step is the usual one');
+  assert.equal(page.laneStartPlan(lthread(SNAP())), null, 'a thread has no start step');
+});
+
+test('the start step hides the agent and Full copy for a lane, never sends a lane, and the composer follows the lane\'s session', () => {
+  assert.match(html, /const lp = laneStartPlan\(findCard\(P\.target\) \|\| card\);/);
+  assert.match(html, /if \(!lp\) step\.appendChild\(field\('Agent', agentSel, 'f-start-agent'\)\);/);
+  assert.match(html, /context: ctx \? ctx\.value\(\) : 'brief', agent: lp \? '' : agentSel\.value/);
+  assert.match(html, /lp && lp\.readOnly \? \[\['read', 'Read-only'\]\]/);
+  assert.match(html, /lp && lp\.blocked \? lp\.blocked : ''/);
+  assert.match(html, /if \(P\.starting\) renderFoot\(\); else syncStart\(\); \}/, 'a lane that loads or changes enables or disables the Start as thread button');
+  assert.match(html, /if \(t\.lane\) \{ const f = laneFollowUp\(card\); return f\.ok \? '' : 'This thread cannot take a follow-up\. ' \+ f\.why; \}/);
+  assert.match(html, /const laneNote = laneTraceNote\(c\);/);
+  assert.doesNotMatch(html, /\{ sessionId, mode, context, agent: [^}]*lane/, 'the start request carries no lane');
+});
+
+test('lane tag: the name may be cut short, but the state and the provider are a part of their own that never shrinks', () => {
+  const { page } = lanePage(LANES);
+  const long = 'a-lane-with-a-very-long-name-that-cannot-fit-in-a-card-foot-at-all';
+  for (const [lane, state] of [[long, ' · not found'], ['review-ro', ' · not approved']]) {
+    const tag = page.laneTag(lcard(lane));
+    assert.deepEqual(tag.children.map((c) => c.className), ['shape s-hex', 'lane-tag-name', 'lane-tag-state']);
+    assert.equal(tag.children[1].textContent, lane);
+    assert.equal(tag.children[2].textContent, state, 'the words are not in the part that is cut');
+  }
+  assert.equal(page.laneTag(lcard('code-codex')).children[2].textContent, ' · codex');
+  assert.equal(page.laneTag(lcard(long, { kind: 'idea' })).title.includes(long), true, 'the title still has the whole name');
+  assert.match(html, /\.lane-tag-name \{ min-width: 0; overflow: hidden; text-overflow: ellipsis; \}\n\.lane-tag-state \{ flex: none; \}/);
+});
+
+test('lane thread: a follow-up needs the lane to be found, approved, on the same provider and with its relay; otherwise it says why', () => {
+  const { page } = lanePage(LANES);
+  const th = (o = {}, run = 'idle', extra = {}) => lthread(SNAP(o), run, extra);
+  assert.equal(page.laneFollowUp(th()).ok, true);
+  const now = (over) => page.setLanes({ ...LANES, lanes: [{ ...LANES.lanes[0], ...over }, ...LANES.lanes.slice(1)] });
+  now({ approved: false });
+  assert.match(page.laneFollowUp(th()).text, /^Not possible: lane “code-codex” is not approved\. Approve this project’s lane config with the delegate-setup skill\.$/);
+  now({ relay: false });
+  assert.match(page.laneFollowUp(th()).text, /^Not possible: the codex relay \(the codex-delegate skill\) is not installed\.$/);
+  now({ implementer: 'opencode' });
+  assert.match(page.laneFollowUp(th()).text, /now runs on opencode, which cannot continue a codex session/);
+  now({ readOnly: true });
+  assert.equal(page.laneFollowUp(th()).ok, true, 'a read thread does not mind');
+  assert.match(page.laneFollowUp(th({}, 'idle', { mode: 'write' })).text, /read-only now/);
+  page.setLanes({ ...LANES, lanes: LANES.lanes.slice(1) });
+  assert.match(page.laneFollowUp(th()).text, /no longer one of the loaded lanes/);
+  page.setLanes({ available: false, projectTrusted: false, lanes: [] });
+  assert.match(page.laneFollowUp(th()).text, /delegate skills could not be read/);
+  page.setLanes(null);
+  assert.equal(page.laneFollowUp(th()).ok, true, 'until the lanes have loaded the session decides');
+  page.setLanes(LANES);
+  assert.notEqual(page.laneSig(th()), (page.setLanes({ ...LANES, lanes: [{ ...LANES.lanes[0], approved: false }] }), page.laneSig(th())), 'the page is drawn again when that changes');
+  assert.match(html, /composer: t\.runState \+ '\|' \+ t\.sessionId \+ '\|' \+ \(t\.lane \? laneSig\(c\) : ''\)/, 'and so is the composer');
+});
+
+test('lane access: agy is read-only, a codex lane with no sandbox says so, and a read-mode thread is never shown as able to edit', () => {
+  const { page } = lanePage(LANES);
+  const access = (card) => plain(page.laneRows(card)).find((r) => r[0] === 'Access')[1];
+  assert.equal(access(lthread(SNAP({ sandbox: 'danger-full-access' }), 'idle', { mode: 'write' })), 'Full access (no sandbox)');
+  assert.equal(access(lthread(SNAP({ sandbox: 'danger-full-access' }), 'idle', { mode: 'read' })), 'Read-only', 'read mode passes --read-only');
+  assert.equal(access(lthread(SNAP({ sandbox: 'workspace-write' }), 'idle', { mode: 'write' })), 'Can edit files');
+  assert.equal(access(lthread(SNAP({ implementer: 'agy' }), 'idle', { mode: 'write' })), 'Read-only');
+  page.setLanes({ ...LANES, lanes: [{ ...LANES.lanes[0], sandbox: 'danger-full-access' }, { ...LANES.lanes[0], name: 'agy-fast', implementer: 'agy' }] });
+  assert.equal(access(lcard('code-codex')), 'Full access (no sandbox)');
+  assert.equal(access(lcard('agy-fast')), 'Read-only');
+});
+
+test('start step: it says what runs, offers only read access for agy, and warns about full access', () => {
+  const { page } = lanePage({ ...LANES, lanes: [LANES.lanes[0], { ...LANES.lanes[0], name: 'agy-fast', implementer: 'agy' }, { ...LANES.lanes[0], name: 'code-full', sandbox: 'danger-full-access' }] });
+  const agy = page.laneStartPlan(lcard('agy-fast'));
+  assert.equal(agy.readOnly, true);
+  assert.equal(agy.modeNote, 'agy lanes are read-only in this version.');
+  assert.equal(agy.provider, 'agy');
+  assert.equal(page.laneStartPlan(lcard('code-full')).modeNote, 'This lane has no sandbox: in write mode it has full access.');
+  assert.equal(page.laneStartPlan(lcard('code-full')).readOnly, false);
+  assert.equal(page.laneStartPlan(lcard('gone')).provider, '', 'an unknown lane names no provider');
+  assert.match(html, /'This card becomes a thread: a background ' \+ \(lp0\.provider \? lp0\.provider \+ ' session' : 'session'\) \+ ' on lane ' \+ lp0\.name/);
+  assert.match(html, /a background Claude session working on this card’s title and note\./, 'the usual step still says Claude');
 });
