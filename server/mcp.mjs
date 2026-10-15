@@ -175,14 +175,14 @@ const TOOLS = [
     name: 'board_list',
     description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane shows it in braces, as {lane: name}; milestones are listed in their own section after the stages, each with its state (empty, open or done) and how many of its cards are done; a card with items waiting for the user shows "(2 waiting)" (wait_list reads them). ' +
       'After the title come the marks of its fields, when it has them: "(bug)", "!high" or "!low", "#label" for each label, "{blocked by c4, c7}" for the blockers that are not finished yet (in the done stage or a later one), "[criteria 3]" for its acceptance criteria, and "(done, not verified)" for a finished card whose criteria were never approved. ' +
-      'With parent, list only that milestone and its cards, after a summary line: the report for a milestone. Cards the user added or edited since the last listing are flagged "(new from user)". Listing marks them as seen.',
-    inputSchema: { type: 'object', properties: { parent: { type: 'string', description: 'Optional: a milestone card id; list only that milestone and the cards under it.' } }, required: [] },
+      'With parent, list only that milestone and its cards, after a summary line: the report for a milestone. Cards the user added or edited since the last listing are flagged "(new from user)". Listing marks them as seen. When the user clicks Notify Claude on such a card for this session, a line at the start of your turn asks you to look at it: list the board then, passing session_id, which is what ends that request (another session listing the board does not).',
+    inputSchema: { type: 'object', properties: { parent: { type: 'string', description: 'Optional: a milestone card id; list only that milestone and the cards under it.' }, session_id: SESSION_PROP }, required: [] },
   },
   {
     name: 'wait_add',
     description: 'Record something you need from the user on the card for that work, so the board shows it under "Waiting for you" with a red count and a tag on the card. Add an item when you finished work the user must check (kind "review"), have a question (kind "question", or "choice" with 2 to 8 options), or need the user to do something themselves (kind "todo"). ' +
       'If there is no card for the work yet, add one first with board_add. In the chat give one line only, for example "Waiting on you: c37.w2", not the whole question again. ' +
-      'The user answers on the board. The answer reaches this session, and only the session that asked, with the user\'s next message here; nothing arrives by itself. If the user answers in the chat instead, call wait_close with answered_in_chat. ' +
+      'The user answers on the board; their answers stay drafts there until one Send sends them all, so what several items asked arrives together. The answers reach this session, and only the session that asked, with the user\'s next message here (or within a few seconds when waking is on); nothing else arrives by itself. If the user answers in the chat instead, call wait_close with answered_in_chat. ' +
       'It does not move the card. Refused on a milestone, inside a side thread and when the project is chat-only. ' +
       'Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
     inputSchema: {
@@ -257,7 +257,7 @@ const TOOLS = [
       properties: {
         scope: { type: 'string', enum: CONFIG_SCOPES, description: '"global" applies to every project that has no setting of its own; "project" only to this one.' },
         mode: { type: ['string', 'null'], enum: [...CONFIG_MODES, null], description: '"tasks" (threads and the task board) or "chat" (threads only). null removes it from this scope.' },
-        wake: { type: ['boolean', 'null'], description: 'true lets an answer or a "Report to main session" click on the board wake an idle session at once, instead of waiting for the next message; false is the default. null removes it from this scope. true needs the user\'s agreement: see confirm_code.' },
+        wake: { type: ['boolean', 'null'], description: 'true lets an answer, a "Report to main session" click or a "Notify Claude" click on the board wake an idle session within a few seconds, instead of waiting for the next message; false is the default. null removes it from this scope. true needs the user\'s agreement: see confirm_code.' },
         confirm_code: CONFIRM_PROP,
         stages: {
           type: ['array', 'null'],
@@ -517,7 +517,7 @@ function configText(cfg) {
   return [
     `Set up: ${cfg.configured ? 'yes' : 'no (no config file exists; the defaults are in use)'}`,
     `Mode: ${chat ? 'chat (threads only; the task board is off)' : 'tasks (threads and the task board)'} — from ${from(cfg.source.mode)}`,
-    `Wake the session from the board: ${cfg.wake ? 'on (an answer or a report click on the board wakes an idle session)' : 'off (they reach the session with the next message)'} — from ${from(cfg.source.wake)}`,
+    `Wake the session from the board: ${cfg.wake ? 'on (an answer or a click on the board wakes an idle session)' : 'off (they reach the session with the next message)'} — from ${from(cfg.source.wake)}`,
     ...board,
     `Global config file: ${file('global')}`,
     `Project config file: ${file('project')}`,
@@ -630,7 +630,7 @@ async function tunnelText(action) {
 const TUNNEL_EXPOSES = [
   'Whoever has this link acts as you on this board, from anywhere on the internet.',
   'It can read: every project on the board with its absolute path (which contains your username), thread reports and transcripts, sub-agent run prompts, reports and steps, the session list, the agents list and the lane settings.',
-  'It can do: create and edit cards (which gives Claude new instructions), answer waiting items (which can approve a review and wake Claude), and ask for thread reports. It acts as you, so it can also move a card that has criteria to done, or edit those criteria, as you can on the local board. It cannot start, message, end or delete threads, or stop the board.',
+  'It can do: create and edit cards (which gives Claude new instructions), answer waiting items (which can approve a review and wake Claude), notify Claude about a card (its title and note reach Claude as if you had typed them, whether or not waking is on; with waking on that also wakes it), and ask for thread reports. It acts as you, so it can also move a card that has criteria to done, or edit those criteria, as you can on the local board. It cannot start, message, end or delete threads, or stop the board.',
 ].join('\n');
 
 // Opening the tunnel needs the user's yes, like turning waking on: the first call gets a code and opens nothing, a second call with
@@ -679,7 +679,7 @@ function wakeConfirmText(scope, code) {
   return [
     'CONFIRMATION REQUIRED. Nothing was saved.',
     '',
-    `Waking lets the thread board start a turn in an idle session by itself: when the user answers a waiting item that session asked, or clicks "Report to main session" for one of its threads, the session wakes and acts on it as if the user had typed it. That costs tokens while the user is away, it runs without permission prompts in a session that skips them, and anyone who has the board link could start a turn that way. It applies to ${scope === 'global' ? 'every project that has no setting of its own' : 'this project'}.`,
+    `Waking lets the thread board start a turn in an idle session by itself: when the user answers a waiting item that session asked, clicks "Report to main session" for one of its threads, or clicks "Notify Claude" on a card for it, the session wakes and acts on it as if the user had typed it. That costs tokens while the user is away, it runs without permission prompts in a session that skips them, and anyone who has the board link could start a turn that way. It applies to ${scope === 'global' ? 'every project that has no setting of its own' : 'this project'}.`,
     '',
     'Do not decide for the user. Show them the paragraph above in your own words and ask whether to turn waking on. Do this only when they asked for it.',
     `Only if they agree, call config_set again with the same arguments and confirm_code "${code}". If they decline, do not call it again with wake: true.`,
@@ -859,7 +859,7 @@ const HANDLERS = {
     const cfg = core.readConfig(pd);
     const chat = cfg.mode === 'chat';
     // In chat-only mode the user's task cards are not listed, so they stay unseen.
-    const unseen = new Set(chat ? [] : (await core.markSeen(pd)).map((c) => c.id));
+    const unseen = new Set(chat ? [] : (await core.markSeen(pd, callerId(args))).map((c) => c.id));
     const all = core.readState(pd).cards.map((c) => ({ ...c, status: core.effectiveStatus(c, cfg) }));
     const lines = [];
     let cards = all;

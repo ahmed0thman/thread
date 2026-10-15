@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // The Stop hook's background waiter (asyncRewake) of the thread plugin. While the session is idle it watches the project's
-// state file; when the user answers a waiting item this session asked, or clicks "Report to main session" for one of its
-// threads, it exits with code 2, which wakes the session. Claude Code then runs the UserPromptSubmit hook on that turn, and
-// that hook (scripts/hook.mjs) delivers the answers and report requests. Off unless the `wake` setting is on.
+// state file; when the user answers a waiting item this session asked, clicks "Report to main session" for one of its
+// threads, or clicks "Notify Claude" on a card for it, it waits a moment (so what the user sends in quick separate steps arrives as one
+// turn) and then exits with code 2, which wakes the session. Claude Code then runs the UserPromptSubmit hook on that turn, and
+// that hook (scripts/hook.mjs) delivers the answers and requests. Off unless the `wake` setting is on.
 // Any failure exits 0 with no output: a waiter must never break the session.
 // Claude Code runs an asyncRewake hook in the background only in an interactive session (or one with streaming input). In a
 // plain `claude -p` run it waits for the hook to end like for any other Stop hook, so a waiter there would hold the run up for
@@ -10,11 +11,13 @@
 
 import { watch } from 'node:fs';
 import { dirname } from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 const MESSAGE = '[thread] Not an error: the user acted on the thread board while you were idle. Their answers and requests are in the thread plugin\'s note on this turn; act on them now, as if they had typed them. If that note has nothing left to act on, there is nothing to do.';
 const DEFAULT_POLL_MS = 1500;
 const DEFAULT_IDLE_MS = 12 * 3600 * 1000;   // a waiter that has seen nothing for this long gives up; the next turn starts a new one
 const DEBOUNCE_MS = 100;
+const DEFAULT_SETTLE_MS = 2000;   // from the first trigger it sees to the wake: what else the user sends meanwhile rides on the same turn
 const STARTED_AT = Date.now() - process.uptime() * 1000;   // when this process started: the Stop hook ran then, not when the claim below is made
 
 function readStdin(ms) {
@@ -74,6 +77,7 @@ async function main() {
   if (!token) return 0;   // a turn started after this process did: the session is busy again
   const pollMs = numberEnv('THREAD_WAKE_POLL_MS', DEFAULT_POLL_MS);
   const idleMs = numberEnv('THREAD_WAKE_IDLE_MS', DEFAULT_IDLE_MS);
+  const settleMs = process.env.THREAD_WAKE_SETTLE_MS === '0' ? 0 : numberEnv('THREAD_WAKE_SETTLE_MS', DEFAULT_SETTLE_MS);
   const startedAt = Date.now();
   const parent = process.ppid;
   const claudePid = Number(process.env.CLAUDE_PID);   // Claude Code's own process: the parent may be a shell wrapper that outlives it
@@ -87,11 +91,14 @@ async function main() {
     let debounce = null;
     let watcher = null;
     let poll = null;
+    let settle = null;      // the timer that looks again once the settle time since the first trigger is over
+    let triggeredAt = null; // when a trigger was first seen (performance.now(): a clock that cannot step back, as the wall clock can), null while there is none
     const finish = (code) => {
       if (finished) return;
       finished = true;
       clearTimeout(debounce);
       clearInterval(poll);
+      clearTimeout(settle);
       try { if (watcher) watcher.close(); } catch { /* ignore */ }
       resolve(code);
     };
@@ -115,11 +122,22 @@ async function main() {
           if (print === seen) continue;
           if (!wake.wakeEnabled(projectDir)) return finish(0);   // switched off while waiting
           const pending = wake.pendingWake(projectDir, sessionId, fired);
-          if (pending.answers.length) {
-            await wake.recordFired(projectDir, sessionId, token, pending.answers);
-            return finish(2);
+          if (pending.answers.length || pending.reports.length || pending.notifies.length) {
+            // Not at the first sight: wait the settle time, then read again (this very loop does, with `seen` left empty), so a second
+            // answer, a click or a batch that follows closely lands in the same turn.
+            if (triggeredAt === null) triggeredAt = performance.now();
+            const left = settleMs - (performance.now() - triggeredAt);
+            if (left > 0) {
+              clearTimeout(settle);
+              settle = setTimeout(check, left);
+              seen = null;
+              continue;
+            }
+            // The claim re-reads everything under the state lock the prompt hook takes when a turn starts: it wakes only if this waiter
+            // still owns the session and something is still pending then (see claimWake).
+            if (await wake.claimWake(projectDir, sessionId, token, STARTED_AT)) return finish(2);
           }
-          if (pending.reports.length && (await wake.claimReportPushes(projectDir, sessionId, token)).length) return finish(2);
+          triggeredAt = null;
           seen = print;
         } while (again && !finished);
       } catch {

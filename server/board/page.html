@@ -35,26 +35,32 @@
   </header>
   <nav class="views" id="views" aria-label="Project views" hidden></nav>
   <div class="toolbar" id="toolbar" role="search" hidden>
-    <div class="search" id="search-wrap">
-      <input class="input" id="search" type="search" placeholder="Search id, title or note" aria-label="Search cards by id, title or note" autocomplete="off" spellcheck="false">
-      <span class="kbd" aria-hidden="true">/</span>
+    <div class="tb-row tb-main">
+      <div class="search" id="search-wrap">
+        <input class="input" id="search" type="search" placeholder="Search id, title or note" aria-label="Search cards by id, title or note" autocomplete="off" spellcheck="false">
+        <span class="kbd" aria-hidden="true">/</span>
+      </div>
+      <div class="filters" id="filters">
+        <label class="sel" id="session-wrap" hidden><select class="input" id="session-filter" aria-label="Filter threads by the session that started them"></select></label>
+        <label class="sel" id="milestone-wrap" hidden><select class="input" id="milestone-filter" aria-label="Filter cards by milestone"></select></label>
+        <span class="list-filters" id="list-filters" role="group" aria-label="List filters" hidden>
+          <label class="sel" hidden><select class="input" id="ltype-filter" aria-label="Filter cards by type"></select></label>
+          <label class="sel" hidden><select class="input" id="lprio-filter" aria-label="Filter cards by priority"></select></label>
+          <label class="sel" hidden><select class="input" id="llabel-filter" aria-label="Filter cards by label"></select></label>
+        </span>
+      </div>
+      <button type="button" class="btn primary" id="new-btn" aria-keyshortcuts="n">New card <kbd class="hint" aria-hidden="true">N</kbd></button>
     </div>
-    <div class="filters" id="filters">
-      <button type="button" class="btn ghost" id="threads-only" aria-pressed="false">Threads only</button>
-      <button type="button" class="btn wait-pill" id="waiting-btn" aria-pressed="false" aria-keyshortcuts="w" hidden><span>Waiting for you</span><span class="wait-n tnum" id="waiting-n">0</span><kbd class="hint" aria-hidden="true">W</kbd></button>
-      <span class="wait-legend" id="wait-legend" role="group" aria-label="Kinds of items waiting for you" hidden></span>
-      <label class="sel" id="session-wrap" hidden><span>Session</span><select class="input" id="session-filter" aria-label="Filter threads by the session that started them"></select></label>
-      <label class="sel" id="milestone-wrap" hidden><span>Milestone</span><select class="input" id="milestone-filter" aria-label="Filter cards by milestone"></select></label>
-      <span class="list-filters" id="list-filters" role="group" aria-label="List filters" hidden>
-        <label class="sel" hidden><span>Type</span><select class="input" id="ltype-filter" aria-label="Filter cards by type"></select></label>
-        <label class="sel" hidden><span>Priority</span><select class="input" id="lprio-filter" aria-label="Filter cards by priority"></select></label>
-        <label class="sel" hidden><span>Label</span><select class="input" id="llabel-filter" aria-label="Filter cards by label"></select></label>
-        <button type="button" class="btn" id="lblocked" aria-pressed="false" title="Only cards that wait on another card (blocked by)">Blocked</button>
-        <button type="button" class="btn" id="lunverified" aria-pressed="false" title="Only cards in the done stage whose acceptance criteria nobody approved">Done, not verified</button>
+    <div class="tb-row tb-chips" id="chips">
+      <button type="button" class="btn chip" id="threads-only" aria-pressed="false">Threads only</button>
+      <button type="button" class="btn chip wait-pill" id="waiting-btn" aria-pressed="false" aria-keyshortcuts="w" hidden><span>Waiting for you</span><span class="wait-n tnum" id="waiting-n">0</span><kbd class="hint" aria-hidden="true">W</kbd></button>
+      <span class="list-toggles" id="list-toggles" role="group" aria-label="List toggles" hidden>
+        <button type="button" class="btn chip" id="lblocked" aria-pressed="false" title="Only cards that wait on another card (blocked by)">Blocked</button>
+        <button type="button" class="btn chip" id="lunverified" aria-pressed="false" title="Only cards in the done stage whose acceptance criteria nobody approved">Done, not verified</button>
       </span>
+      <span class="wait-legend" id="wait-legend" role="group" aria-label="Kinds of items waiting for you" hidden></span>
       <span class="toolbar-note" id="filter-note" aria-live="polite"></span>
     </div>
-    <button type="button" class="btn primary" id="new-btn" aria-keyshortcuts="n">New card <kbd class="hint" aria-hidden="true">N</kbd></button>
   </div>
   <p class="mode-note" id="old-note" role="status" hidden>This board is served by a session on an older plugin version, so your stages and milestones are not shown. Run <code>/thread:board</code> in an updated session, then reload this page.</p>
   <p class="mode-note" id="version-note" role="status" hidden><span id="version-text"></span> <button type="button" class="btn small" id="version-reload">Reload</button></p>
@@ -88,6 +94,10 @@
   <button type="button" class="btn small" id="banner-close">Dismiss</button>
 </div>
 <div class="overlay" id="overlay" hidden></div>
+<div class="send-bar" id="send-bar" role="region" aria-label="Answers to send" hidden>
+  <span class="send-text" id="send-text"></span>
+  <button type="button" class="btn primary" id="send-btn"></button>
+</div>
 
 <script>
 (function () {

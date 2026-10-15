@@ -150,20 +150,55 @@ async function main() {
     // It also says whether this is the turn the waiter woke the session for: it recorded that a moment ago. What the prompt says proves
     // nothing, since a user can type the waiter's own words.
     let woken = false;
-    try { woken = await (await import(new URL('../server/wake.mjs', import.meta.url).href)).stopWaiter(projectDir, sessionId); } catch { /* best effort */ }
+    let wake = null;
+    try {
+      wake = await import(new URL('../server/wake.mjs', import.meta.url).href);
+      woken = await wake.stopWaiter(projectDir, sessionId);
+    } catch { /* best effort */ }
 
     await reconcile(projectDir);
     const announced = await pendingAnnouncements(projectDir, sessionId);
     const requested = await pendingReportRequests(projectDir, sessionId);
     const state = readState(projectDir);
-    // Chat-only: the task board is off, so new board cards are not mentioned.
-    const unseen = core.readConfig(projectDir).mode === 'chat' ? [] : state.cards.filter((c) => c.seenByClaude === false);
-    // Answers to what this session asked the user on the board, marked delivered under the state lock so each is carried once.
+    const cfg = core.readConfig(projectDir);
+    // The cards the user clicked "Notify Claude" on for this session and that it has not listed yet (read-only: a request ends when this
+    // session lists the board). Their lines and the answers' share one budget (core.HOOK_BUDGET): at most a few requests, within half of it,
+    // and the ones left over are named in a line, not dropped; the ones not carried before come first, so each reaches the session in turn.
+    let open = [];
+    try { open = core.pendingNotifies(projectDir, sessionId); } catch { /* the other notices still go out */ }
+    const looks = [];
+    const carried = [];
+    const heldBack = [];
+    let used = 0;
+    for (const c of open) {
+      const stage = cfg.taskStages.find((x) => x.id === core.effectiveStatus(c, cfg));
+      const line = core.notifyLine(c, stage ? stage.label : String(c.status), sessionId);
+      if (looks.length >= core.MAX_NOTIFIED_AT_ONCE || (looks.length && used + line.length + 1 > core.HOOK_BUDGET / 2)) { heldBack.push(c); continue; }
+      looks.push(line);
+      carried.push({ id: c.id, notifyId: c.notifyId });
+      used += line.length + 1;
+    }
+    // The requests above are carried by this prompt: a turn end does not wake the session for them again. Marked before the answers are, so that
+    // nothing that can wait lies between delivering an answer and printing it; if this fails the requests are still open and come again.
+    try { await core.markNotifyCarried(projectDir, carried); } catch { /* a wake may then repeat them once */ }
+    // Chat-only: the task board is off, so new board cards are not mentioned. A card with a request has its own line.
+    const unseen = cfg.mode === 'chat' ? [] : state.cards.filter((c) => c.seenByClaude === false && !open.some((n) => n.id === c.id));
+    // Answers to what this session asked the user on the board, marked delivered under the state lock so each is carried once, and only as
+    // many as fit in what is left of the budget (some room is kept for the lines about what is left over).
     // This is the last step that can wait or fail before the text is printed: an answer must not be marked delivered and then lost.
     let answered = [];
-    try { answered = await core.deliverWaitAnswers(projectDir, sessionId); } catch { /* the other notices still go out */ }
+    try { answered = await core.deliverWaitAnswers(projectDir, sessionId, { budget: core.HOOK_BUDGET - used - 400 }); } catch { /* the other notices still go out */ }
+    // Answers that did not fit stay undelivered. They must still reach the session: with the next prompt, and, when waking is on, with a wake,
+    // which a waiter makes only for answers that have not woken the session yet.
+    const leftover = [];
+    let left = [];
+    try {
+      left = wake ? wake.undeliveredAnswerKeys(projectDir, sessionId) : [];
+      if (left.length) leftover.push(`${left.length} more answer${left.length === 1 ? ' is' : 's are'} waiting; ${left.length === 1 ? 'it comes' : 'they come'} with your next message.`);
+    } catch { /* the line is a courtesy; the answers follow anyway */ }
+    const heldLine = heldBack.length ? core.notifyMoreLine(heldBack) : '';
 
-    if (!announced.length && !unseen.length && !requested.length && !answered.length) {
+    if (!announced.length && !unseen.length && !requested.length && !answered.length && !looks.length) {
       // Woken by the board but nothing is left to carry (it was delivered meanwhile): say so, so the turn does not go looking.
       if (woken) await emit('UserPromptSubmit', `${WOKEN_LEAD} What the user did there has already reached you; there is nothing more to act on. Say nothing about it and stop.`);
       return;
@@ -184,22 +219,25 @@ async function main() {
     if (notices.length > MAX_CONTEXT) notices = notices.slice(0, MAX_CONTEXT - 1) + '…';
     // The user asked for these by clicking, so they come first and are not cut by the notices' cap.
     const asks = requested.map((c) => `The user clicked "Report to main session" on the board for thread ${c.id} "${core.clip(c.title, 50)}". Call thread_report with id "${c.id}" now and give them the digest.`);
+    // The requests carried above are quoted as data (see core.notifyLine), outside the cap, like the answers.
     const cap = (t) => (t.length > MAX_TOTAL ? t.slice(0, MAX_TOTAL - 1) + '…' : t);
     // The answers go first and outside the cap (each line is clipped on its own, and at most a few per prompt), so they are never cut off.
-    const replies = answered.map(({ item }) => core.deliveryLine(item));
+    const replies = [...answered.map(({ item }) => core.deliveryLine(item)), ...leftover];
     let text;
     if (!woken) {
-      text = [...replies, cap([...asks, notices].filter(Boolean).join('\n'))].filter(Boolean).join('\n');
+      text = [...replies, ...looks, heldLine, cap([...asks, notices].filter(Boolean).join('\n'))].filter(Boolean).join('\n');
     } else {
-      // Only what the user did on the board (the answers and the report clicks) is to be acted on as if they had typed it. Any other
+      // Only what the user did on the board (the answers and the report and notify clicks) is to be acted on as if they had typed it. Any other
       // notice that happens to ride on this turn is information, as on any other turn.
-      const act = [...replies, cap(asks.join('\n'))].filter(Boolean);
+      const act = [...replies, ...looks, heldLine, cap(asks.join('\n'))].filter(Boolean);
       const head = act.length
         ? `${WOKEN_LEAD} They acted there while you were idle, so act on these lines now, as if they had typed them:\n${act.join('\n')}`
         : `${WOKEN_LEAD} What the user did there has already reached you; there is nothing to act on from it.`;
       text = notices ? `${head}\nOther notices, for information only; act on them only if the user asks or the work calls for it:\n${notices}` : head;
     }
     await emit('UserPromptSubmit', text);
+    // Printed. The answers left over are taken out of the record of those that woke the session, so a waiter wakes it for them again.
+    if (left.length) { try { await wake.forgetFired(projectDir, sessionId, left); } catch { /* they still come with the next prompt */ } }
   }
 }
 

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { FakeEl } from './helpers.mjs';
 import { assembleBoardPage } from '../server/page.mjs';
+import { MAX_BATCH } from '../server/waits.mjs';
 
 const html = await assembleBoardPage();
 const block = (name, end) => {
@@ -23,14 +24,23 @@ const wait = (id, kind, extra = {}) => ({ id, kind, text: `Text of ${id}`, asked
 function waitsPage(over = {}) {
   const doc = { activeElement: null, createElement: (tag) => new FakeEl(doc, tag) };
   doc.body = new FakeEl(doc, 'body');
-  const state = { current: { cards: [] }, chat: false, ro: false, selKey: 'k1', projects: [], rendered: 0, view: 'board', goViews: [], errors: [], posts: [], copies: [], applied: [], answers: [], busy: {} };
+  const state = { current: { cards: [] }, chat: false, ro: false, selKey: 'k1', projects: [], rendered: 0, view: 'board', goViews: [], errors: [], posts: [], copies: [], applied: [], answers: [], busy: {}, halted: false, home: false, panel: null, listeners: {}, storage: (over.storage || { data: {}, broken: false }) };
   const mk = (tag, cls) => { const e = doc.createElement(tag); if (cls) e.className = cls; return e; };
   const env = {
     document: doc,
+    window: { addEventListener: (type, fn) => { (state.listeners[type] = state.listeners[type] || []).push(fn); } },
     get current() { return state.current; },
     get selKey() { return state.selKey; },
     get projects() { return state.projects; },
     get viewSel() { return state.view; },
+    get halted() { return state.halted; },
+    get showingHome() { return state.home; },
+    get panel() { return state.panel; },
+    localStorage: {
+      getItem: (k) => { if (state.storage.broken) throw new Error('blocked'); return k in state.storage.data ? state.storage.data[k] : null; },
+      setItem: (k, v) => { if (state.storage.broken) throw new Error('blocked'); state.storage.data[k] = String(v); },
+      removeItem: (k) => { if (state.storage.broken) throw new Error('blocked'); delete state.storage.data[k]; },
+    },
     goView: (v) => { state.goViews.push(v); },
     READONLY_WHY: 'read-only',
     isChat: () => state.chat,
@@ -46,23 +56,27 @@ function waitsPage(over = {}) {
       b.addEventListener('click', () => { if (b.dataset.off !== '1') onClick(); });
       return b;
     },
+    plainBtn: (text, cls, onClick) => { const b = mk('button', 'btn' + (cls ? ' ' + cls : '')); b.textContent = text; if (onClick) b.addEventListener('click', onClick); return b; },
     setOff: (b, off) => { b.dataset.off = off ? '1' : '0'; b.disabled = off; },
     runAction: async (key, fn) => { if (state.busy[key]) return undefined; state.busy[key] = true; try { return await fn(); } finally { delete state.busy[key]; } },
     syncBusy() {},
     clearError() {}, showError: (m) => { state.errors.push(m); },
     pp: (key, rest) => `/api/p/${key}/${rest}`,
     api: async (method, p, body) => { state.posts.push([method, p, body]); const a = state.answers.shift(); if (a instanceof Error) throw a; return a; },
-    applyCard: (c, key) => { state.applied.push([c, key]); },
+    applyCards: (list, key) => { list.forEach((c) => state.applied.push([c, key])); },
     wrote() {}, poll: async () => {},
     renderBoard: () => { state.rendered++; },
     elWaiting: mk('button'), elWaitN: mk('span'), elWaitLegend: mk('span'),
+    elSendBar: mk('div'), elSendText: mk('span'), elSendBtn: mk('button'), elNewBtn: mk('button'),
   };
+  env.elSendBar.hidden = true;
+  env.elSendBar.append(env.elSendText, env.elSendBtn);
   env.elWaiting.hidden = true;
   env.elWaiting.setAttribute('aria-pressed', 'false');
   Object.assign(env, over.env || {});
   const src = `${block('milestones and stages', 'milestones and stages')}\n${block('waiting for you', 'waiting for you')}
 ({ waitsOf, openWaitsOf, matches, cardActionsOf: null, waitingCount, tabWaiting, waitingOn, setWaitingOn, toggleWaiting, updateWaitingPill, waitTag, waitSummary, waitSummaryText, cardWaits,
-   waitKindMark, waitReady, waitBody, waitAnswerText, waitLine, waitRow, attachWaits, sendWait, waitDrafts, WAIT_ORDER, WAIT_SPEC })`;
+   waitKindMark, waitReady, waitBody, waitAnswerText, waitLine, waitRow, attachWaits, sendDrafts, updateSendBar, readyDrafts, loadDrafts, saveDrafts, pruneDrafts, draftEmpty, waitDrafts, WAIT_ORDER, WAIT_SPEC })`;
   const page = vm.runInNewContext(src, vm.createContext(env));
   const setCards = (cards) => { state.current = { cards }; };
   return { page, env, state, doc, setCards };
@@ -277,14 +291,17 @@ test('the project switcher names the parent folder of two projects with one name
 
 function openSection(over = {}) {
   const t = waitsPage(over);
-  const ctl = t.page.attachWaits({});
+  const P = {};
+  const ctl = t.page.attachWaits(P);
   t.doc.body.append(ctl.host);
   const show = (card) => { t.state.current = { cards: [card] }; ctl.update(card); };
-  return { ...t, ctl, show };
+  return { ...t, ctl, show, P };
 }
 const CARD = (waits, extra = {}) => task('c1', { waits, ...extra });
 const row = (t, id) => t.ctl.host.querySelector(`li[data-wid="${id}"]`);
-const sendBtn = (li) => li.querySelectorAll('button').find((b) => b.textContent === 'Send');
+const sendBtn = (t) => t.env.elSendBtn;   // the bar's: an item has none
+const draftOf = (li) => li.querySelector('.wait-draft');
+const stored = (t) => JSON.parse(t.state.storage.data['thread-board-drafts:k1'] || 'null');
 const type = (el, value) => { el.value = value; el.fire('input'); };
 const pick = (el, checked = true) => { el.checked = checked; el.fire('change'); };
 // the page sets type and name as properties; a real DOM reflects them as attributes, the fake does not
@@ -320,28 +337,39 @@ test('text from Claude is set as text, never as markup', () => {
   assert.doesNotMatch(html.slice(html.indexOf('// ---- waiting for you'), html.indexOf('// ---- end waiting for you')), /innerHTML|insertAdjacentHTML/);
 });
 
-test('a question has a text box for the answer and Send waits until it holds something', async () => {
+test('a question has a text box for the answer; typing makes a draft that is not sent, and the bar sends it', async () => {
   const t = openSection();
   t.show(CARD([wait('c1.w1', 'question')]));
   const li = row(t, 'c1.w1');
   const ta = li.querySelector('textarea');
   assert.equal(ta.getAttribute('aria-label'), 'Your answer to c1.w1');
   assert.equal(inputs(li, 'text').length, 0, 'the answer is the text: no separate comment box');
-  const send = sendBtn(li);
-  assert.equal(send.disabled, true);
+  assert.equal(li.querySelectorAll('button').find((b) => b.textContent === 'Send'), undefined, 'the item has no Send button of its own');
+  assert.equal(draftOf(li).hidden, true);
+  assert.equal(t.env.elSendBar.hidden, true);
   type(ta, '   ');
-  assert.equal(send.disabled, true);
+  assert.equal(draftOf(li).hidden, true, 'blanks are no draft');
+  assert.equal(t.env.elSendBar.hidden, true);
   type(ta, ' 5 ');
-  assert.equal(send.disabled, false);
-  t.state.answers = [{ ...CARD([wait('c1.w1', 'question', { state: 'answered', answer: { text: '5' }, answeredVia: 'board' })]) }];
-  send.click();
+  assert.equal(draftOf(li).hidden, false);
+  assert.equal(draftOf(li).querySelector('span').textContent, 'Draft, not sent');
+  assert.equal(li.dataset.draft, '1');
+  assert.equal(t.env.elSendBar.hidden, false);
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer');
+  assert.match(t.env.elSendText.textContent, /^1 answer is drafted and not sent yet\. Claude gets them together when you send\.$/);
+  assert.equal(t.state.posts.length, 0, 'nothing was sent');
+  assert.deepEqual(plain(stored(t)), { 'c1.w1': { text: ' 5 ', choices: [], done: false, verdict: '', comment: '' } }, 'and it is kept in the browser');
+  t.state.answers = [{ applied: ['c1.w1'], skipped: [], cards: [CARD([wait('c1.w1', 'question', { state: 'answered', answer: { text: '5' }, answeredVia: 'board' })])] }];
+  sendBtn(t).click();
   await tick();
-  assert.deepEqual(plain(t.state.posts), [['POST', '/api/p/k1/cards/c1/waits/c1.w1', { text: '5' }]]);
+  assert.deepEqual(plain(t.state.posts), [['POST', '/api/p/k1/waits/answer-batch', { items: [{ id: 'c1.w1', text: '5' }] }]]);
   assert.equal(t.state.applied[0][1], 'k1');
   assert.equal(t.page.waitDrafts['k1/c1.w1'], undefined, 'the draft is gone once sent');
+  assert.equal(stored(t), null, 'and so is the stored one');
+  assert.equal(t.env.elSendBar.hidden, true, 'and the bar with the last draft');
 });
 
-test('a choice shows radio buttons for one pick and checkboxes for several, and Send needs a valid pick', async () => {
+test('a choice shows radio buttons for one pick and checkboxes for several, and only a valid pick is a draft', async () => {
   const t = openSection();
   t.show(CARD([wait('c1.w1', 'choice'), wait('c1.w2', 'choice', { multi: true })]));
   const one = row(t, 'c1.w1'), many = row(t, 'c1.w2');
@@ -351,29 +379,26 @@ test('a choice shows radio buttons for one pick and checkboxes for several, and 
   assert.equal(many.querySelector('legend').textContent, 'Pick any that apply');
   assert.deepEqual(options(one).map((i) => i.value), ['a', 'b', 'c']);
   assert.equal(new Set(options(one).map((i) => i.name)).size, 1, 'one group');
-  assert.equal(sendBtn(one).disabled, true);
-  assert.equal(sendBtn(many).disabled, true);
+  assert.equal(t.env.elSendBar.hidden, true);
   const o = options(one);
   pick(o[1]);
-  assert.equal(sendBtn(one).disabled, false);
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer');
   pick(o[2]);   // a radio button fires change only for the one picked; the earlier one is just unchecked by the browser
-  assert.equal(sendBtn(one).disabled, false, 'picking another replaces the pick');
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer', 'picking another replaces the pick');
   assert.deepEqual(plain(t.page.waitDrafts['k1/c1.w1'].choices), ['c']);
   pick(o[1]);
   const m = options(many);
   pick(m[2]); pick(m[0]);
-  assert.equal(sendBtn(many).disabled, false);
+  assert.equal(sendBtn(t).textContent, 'Send 2 answers');
   pick(m[0], false); pick(m[2], false);
-  assert.equal(sendBtn(many).disabled, true, 'unticking all leaves nothing to send');
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer', 'unticking all leaves no draft');
+  assert.equal(draftOf(many).hidden, true);
   pick(m[1]); pick(m[2]);
   type(inputs(many, 'text')[0], ' fine ');
-  t.state.answers = [CARD([wait('c1.w1', 'choice', { state: 'answered', answer: { choices: ['b'] } }), wait('c1.w2', 'choice', { multi: true })])];
-  sendBtn(one).click();
+  t.state.answers = [{ applied: ['c1.w1', 'c1.w2'], skipped: [], cards: [CARD([wait('c1.w1', 'choice', { state: 'answered', answer: { choices: ['b'] } }), wait('c1.w2', 'choice', { multi: true, state: 'answered', answer: { choices: ['b', 'c'] } })])] }];
+  sendBtn(t).click();
   await tick();
-  t.state.answers = [CARD([wait('c1.w2', 'choice', { multi: true, state: 'answered', answer: { choices: ['b', 'c'] } })])];
-  sendBtn(many).click();
-  await tick();
-  assert.deepEqual(plain(t.state.posts.map((p) => p[2])), [{ choices: ['b'] }, { choices: ['b', 'c'], comment: 'fine' }]);
+  assert.deepEqual(plain(t.state.posts), [['POST', '/api/p/k1/waits/answer-batch', { items: [{ id: 'c1.w1', choices: ['b'] }, { id: 'c1.w2', choices: ['b', 'c'], comment: 'fine' }] }]], 'one request for both');
 });
 
 test('a single choice needs exactly one option and a multiple choice at least one', () => {
@@ -383,45 +408,46 @@ test('a single choice needs exactly one option and a multiple choice at least on
   assert.deepEqual([[], ['a'], ['a', 'b']].map((c) => page.waitReady(wait('x', 'choice', { multi: true }), d(c))), [false, true, true]);
 });
 
-test('a to-do is ticked as done and a review is approved or sent back, each with an optional comment', async () => {
+test('a to-do is ticked as done and a review is approved or sent back, each with an optional comment, and both go in one send', async () => {
   const t = openSection();
   t.show(CARD([wait('c1.w1', 'todo'), wait('c1.w2', 'review')]));
   const todo = row(t, 'c1.w1'), review = row(t, 'c1.w2');
   const box = inputs(todo, 'checkbox')[0];
   assert.match(todo.textContent, /Done: I did this/);
-  assert.equal(sendBtn(todo).disabled, true);
+  assert.equal(t.env.elSendBar.hidden, true);
   pick(box);
-  assert.equal(sendBtn(todo).disabled, false);
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer');
   pick(box, false);
-  assert.equal(sendBtn(todo).disabled, true);
+  assert.equal(t.env.elSendBar.hidden, true);
   pick(box);
   assert.equal(inputs(todo, 'text')[0].getAttribute('aria-label'), 'Comment on c1.w1 (optional)');
   const radios = inputs(review, 'radio');
   assert.deepEqual(radios.map((r) => r.value), ['approve', 'changes']);
   assert.deepEqual(review.querySelectorAll('label').map((l) => l.textContent), ['Approve', 'Request changes']);
-  assert.equal(sendBtn(review).disabled, true);
-  pick(radios[1]);
-  assert.equal(sendBtn(review).disabled, false);
   type(inputs(review, 'text')[0], 'rename the helper');
-  t.state.answers = [CARD([wait('c1.w1', 'todo', { state: 'answered' })]), CARD([wait('c1.w2', 'review', { state: 'answered' })])];
-  sendBtn(todo).click();
+  assert.equal(draftOf(review).hidden, false, 'a comment alone is something to keep or discard');
+  assert.equal(draftOf(review).querySelector('span').textContent, 'Draft, not complete');
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer', 'but it is not sent without a verdict');
+  pick(radios[1]);
+  assert.equal(draftOf(review).querySelector('span').textContent, 'Draft, not sent');
+  assert.equal(sendBtn(t).textContent, 'Send 2 answers');
+  t.state.answers = [{ applied: ['c1.w1', 'c1.w2'], skipped: [], cards: [CARD([wait('c1.w1', 'todo', { state: 'answered' }), wait('c1.w2', 'review', { state: 'answered' })])] }];
+  sendBtn(t).click();
   await tick();
-  sendBtn(review).click();
-  await tick();
-  assert.deepEqual(plain(t.state.posts.map((p) => p[2])), [{ done: true }, { verdict: 'changes', comment: 'rename the helper' }]);
+  assert.deepEqual(plain(t.state.posts), [['POST', '/api/p/k1/waits/answer-batch', { items: [{ id: 'c1.w1', done: true }, { id: 'c1.w2', verdict: 'changes', comment: 'rename the helper' }] }]]);
 });
 
-test('Ctrl or Cmd + Enter sends, a plain Enter does not, and the card form\'s own shortcut is not triggered', async () => {
+test('Ctrl or Cmd + Enter sends the drafts like the bar does, a plain Enter does not, and the card form\'s own shortcut is not triggered', async () => {
   const t = openSection();
   t.show(CARD([wait('c1.w1', 'question')]));
   const li = row(t, 'c1.w1');
   const ta = li.querySelector('textarea');
-  t.state.answers = [CARD([wait('c1.w1', 'question', { state: 'answered', answer: { text: 'x' } })])];
+  t.state.answers = [{ applied: ['c1.w1'], skipped: [], cards: [CARD([wait('c1.w1', 'question', { state: 'answered', answer: { text: 'x' } })])] }];
   const key = (extra) => { const stops = []; const e = ta.fire('keydown', { key: 'Enter', stopPropagation() { stops.push(1); }, ...extra }); li.fire('keydown', { key: 'Enter', target: ta, stopPropagation() { stops.push(1); }, ...extra }); return { e, stops }; };
   type(ta, '');
   key({ ctrlKey: true });
   await tick();
-  assert.equal(t.state.posts.length, 0, 'an empty answer is not sent');
+  assert.equal(t.state.posts.length, 0, 'no draft, nothing to send');
   type(ta, 'x');
   const plainKey = key({});
   await tick();
@@ -431,23 +457,286 @@ test('Ctrl or Cmd + Enter sends, a plain Enter does not, and the card form\'s ow
   await tick();
   assert.equal(t.state.posts.length, 1);
   assert.equal(ctrl.stops.length > 0, true, 'the event stops here, so the form around it does not save');
+  assert.deepEqual(plain(t.state.posts[0][2]), { items: [{ id: 'c1.w1', text: 'x' }] });
+  type(ta, 'again');
   const composing = key({ ctrlKey: true, isComposing: true });
   await tick();
   assert.equal(t.state.posts.length, 1, 'text being composed is left alone');
   assert.ok(composing);
 });
 
-test('a failed send keeps what was typed and shows the server\'s message', async () => {
+test('a failed send keeps every draft, here and in the browser, and shows the server\'s message', async () => {
   const t = openSection();
-  t.show(CARD([wait('c1.w1', 'question')]));
-  const ta = row(t, 'c1.w1').querySelector('textarea');
-  type(ta, 'my long answer');
-  t.state.answers = [new Error('c1.w1 is answered, not open')];
-  sendBtn(row(t, 'c1.w1')).click();
+  t.show(CARD([wait('c1.w1', 'question'), wait('c1.w2', 'todo')]));
+  type(row(t, 'c1.w1').querySelector('textarea'), 'my long answer');
+  pick(inputs(row(t, 'c1.w2'), 'checkbox')[0]);
+  t.state.answers = [new Error('nothing was sent: c1.w1: the answer is too long')];
+  sendBtn(t).click();
   await tick();
-  assert.deepEqual(t.state.errors, ['c1.w1 is answered, not open']);
+  assert.deepEqual(t.state.errors, ['nothing was sent: c1.w1: the answer is too long']);
   assert.equal(t.page.waitDrafts['k1/c1.w1'].text, 'my long answer');
+  assert.equal(t.page.waitDrafts['k1/c1.w2'].done, true);
+  assert.equal(Object.keys(stored(t)).length, 2);
   assert.equal(t.state.applied.length, 0);
+  assert.equal(sendBtn(t).textContent, 'Send 2 answers');
+});
+
+test('the page sends in requests of at most MAX_BATCH answers, one after another; a request that fails keeps its drafts and says which it was', async () => {
+  assert.match(html, new RegExp(`const WAIT_BATCH_MAX = ${MAX_BATCH};`), 'the page and the server agree on the size');
+  const t = openSection();
+  const waits = Array.from({ length: 51 }, (_, i) => wait(`c1.w${i + 1}`, 'todo'));
+  t.show(CARD(waits));
+  waits.forEach((w) => pick(inputs(row(t, w.id), 'checkbox')[0]));
+  assert.equal(sendBtn(t).textContent, 'Send 51 answers');
+  t.state.answers = [
+    { applied: waits.slice(0, 50).map((w) => w.id), skipped: [], cards: [CARD(waits.map((w, i) => (i < 50 ? { ...w, state: 'answered' } : w)))] },
+    new Error('nothing was sent: c1.w51: something'),
+  ];
+  sendBtn(t).click();
+  await tick();
+  await tick();
+  assert.deepEqual(t.state.posts.map((p) => p[2].items.length), [50, 1], 'two requests, the second after the first');
+  assert.equal(t.state.posts[1][2].items[0].id, 'c1.w51');
+  assert.equal(t.state.errors.length, 1);
+  assert.equal(t.state.errors[0], 'Part 2 of 2 was not sent (c1.w51): nothing was sent: c1.w51: something 50 answers were sent before it; the drafts of this part and of the rest are kept.');
+  assert.deepEqual(Object.keys(stored(t)), ['c1.w51'], 'the first request\'s drafts are gone, the failed one\'s are kept');
+  assert.equal(t.page.waitDrafts['k1/c1.w51'].done, true);
+  // exactly 50 is one request
+  const u = openSection();
+  const fifty = waits.slice(0, 50);
+  u.show(CARD(fifty));
+  fifty.forEach((w) => pick(inputs(row(u, w.id), 'checkbox')[0]));
+  u.state.answers = [{ applied: fifty.map((w) => w.id), skipped: [], cards: [CARD(fifty.map((w) => ({ ...w, state: 'answered' })))] }];
+  sendBtn(u).click();
+  await tick();
+  assert.equal(u.state.posts.length, 1);
+  assert.deepEqual(u.state.errors, []);
+});
+
+test('a draft typed into while its request is in flight is kept, and the user is told what Claude received', async () => {
+  const t = openSection();
+  t.show(CARD([wait('c1.w1', 'question'), wait('c1.w2', 'question')]));
+  type(row(t, 'c1.w1').querySelector('textarea'), 'first version');
+  type(row(t, 'c1.w2').querySelector('textarea'), 'second');
+  let release;
+  t.state.answers = [new Promise((resolve) => { release = () => resolve({ applied: ['c1.w1', 'c1.w2'], skipped: [], cards: [] }); })];
+  sendBtn(t).click();
+  await tick();
+  type(row(t, 'c1.w1').querySelector('textarea'), 'first version, then more');   // the request is out
+  release();
+  await tick();
+  assert.deepEqual(plain(t.state.posts[0][2].items), [{ id: 'c1.w1', text: 'first version' }, { id: 'c1.w2', text: 'second' }]);
+  assert.equal(t.page.waitDrafts['k1/c1.w1'].text, 'first version, then more', 'the newer text is not thrown away');
+  assert.equal(t.page.waitDrafts['k1/c1.w2'], undefined, 'the one that did not change is gone');
+  assert.deepEqual(Object.keys(stored(t)), ['c1.w1']);
+  assert.deepEqual(t.state.errors, ['c1.w1 was changed while it was being sent; Claude got the version that was sent.']);
+  // a draft emptied while in flight is no draft: nothing to keep
+  const u = openSection();
+  u.show(CARD([wait('c1.w1', 'question')]));
+  type(row(u, 'c1.w1').querySelector('textarea'), 'x');
+  u.state.answers = [new Promise((resolve) => { release = () => resolve({ applied: ['c1.w1'], skipped: [], cards: [] }); })];
+  sendBtn(u).click();
+  await tick();
+  type(row(u, 'c1.w1').querySelector('textarea'), '');
+  release();
+  await tick();
+  assert.deepEqual(u.state.errors, []);
+  assert.equal(stored(u), null);
+});
+
+test('the later request of a batch is built from the drafts as they are by then', async () => {
+  const t = openSection();
+  const waits = Array.from({ length: 51 }, (_, i) => wait(`c1.w${i + 1}`, 'question'));
+  t.show(CARD(waits));
+  waits.forEach((w) => type(row(t, w.id).querySelector('textarea'), 'v1'));
+  let release;
+  t.state.answers = [new Promise((resolve) => { release = () => resolve({ applied: [], skipped: [], cards: [] }); }), { applied: [], skipped: [], cards: [] }];
+  sendBtn(t).click();
+  await tick();
+  type(row(t, 'c1.w51').querySelector('textarea'), 'v2');   // the first request is in flight
+  release();
+  await tick();
+  await tick();
+  assert.deepEqual(plain(t.state.posts[1][2].items), [{ id: 'c1.w51', text: 'v2' }]);
+});
+
+test('two tabs share the drafts: a save keeps what the other tab stored, and the storage event brings its changes in', () => {
+  const shared = { data: {}, broken: false };
+  const a = openSection({ storage: shared });
+  const b = openSection({ storage: shared });
+  const waits = [wait('c1.w1', 'question'), wait('c1.w2', 'question'), wait('c1.w3', 'todo')];
+  a.show(CARD(waits));
+  b.show(CARD(waits));
+  a.state.panel = a.P;   // the card page that is open in tab A
+  const fire = (t) => (t.state.listeners.storage || []).forEach((fn) => fn({ key: 'thread-board-drafts:k1' }));
+  type(row(a, 'c1.w1').querySelector('textarea'), 'from tab A');
+  type(row(b, 'c1.w2').querySelector('textarea'), 'from tab B');   // B never saw A's draft
+  assert.deepEqual(Object.keys(stored(a)).sort(), ['c1.w1', 'c1.w2'], 'B\'s save did not overwrite A\'s draft');
+  assert.equal(stored(a)['c1.w1'].text, 'from tab A');
+  // A is told, and shows B's draft; its own is untouched
+  fire(a);
+  assert.equal(a.page.waitDrafts['k1/c1.w2'].text, 'from tab B');
+  assert.equal(row(a, 'c1.w2').querySelector('textarea').value, 'from tab B', 'the open section is drawn again with it');
+  assert.equal(sendBtn(a).textContent, 'Send 2 answers');
+  assert.equal(a.page.waitDrafts['k1/c1.w1'].text, 'from tab A');
+  // a draft A is typing into and has not saved... is saved at once, so the other tab's later save cannot take it
+  type(row(a, 'c1.w1').querySelector('textarea'), 'from tab A, longer');
+  type(row(b, 'c1.w3').querySelectorAll('input')[0], '');
+  pick(inputs(row(b, 'c1.w3'), 'checkbox')[0]);
+  assert.equal(stored(a)['c1.w1'].text, 'from tab A, longer', 'B saved without losing A\'s newer text');
+  assert.equal(stored(a)['c1.w3'].done, true);
+  // B discards its own: the storage drops only that one, and A follows
+  const discard = row(b, 'c1.w2').querySelectorAll('button').find((x) => x.textContent === 'Discard');
+  discard.click();
+  assert.deepEqual(Object.keys(stored(a)).sort(), ['c1.w1', 'c1.w3']);
+  fire(a);
+  assert.ok(a.page.draftEmpty(a.page.waitDrafts['k1/c1.w2']), 'nothing is left of it');
+  assert.equal(row(a, 'c1.w2').querySelector('textarea').value, '');
+  assert.equal(a.page.waitDrafts['k1/c1.w3'].done, true);
+  assert.equal(sendBtn(a).textContent, 'Send 2 answers');
+  // an event for another key, or an unreadable storage, changes nothing
+  (a.state.listeners.storage || []).forEach((fn) => fn({ key: 'something-else' }));
+  shared.broken = true;
+  fire(a);
+  assert.equal(a.page.waitDrafts['k1/c1.w1'].text, 'from tab A, longer');
+});
+
+test('with the bar\'s text hidden on a narrow window, the button says what it sends and its hover text names the cards', () => {
+  const t = openSection();
+  t.state.current = { cards: [task('c1', { waits: [wait('c1.w1', 'question'), wait('c1.w2', 'todo')] }), task('c4', { waits: [wait('c4.w1', 'todo')] })] };
+  t.ctl.update(t.state.current.cards[0]);
+  type(row(t, 'c1.w1').querySelector('textarea'), 'x');
+  pick(inputs(row(t, 'c1.w2'), 'checkbox')[0]);
+  t.page.updateSendBar();
+  assert.equal(sendBtn(t).textContent, 'Send 2 answers');
+  assert.equal(sendBtn(t).title, 'Send them all to Claude in one go (card c1). Ctrl or Cmd + Enter in an answer does the same.');
+  t.page.waitDrafts['k1/c4.w1'] = { text: '', choices: [], done: true, verdict: '', comment: '' };
+  t.page.updateSendBar();
+  assert.equal(sendBtn(t).textContent, 'Send 3 answers');
+  assert.match(sendBtn(t).title, /\(cards c1, c4\)/);
+});
+
+test('answers given elsewhere meanwhile are reported by the server: their drafts go, the others are sent, and the page says so', async () => {
+  const t = openSection();
+  t.show(CARD([wait('c1.w1', 'question'), wait('c1.w2', 'todo')]));
+  type(row(t, 'c1.w1').querySelector('textarea'), 'mine');
+  pick(inputs(row(t, 'c1.w2'), 'checkbox')[0]);
+  t.state.answers = [{ applied: ['c1.w2'], skipped: [{ id: 'c1.w1', reason: 'answered' }], cards: [CARD([wait('c1.w1', 'question', { state: 'answered', answer: { text: 'theirs' } }), wait('c1.w2', 'todo', { state: 'answered' })])] }];
+  sendBtn(t).click();
+  await tick();
+  assert.equal(t.state.errors.length, 1);
+  assert.match(t.state.errors[0], /^c1\.w1 was answered or withdrawn elsewhere already, so its draft was dropped\. The others were sent\.$/);
+  assert.deepEqual(Object.keys(t.page.waitDrafts).filter((k) => k.startsWith('k1/')), []);
+  assert.equal(stored(t), null);
+});
+
+test('the drafts are kept in the browser per project: a reload shows them again, and storage that fails or holds rubbish costs nothing', () => {
+  const t = openSection();
+  t.show(CARD([wait('c1.w1', 'question'), wait('c1.w2', 'choice'), wait('c1.w3', 'review')]));
+  type(row(t, 'c1.w1').querySelector('textarea'), 'half an answer');
+  pick(options(row(t, 'c1.w2'))[2]);
+  pick(inputs(row(t, 'c1.w3'), 'radio')[1]);
+  type(inputs(row(t, 'c1.w3'), 'text')[0], 'a comment');
+  assert.deepEqual(Object.keys(t.state.storage.data), ['thread-board-drafts:k1'], 'one entry per project');
+  // a new page (a reload) on the same storage
+  const again = openSection({ storage: t.state.storage });
+  again.show(CARD([wait('c1.w1', 'question'), wait('c1.w2', 'choice'), wait('c1.w3', 'review')]));
+  again.page.updateSendBar();   // the page does it with every state it draws
+  assert.equal(row(again, 'c1.w1').querySelector('textarea').value, 'half an answer');
+  assert.deepEqual(options(row(again, 'c1.w2')).map((i) => i.checked), [false, false, true]);
+  assert.deepEqual(inputs(row(again, 'c1.w3'), 'radio').map((i) => i.checked), [false, true]);
+  assert.equal(inputs(row(again, 'c1.w3'), 'text')[0].value, 'a comment');
+  assert.equal(sendBtn(again).textContent, 'Send 3 answers');
+  // another project's drafts are not this one's
+  again.state.storage.data['thread-board-drafts:k2'] = JSON.stringify({ 'c1.w1': { text: 'elsewhere' } });
+  assert.equal(again.page.readyDrafts('k1').length, 3);
+  // storage that throws: the page still works, from memory
+  const broken = openSection({ storage: { data: {}, broken: true } });
+  broken.show(CARD([wait('c1.w1', 'question')]));
+  type(row(broken, 'c1.w1').querySelector('textarea'), 'typed');
+  assert.equal(sendBtn(broken).textContent, 'Send 1 answer');
+  // rubbish is ignored, and a draft is cut to what the server accepts
+  const junk = openSection({ storage: { data: { 'thread-board-drafts:k1': '{ half' }, broken: false } });
+  junk.show(CARD([wait('c1.w1', 'question')]));
+  assert.equal(junk.env.elSendBar.hidden, true);
+  const odd = openSection({ storage: { data: { 'thread-board-drafts:k1': JSON.stringify({ 'c1.w1': { text: 5, choices: 'x', verdict: 'maybe', done: 'yes', comment: {} }, 'x<img>': { text: 'a' }, 'c1.w2': { text: 'y'.repeat(9000) }, 'c1.w3': null }) }, broken: false } });
+  odd.show(CARD([wait('c1.w1', 'question'), wait('c1.w2', 'question')]));
+  assert.equal(odd.page.waitDrafts['k1/c1.w1'].text, '');
+  assert.equal(odd.page.waitDrafts['k1/c1.w2'].text.length, 4000);
+  assert.equal(odd.page.waitDrafts['k1/x<img>'], undefined);
+  const src = html.slice(html.indexOf('// ---- waiting for you'), html.indexOf('// ---- end waiting for you'));
+  for (const call of ['localStorage.getItem', 'localStorage.setItem', 'localStorage.removeItem']) {
+    const i = src.indexOf(call);
+    assert.ok(i > 0, call);
+    assert.match(src.slice(Math.max(0, i - 200), i), /try \{/, `${call} is inside a try`);
+  }
+});
+
+test('Discard empties the draft of an item: its controls, the stored copy and the bar', () => {
+  const t = openSection();
+  t.show(CARD([wait('c1.w1', 'question'), wait('c1.w2', 'todo')]));
+  type(row(t, 'c1.w1').querySelector('textarea'), 'draft');
+  pick(inputs(row(t, 'c1.w2'), 'checkbox')[0]);
+  assert.equal(sendBtn(t).textContent, 'Send 2 answers');
+  const discard = draftOf(row(t, 'c1.w1')).querySelectorAll('button').find((b) => b.textContent === 'Discard');
+  assert.equal(discard.getAttribute('aria-label'), 'Discard the draft answer to c1.w1');
+  discard.click();
+  assert.equal(row(t, 'c1.w1').querySelector('textarea').value, '');
+  assert.equal(draftOf(row(t, 'c1.w1')).hidden, true);
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer');
+  assert.deepEqual(Object.keys(stored(t)), ['c1.w2']);
+  assert.equal(inputs(row(t, 'c1.w2'), 'checkbox')[0].checked, true, 'the other draft stays');
+  draftOf(row(t, 'c1.w2')).querySelectorAll('button')[0].click();
+  assert.equal(t.env.elSendBar.hidden, true);
+  assert.equal(stored(t), null);
+  assert.equal(t.state.posts.length, 0, 'a discard sends nothing');
+});
+
+// ----- the bar
+
+test('the bar counts the complete drafts of the whole project, in every view, and is gone for chat-only, read-only, the home and a halted page', () => {
+  const t = openSection();
+  const cards = [CARD([wait('c1.w1', 'question'), wait('c1.w2', 'todo')]), task('c2', { waits: [wait('c2.w1', 'todo')] }), { ...task('c3'), kind: 'milestone' }];
+  t.state.current = { cards };
+  t.page.loadDrafts('k1');
+  t.page.waitDrafts['k1/c1.w1'] = { text: 'a', choices: [], done: false, verdict: '', comment: '' };
+  t.page.waitDrafts['k1/c2.w1'] = { text: '', choices: [], done: true, verdict: '', comment: '' };
+  t.page.waitDrafts['k1/c1.w2'] = { text: '', choices: [], done: false, verdict: '', comment: 'only a comment' };
+  t.page.saveDrafts('k1', ['c1.w1', 'c1.w2', 'c2.w1']);
+  for (const v of ['summary', 'board', 'list', 'milestones', 'waiting']) {
+    t.state.view = v;
+    t.page.updateSendBar();
+    assert.equal(sendBtn(t).textContent, 'Send 2 answers', v);
+    assert.equal(t.env.elSendBar.hidden, false, v);
+  }
+  t.state.chat = true; t.page.updateSendBar(); assert.equal(t.env.elSendBar.hidden, true, 'chat-only');
+  t.state.chat = false; t.state.ro = true; t.page.updateSendBar(); assert.equal(t.env.elSendBar.hidden, true, 'read-only');
+  t.state.ro = false; t.state.home = true; t.page.updateSendBar(); assert.equal(t.env.elSendBar.hidden, true, 'the projects home');
+  t.state.home = false; t.state.halted = true; t.page.updateSendBar(); assert.equal(t.env.elSendBar.hidden, true, 'the access-link page');
+  t.state.halted = false; t.page.updateSendBar(); assert.equal(t.env.elSendBar.hidden, false);
+  // an item answered elsewhere drops its draft the next time the state arrives
+  t.state.current = { cards: [CARD([wait('c1.w1', 'question', { state: 'answered', answer: { text: 'x' } }), wait('c1.w2', 'todo')]), cards[1]] };
+  t.page.updateSendBar();
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer');
+  assert.equal(t.page.waitDrafts['k1/c1.w1'], undefined);
+  assert.deepEqual(Object.keys(stored(t)).sort(), ['c1.w2', 'c2.w1'].sort(), 'and the stored copy follows');
+  // a card that is gone takes its drafts with it
+  t.state.current = { cards: [cards[1]] };
+  t.page.updateSendBar();
+  assert.equal(t.page.waitDrafts['k1/c1.w2'], undefined);
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer');
+});
+
+test('the bar is part of the page: outside the app that a card page makes inert, with its own region label, after the overlay, and kept out of the focus trap\'s way', () => {
+  const page = html.slice(html.indexOf('<div class="overlay"'), html.indexOf('<script>\n(function'));
+  assert.match(page, /<div class="send-bar" id="send-bar" role="region" aria-label="Answers to send" hidden>\s*<span class="send-text" id="send-text"><\/span>\s*<button type="button" class="btn primary" id="send-btn"><\/button>/);
+  assert.ok(html.indexOf('id="send-bar"') > html.indexOf('<div id="app">') && html.indexOf('id="send-bar"') > html.indexOf('</div>\n\n<div class="gate"'), 'a sibling of #app, not inside it');
+  assert.match(html, /if \(!elSendBar\.hidden\) list\.push\(elSendBtn\);/, 'a card page traps Tab but the bar stays reachable');
+  assert.match(html, /a === elSendBtn;/);
+  assert.match(html, /html:has\(\.send-bar:not\(\[hidden\]\)\) #app \{ height: calc\(100vh - var\(--send-h\)\);/, 'the views end above the bar');
+  assert.match(html, /html:has\(\.send-bar:not\(\[hidden\]\)\) \.overlay \{ bottom: var\(--send-h\); \}/, 'and so does a card page');
+  assert.match(html, /updateWaitingPill\(\);\n\s+updateSendBar\(\);/, 'redrawn with the toolbar, on every state and every project change');
+  assert.match(html, /elBanner\.hidden = true;\n\s+elSendBar\.hidden = true;/, 'and gone with the access-link page');
 });
 
 test('an answered item collapses to a muted line with a tick, the answer and whether it was delivered', () => {
@@ -533,7 +822,7 @@ test('what was typed survives a redraw of the section, and focus returns to the 
   assert.deepEqual(options(row(t, 'c1.w2')).map((i) => i.checked), [false, false, true]);
   assert.deepEqual(inputs(row(t, 'c1.w3'), 'radio').map((i) => i.checked), [true, false]);
   assert.equal(inputs(row(t, 'c1.w3'), 'text')[0].value, 'a comment');
-  assert.equal(sendBtn(row(t, 'c1.w1')).disabled, false, 'and Send follows the draft');
+  assert.equal(sendBtn(t).textContent, 'Send 3 answers', 'and the bar follows the drafts');
   // nothing changed: nothing is drawn
   t.ctl.update(CARD([wait('c1.w1', 'question'), wait('c1.w2', 'choice'), wait('c1.w3', 'review'), wait('c1.w4', 'todo')]));
   assert.equal(row(t, 'c1.w1').querySelector('textarea'), fresh);
@@ -558,7 +847,7 @@ test('a read-only board disables every control and says why; a chat-only one sho
   const controls = t.ctl.host.querySelectorAll('textarea').concat(t.ctl.host.querySelectorAll('input'));
   assert.ok(controls.length >= 6);
   controls.forEach((c) => assert.equal(c.disabled, true));
-  t.ctl.host.querySelectorAll('button').filter((b) => b.textContent === 'Send').forEach((b) => { assert.equal(b.disabled, true); assert.equal(b.title, 'read-only'); });
+  assert.equal(t.env.elSendBar.hidden, true);
   assert.match(t.ctl.host.textContent, /read-only/);
   t.state.ro = false;
   t.state.chat = true;
@@ -576,6 +865,8 @@ test('an answer is not sent from a read-only board even by the key', async () =>
   li.fire('keydown', { key: 'Enter', ctrlKey: true });
   await tick();
   assert.equal(t.state.posts.length, 0);
+  await t.page.sendDrafts();
+  assert.equal(t.state.posts.length, 0, 'nor by calling it');
 });
 
 test('"Answer waiting items" scrolls the section into view and focuses the first open control', () => {
@@ -692,49 +983,55 @@ test('the pill is in the toolbar next to Threads only, hidden until there is som
   assert.match(html, /elThreadsOnly\.hidden = chat;/);
 });
 
-test('after Send, focus goes to the next open item, or to the folded line of the item just answered', async () => {
+test('after the send the bar is gone, so focus goes to the open card page, or to New card; it is left alone when the user went elsewhere', async () => {
   const t = openSection();
-  t.show(CARD([wait('c1.w1', 'question'), wait('c1.w2', 'todo')]));
-  const ta = row(t, 'c1.w1').querySelector('textarea');
-  type(ta, 'x');
-  ta.focus();
-  // the server's answer closes c1.w1; the page applies it (as applyCard does) and the section is drawn again
-  t.env.applyCard = (c) => { t.show(c); t.doc.activeElement = null; };
-  t.state.answers = [CARD([wait('c1.w1', 'question', { state: 'answered', answer: { text: 'x' } }), wait('c1.w2', 'todo')])];
-  sendBtn(row(t, 'c1.w1')).click();
+  t.show(CARD([wait('c1.w1', 'question')]));
+  const root = new FakeEl(t.doc, 'aside');
+  t.doc.body.append(root);
+  t.state.panel = { root };
+  const reply = () => ({ applied: ['c1.w1'], skipped: [], cards: [CARD([wait('c1.w1', 'question', { state: 'answered', answer: { text: 'x' } })])] });
+  type(row(t, 'c1.w1').querySelector('textarea'), 'x');
+  t.env.elSendBtn.focus();
+  t.state.answers = [reply()];
+  t.env.elSendBtn.click();
   await tick();
-  assert.equal(t.doc.activeElement.dataset.fid, 'w-done-c1.w2', 'the next open item\'s control');
-  // the last open item: its own folded line
-  const box = inputs(row(t, 'c1.w2'), 'checkbox')[0];
-  pick(box);
-  t.state.answers = [CARD([wait('c1.w1', 'question', { state: 'answered', answer: { text: 'x' } }), wait('c1.w2', 'todo', { state: 'answered', answer: { done: true } })])];
-  sendBtn(row(t, 'c1.w2')).click();
+  assert.equal(t.doc.activeElement, root, 'the card page that is open');
+  // no card page: the New card button
+  const u = openSection();
+  u.show(CARD([wait('c1.w1', 'question')]));
+  type(row(u, 'c1.w1').querySelector('textarea'), 'x');
+  u.env.elSendBtn.focus();
+  u.state.answers = [reply()];
+  u.env.elSendBtn.click();
   await tick();
-  assert.equal(t.doc.activeElement.dataset.fid, 'w-copy-c1.w2', 'the Copy id button on the folded line');
-  assert.equal(row(t, 'c1.w2').className, 'wait-line');
+  assert.equal(u.doc.activeElement, u.env.elNewBtn);
+  // the user moved on while it was sending
+  const v = openSection();
+  v.show(CARD([wait('c1.w1', 'question')]));
+  type(row(v, 'c1.w1').querySelector('textarea'), 'x');
+  const elsewhere = new FakeEl(v.doc, 'input');
+  v.doc.body.append(elsewhere);
+  v.state.answers = [reply()];
+  elsewhere.focus();
+  v.env.elSendBtn.click();
+  await tick();
+  assert.equal(v.doc.activeElement, elsewhere);
+  // a failed send moves nothing
+  const w = openSection();
+  w.show(CARD([wait('c1.w1', 'question')]));
+  type(row(w, 'c1.w1').querySelector('textarea'), 'x');
+  w.env.elSendBtn.focus();
+  w.state.answers = [new Error('nope')];
+  w.env.elSendBtn.click();
+  await tick();
+  assert.equal(w.doc.activeElement, w.env.elSendBtn);
 });
 
-test('focus is left alone when the user moved on while the answer was being sent, and after a failed send', async () => {
+test('the draft row sits at the foot of each open item, where the Send button used to be', () => {
   const t = openSection();
-  t.show(CARD([wait('c1.w1', 'question'), wait('c1.w2', 'todo')]));
-  const ta = row(t, 'c1.w1').querySelector('textarea');
-  type(ta, 'x');
-  const elsewhere = new FakeEl(t.doc, 'input');
-  t.doc.body.append(elsewhere);
-  t.env.applyCard = (c) => { t.show(c); };
-  t.state.answers = [CARD([wait('c1.w1', 'question', { state: 'answered', answer: { text: 'x' } }), wait('c1.w2', 'todo')])];
-  elsewhere.focus();
-  sendBtn(row(t, 'c1.w1')).click();
-  await tick();
-  assert.equal(t.doc.activeElement, elsewhere);
-  type(inputs(row(t, 'c1.w2'), 'text')[0], 'c');
-  pick(inputs(row(t, 'c1.w2'), 'checkbox')[0]);
-  const before = row(t, 'c1.w2').querySelector('input');
-  before.focus();
-  t.state.answers = [new Error('nope')];
-  sendBtn(row(t, 'c1.w2')).click();
-  await tick();
-  assert.equal(t.doc.activeElement, before, 'a failed send moves nothing');
+  t.show(CARD([wait('c1.w1', 'question')]));
+  const li = row(t, 'c1.w1');
+  assert.deepEqual(li.children.map((c) => c.className), ['wait-top', 'wait-text', 'input', 'wait-draft']);
 });
 
 test('the text of an empty chat-only column follows the role of the stage, not its id', () => {

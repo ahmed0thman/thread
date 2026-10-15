@@ -999,7 +999,7 @@ for (const ref of RELEASED_REFS) test(`this version reads cards the plugin versi
 });
 
 // 0.12.0 brought the gate, so only the versions before it let Claude move such a card
-for (const ref of RELEASED_REFS.filter((r) => r !== 'v0.12.1')) test(`a card with criteria that the plugin version at ${ref} moves to done is shown as not verified`, async (t) => {
+for (const ref of RELEASED_REFS.filter((r) => !['v0.12.1', 'v0.13.0'].includes(r))) test(`a card with criteria that the plugin version at ${ref} moves to done is shown as not verified`, async (t) => {
   const old = oldServerFrom(t, ref);
   if (!old) return;
   const e = setupThreadEnv(t);

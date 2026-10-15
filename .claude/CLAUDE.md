@@ -20,6 +20,7 @@ server/
   runs.mjs          sub-agent runs on a card: recorded by hooks, their transcripts read for the board
   waits.mjs         the questions a session asks the user on the board, and their answers
   wake.mjs          what wakes an idle session from the board (setting `wake`), and the one-waiter-per-session file
+  notify.mjs        "Notify Claude" requests on cards Claude has not seen: which are open, and the line the prompt hook adds
   fields.mjs        card fields (type, priority, labels, blockedBy, criteria), history workers, workedBy; no imports
   runner.mjs        the detached process that runs one thread turn
   mcp.mjs           the MCP server and its tools

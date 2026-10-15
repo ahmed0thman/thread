@@ -565,17 +565,21 @@ test('answers come first and whole, ahead of the other notices that the cap cuts
   assert.ok(joined.length > 1500, 'the whole text is longer than the cap on the other notices');
 });
 
-test('at most five answers go with one prompt; the rest follow with the next', async (t) => {
+test('at most twenty answers go with one prompt (what one Send on the board can answer); the rest follow with the next', async (t) => {
   const { e } = await world(t);
-  for (let i = 1; i <= 7; i++) {
+  for (let i = 1; i <= 23; i++) {
     await core.addWait(e.projectDir, { card: 'c1', kind: 'todo', text: `todo ${i}`, sessionId: PARENT_SESSION });
     await core.answerWait(e.projectDir, 'c1', `c1.w${i}`, { done: true });
   }
+  assert.equal(core.MAX_DELIVERED_AT_ONCE, 20);
   const one = context(await hook(e, PARENT_SESSION)).split('\n');
-  assert.equal(one.length, 5);
+  assert.equal(one.length, 21);
+  assert.equal(one.filter((l) => l.startsWith('The user answered')).length, 20);
+  assert.equal(one[0], 'The user answered c1.w1 on the board ("todo 1"): did it. Continue with it.');
+  assert.equal(one.at(-1), '3 more answers are waiting; they come with your next message.');
   const two = context(await hook(e, PARENT_SESSION)).split('\n');
-  assert.equal(two.length, 2);
-  assert.deepEqual([...one, ...two].map((l) => /c1\.w(\d)/.exec(l)[1]), ['1', '2', '3', '4', '5', '6', '7']);
+  assert.equal(two.length, 3);
+  assert.deepEqual([...one.slice(0, 20), ...two].map((l) => /c1\.w(\d+)/.exec(l)[1]), Array.from({ length: 23 }, (_, i) => String(i + 1)));
   assert.equal(context(await hook(e, PARENT_SESSION)), '');
 });
 

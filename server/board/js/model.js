@@ -226,18 +226,31 @@
   }
   // ---- end milestones and stages ----
   // ---- gear menu actions (page.test.mjs runs this block on its own) ----
+  // Can the board ask a session to look at this card? A task or an idea: '' when not, 'ready' while it is new from the user, or 'sent' while a
+  // request is open (the server says so with notified: true; the request stays open until the session picked lists the board, even if another
+  // session has listed the card). A seen card with no open request has nothing to point out, a thread and a milestone are not asked about.
+  function notifyState(c) {
+    if (c.kind !== 'task' && c.kind !== 'idea') return '';
+    if (c.notified === true) return 'sent';
+    return c.seenByClaude === false ? 'ready' : '';
+  }
   function cardThreadStartWhy(c) {
     return (c.criteria || []).length || (c.blockedBy || []).length ? 'A card with acceptance criteria or a Blocked by list cannot be started as a thread; clear them first.' : '';
   }
   // What the gear menu on a card offers, under the conditions the card's page uses.
-  // o: { ro, stages, choices: [[id, title]], reportState(card), waits(card): the number of open waiting items }. An item is { id, label, ... }; { group, items } is a labelled set
+  // o: { ro, stages, choices: [[id, title]], reportState(card), waits(card): the number of open waiting items, notify(card): '', 'ready' or 'sent' (see notifyState) }. An item is { id, label, ... }; { group, items } is a labelled set
   // and { sep: true } a divider. A read-only board gets nothing that writes, so a card may have no action at all.
   function cardActions(c, o) {
     if (c.kind === 'milestone') return [];   // a milestone is not on the board and has no stage to move to: its page has its own actions
     if (o.ro) return [];
     const out = [];
     const waits = o.waits ? o.waits(c) : 0;
-    if (waits) out.push({ id: 'waits', label: 'Answer waiting items (' + waits + ')' }, { sep: true });
+    const notify = o.notify ? o.notify(c) : '';
+    if (waits || notify) {
+      if (waits) out.push({ id: 'waits', label: 'Answer waiting items (' + waits + ')' });
+      if (notify) out.push({ id: 'notify', label: notify === 'sent' ? 'Notify Claude again…' : 'Notify Claude…' });
+      out.push({ sep: true });
+    }
     if (c.kind === 'thread') {
       if (!c.thread) return [];
       if (c.thread.runState !== 'ended') out.push({ id: 'end', label: 'End thread' });

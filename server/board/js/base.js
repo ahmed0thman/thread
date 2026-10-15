@@ -30,10 +30,11 @@
   const elNote = $('filter-note'), elNewBtn = $('new-btn'), elOverlay = $('overlay');
   const elBanner = $('banner'), elBannerText = $('banner-text');
   const elNotice = $('notice'), elSwitcher = $('switcher'), elProjSelect = $('proj-select'), elViews = $('views');
-  const elToolbar = $('toolbar'), elSearchWrap = $('search-wrap'), elFilters = $('filters'), elPane = $('pane');
+  const elToolbar = $('toolbar'), elSearchWrap = $('search-wrap'), elFilters = $('filters'), elChips = $('chips'), elPane = $('pane');
   const elSession = $('session-filter'), elSessionWrap = $('session-wrap');
   const elMilestone = $('milestone-filter'), elMilestoneWrap = $('milestone-wrap'), elModeNote = $('mode-note'), elOldNote = $('old-note');
   const elWaiting = $('waiting-btn'), elWaitN = $('waiting-n'), elWaitLegend = $('wait-legend');
+  const elSendBar = $('send-bar'), elSendText = $('send-text'), elSendBtn = $('send-btn');
   const elGate = $('gate'), elGateRetry = $('gate-retry'), elGateMsg = $('gate-msg');
 
   // ---------- plugin version ----------
@@ -134,6 +135,7 @@
   let gearDown = false;      // a press that began on a card's gear: it must not start a drag
   let startFor = '';         // a card whose page should open at the "Start as thread" step
   let waitsFor = '';         // a card whose page should open at its "Waiting for you" section
+  let notifyFor = '';        // a card whose page should open at the "Notify Claude" step
   let panel = null;          // the open drawer or thread workspace, if any
   let hashPushed = false;    // true when the open panel added a history entry
   let returnFocus = null;    // where focus goes when the panel closes
@@ -163,6 +165,14 @@
     const u = h(tag, 'unseen');
     u.appendChild(shape('s-circle'));
     u.appendChild(h('span', null, 'Claude has not seen this yet'));
+    return u;
+  }
+  // the "Claude notified" marker: a Notify Claude request is open on the card (the session picked is named in the tooltip)
+  function notifiedEl(tag, card) {
+    const u = h(tag, 'notified');
+    u.appendChild(shape('s-check'));
+    u.appendChild(h('span', null, 'Claude notified'));
+    if (card && card.notifySession) u.title = 'Asked ' + sessionLabel(card.notifySession) + ' to look at this card';
     return u;
   }
   // The board's settings as the server sent them (stages, which stage each role uses, chat-only or not).

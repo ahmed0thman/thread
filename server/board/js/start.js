@@ -3,6 +3,7 @@
   function trapList() {
     const sel = 'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [tabindex="0"]';
     const list = Array.from(panel.root.querySelectorAll(sel)).filter((e) => e.tabIndex >= 0 && !e.closest('[hidden]') && e.getClientRects().length);
+    if (!elSendBar.hidden) list.push(elSendBtn);
     if (!elBanner.hidden) list.push($('banner-close'));
     return list;
   }
@@ -17,7 +18,7 @@
         const list = trapList();
         if (!list.length) { e.preventDefault(); return; }
         const first = list[0], last = list[list.length - 1], a = document.activeElement;
-        const inside = panel.root.contains(a) || a === $('banner-close');
+        const inside = panel.root.contains(a) || a === $('banner-close') || a === elSendBtn;
         if (!inside) { e.preventDefault(); first.focus(); }
         else if (e.shiftKey && (a === first || a === panel.root)) { e.preventDefault(); last.focus(); }
         else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }

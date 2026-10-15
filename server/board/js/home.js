@@ -90,7 +90,9 @@
     elToolbar.hidden = !(proj && viewSel);
     elSearchWrap.hidden = !SEARCH_VIEWS.includes(viewSel);
     elFilters.hidden = !(board || viewSel === 'list');
+    elChips.hidden = !(board || viewSel === 'list');
     elListFilters.hidden = viewSel !== 'list';
+    elListToggles.hidden = viewSel !== 'list';
     if (viewSel === 'list') elThreadsOnly.hidden = true;   // the List has its own Type filter
     elBoard.hidden = !board;
     elPane.hidden = !(showingHome || (proj && viewSel && !board));

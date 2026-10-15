@@ -18,7 +18,9 @@ export const MAX_CHOICES = 8;
 export const MAX_ANSWER = 4000;
 export const MAX_COMMENT = 2000;
 export const MAX_OPEN_WAITS = 20;             // open items on one card
-export const MAX_DELIVERED_AT_ONCE = 5;       // answers one prompt carries; the rest follow with the next
+export const MAX_DELIVERED_AT_ONCE = 20;      // answers one prompt carries; the rest follow with the next (one Send on the board can answer this many)
+export const MAX_BATCH = 50;                  // answers in one batch from the board
+export const HOOK_BUDGET = 8000;             // characters of answer and notify lines one prompt carries (Claude Code cuts hook context at about 10,000)
 
 // A refused wait call. status is the HTTP status the board answers with.
 export class WaitError extends Error {
@@ -194,6 +196,16 @@ function checkAnswer(item, body) {
   return { answer, comment };
 }
 
+// Applies one checked answer to an open item. Writes only state, answer, comment, answeredAt and answeredVia.
+function applyAnswer(item, { answer, comment }, at) {
+  item.state = 'answered';
+  item.answer = answer;
+  if (comment) item.comment = comment;
+  item.answeredAt = at;
+  item.answeredVia = 'board';
+  // Not seenByClaude: markSeen clears it project-wide, so another session (or an older version) would swallow it.
+}
+
 /** The board's answer to an open item. Writes only state, answer, comment, answeredAt and answeredVia. Returns { card, item }. */
 export async function answerWait(projectDirArg, cardId, id, body) {
   if (readConfig(projectDirArg).mode === 'chat') throw new ChatOnlyError();
@@ -201,14 +213,49 @@ export async function answerWait(projectDirArg, cardId, id, body) {
     const { card, item } = findWait(state, id);
     if (card.id !== cardId) throw new WaitError(`${item.id} is not on card ${cardId}`, 404);
     if (item.state !== 'open') throw new WaitError(`${item.id} is ${item.state}, not open`, 409);
-    const { answer, comment } = checkAnswer(item, body);
-    item.state = 'answered';
-    item.answer = answer;
-    if (comment) item.comment = comment;
-    item.answeredAt = now();
-    item.answeredVia = 'board';
-    // Not seenByClaude: markSeen clears it project-wide, so another session (or an older version) would swallow it.
+    applyAnswer(item, checkAnswer(item, body), now());
     return { card, item };
+  });
+}
+
+/**
+ * The board's answers to several open items, all in one state write. `items` is a list of { id, ...the answer fields of the item's kind }.
+ * Every answer is checked as answerWait checks it; one that is not valid refuses the whole batch (a WaitError that names each such item)
+ * and nothing is written. An item that was answered or withdrawn meanwhile, or whose card is gone, is not an error: it is left out and
+ * reported in `skipped`, so the page can drop its draft. Returns { applied: [ids], skipped: [{ id, reason }], cards: [the cards answered on] }.
+ */
+export async function answerWaits(projectDirArg, items) {
+  if (readConfig(projectDirArg).mode === 'chat') throw new ChatOnlyError();
+  if (!Array.isArray(items) || !items.length) throw new WaitError('items must be a list of answers');
+  if (items.length > MAX_BATCH) throw new WaitError(`too many answers at once (${items.length}, the limit is ${MAX_BATCH})`);
+  return updateState(projectDirArg, (state) => {
+    const ts = now();
+    const problems = [];
+    const seen = new Set();
+    const todo = [];
+    const skipped = [];
+    items.forEach((raw, i) => {
+      const id = isObject(raw) && typeof raw.id === 'string' ? raw.id.trim() : '';
+      const m = WAIT_ID_RE.exec(id);
+      if (!m) { problems.push(`item ${i + 1}: not a waiting item id`); return; }
+      if (seen.has(id)) { problems.push(`${id}: given twice`); return; }
+      seen.add(id);
+      const card = state.cards.find((c) => c.id === m[1]);
+      const item = card ? waitsOf(card).find((w) => w.id === id) : null;
+      if (!item) { skipped.push({ id, reason: 'gone' }); return; }
+      if (item.state !== 'open') { skipped.push({ id, reason: item.state }); return; }
+      try { todo.push({ card, item, checked: checkAnswer(item, raw) }); } catch (e) {
+        if (!(e instanceof WaitError)) throw e;
+        problems.push(`${id}: ${e.message}`);
+      }
+    });
+    if (problems.length) throw new WaitError(`nothing was sent: ${problems.join('; ')}`);
+    const cards = [];
+    for (const { card, item, checked } of todo) {
+      applyAnswer(item, checked, ts);
+      if (!cards.includes(card)) cards.push(card);
+    }
+    return { applied: todo.map((x) => x.item.id), skipped, cards };
   });
 }
 
@@ -234,16 +281,22 @@ export function countUndeliveredElsewhere(projectDirArg, sessionId) {
 
 /**
  * The answers waiting for session `sessionId`: items it asked, answered on the board, not delivered yet. They are marked
- * delivered under the state lock, so two prompts never carry the same answer. At most MAX_DELIVERED_AT_ONCE per call.
+ * delivered under the state lock, so two prompts never carry the same answer. At most MAX_DELIVERED_AT_ONCE per call, and at most
+ * `budget` characters of delivery lines (at least one answer is always taken, so a wake always makes progress): an answer that does not
+ * fit is left undelivered and follows with the next prompt.
  */
-export async function deliverWaitAnswers(projectDirArg, sessionId) {
+export async function deliverWaitAnswers(projectDirArg, sessionId, { budget = Infinity } = {}) {
   if (readConfig(projectDirArg).mode === 'chat') return [];
   return updateState(projectDirArg, (state) => {
     const out = [];
+    let used = 0;
     for (const card of state.cards) {
       for (const item of waitsOf(card)) {
         if (out.length >= MAX_DELIVERED_AT_ONCE) return out;
         if (item.state !== 'answered' || item.deliveredAt || !sameSession(item.askedBy, sessionId)) continue;
+        const size = deliveryLine(item).length + 1;
+        if (out.length && used + size > budget) return out;
+        used += size;
         item.deliveredAt = now();
         out.push({ card: { id: card.id, title: card.title }, item: JSON.parse(JSON.stringify(item)) });
       }

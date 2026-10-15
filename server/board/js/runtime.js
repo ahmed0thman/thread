@@ -134,6 +134,7 @@
     elOverlay.hidden = true;
     elApp.inert = false;
     elBanner.hidden = true;
+    elSendBar.hidden = true;
     elApp.hidden = true;
     elGate.hidden = false;
     elGateRetry.focus({ preventScroll: true });
@@ -205,11 +206,19 @@
   }
 
   // Use a card the server just returned without waiting for the next poll.
-  function applyCard(card, key) {
-    if (!current || !card || (key !== undefined && key !== selKey)) return;
+  function applyCard(card, key) { applyCards([card], key); }
+  // Several cards at once (the answers sent together), drawn once.
+  function applyCards(list, key) {
+    if (!current || (key !== undefined && key !== selKey)) return;
     const cards = current.cards.slice();
-    const i = cards.findIndex((c) => c.id === card.id);
-    if (i >= 0) cards[i] = card; else cards.push(card);
+    let any = false;
+    (list || []).forEach((card) => {
+      if (!card) return;
+      any = true;
+      const i = cards.findIndex((c) => c.id === card.id);
+      if (i >= 0) cards[i] = card; else cards.push(card);
+    });
+    if (!any) return;
     appliedSeq = ++pollSeq;                     // older polls still in flight are ignored
     lastRaw = null;
     apply(Object.assign({}, current, { cards }));

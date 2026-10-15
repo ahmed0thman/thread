@@ -1,8 +1,11 @@
 @media (max-width: 760px) {
   :root { --gut: var(--s3); }
   .sel select.input { max-width: 42vw; }
-  .search { flex-basis: 100%; max-width: none; }
-  .toolbar-note { order: 3; flex-basis: 100%; }
+  .search { flex: 1 1 160px; max-width: none; }
+  .toolbar #new-btn { order: 1; }
+  .toolbar .sel { order: 2; flex: 1 1 calc(50% - var(--s2) / 2); }
+  .toolbar .sel select.input { width: 100%; min-width: 0; max-width: none; }
+  .wait-legend { margin-left: 0; padding-left: 0; border-left: 0; }
   .top { flex-wrap: wrap; row-gap: var(--s2); }
   .top h1 { margin-right: auto; }
   .switcher { order: 3; flex: 1 1 100%; }
@@ -26,6 +29,9 @@
   .ws-bar kbd.hint { display: none; }
   .decisions li { grid-template-columns: 1fr; gap: 2px; }
   .decisions .tn { justify-self: start; padding: 0 8px; }
+  .send-bar { padding: 0 var(--s3); }
+  .send-text { display: none; }
+  .send-bar .btn { flex: 1 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }

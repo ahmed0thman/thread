@@ -71,7 +71,9 @@
         else what = f.q ? 'No cards match “' + elSearch.value.trim() + '”' + (f.threadsOnly ? ' among threads.' : '.') : 'No threads on the board yet.';
         elNote.appendChild(h('span', null, what));
       } else {
-        elNote.appendChild(h('span', 'tnum', 'Showing ' + shown.length + ' of ' + total + ' cards.' + (f.session ? ' Tasks and ideas are hidden while a session is selected.' : '')));
+        const count = h('span', 'tnum tb-count', shown.length + ' of ' + total + (total === 1 ? ' card' : ' cards'));
+        if (f.session) count.title = 'Tasks and ideas are hidden while a session is selected.';
+        elNote.appendChild(count);
       }
       const clear = plainBtn('Clear filters', 'small', () => {
         elSearch.value = '';
@@ -167,10 +169,11 @@
     const wt = waitTag(waits, 'card');
     if (wt) foot.appendChild(wt);
     if (card.seenByClaude === false) foot.appendChild(unseenEl('span'));
+    if (card.notified === true) foot.appendChild(notifiedEl('span', card));
     if (foot.childNodes.length) el.appendChild(foot);
 
     const rs = thread ? reportState(card) : '';
-    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (ms ? ', in milestone ' + ms.title : '') + (laneInfo(card) ? ', lane ' + laneTagText(laneInfo(card)) : '') + fm.aria.map((a) => ', ' + a).join('') + (waits.length ? ', ' + waits.length + ' waiting for you' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : ''));
+    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (ms ? ', in milestone ' + ms.title : '') + (laneInfo(card) ? ', lane ' + laneTagText(laneInfo(card)) : '') + fm.aria.map((a) => ', ' + a).join('') + (waits.length ? ', ' + waits.length + ' waiting for you' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : '') + (card.notified === true ? ', Claude notified' : ''));
 
     el.addEventListener('click', () => {
       if (Date.now() - lastDragEnd < 200) return;
@@ -312,7 +315,7 @@
   // Every card with an action has a gear that opens a menu of them. Each item calls the code its card page uses.
   // ---- gear menu (page.test.mjs runs this block against a small fake DOM) ----
 
-  function menuCtx() { return { ro: isRO(), stages: cfg().stages, choices: milestoneChoices(), reportState, waits: (c) => (isChat() ? 0 : openWaitsOf(c).length) }; }
+  function menuCtx() { return { ro: isRO(), stages: cfg().stages, choices: milestoneChoices(), reportState, waits: (c) => (isChat() ? 0 : openWaitsOf(c).length), notify: (c) => (isChat() ? '' : notifyState(c)) }; }
   function menuActions(card) { return halted ? [] : remoteActions(cardActions(card, menuCtx())); }
   function menuItems(actions) { return actions.reduce((all, a) => all.concat(a.items || (a.sep ? [] : [a])), []); }
   function gearOf(id) { return elBoard.querySelector('.card[data-id="' + cssEscape(id) + '"] .gear'); }
@@ -512,6 +515,13 @@
       openCard(id, true);
       return;
     }
+    if (a.id === 'notify') {
+      closeMenu(false);
+      notifyFor = id;
+      setTimeout(() => { if (notifyFor === id) notifyFor = ''; }, 1500);
+      openCard(id, true);
+      return;
+    }
     if (a.id === 'waits') {
       closeMenu(false);
       waitsFor = id;
@@ -537,6 +547,7 @@
   // ---- end gear menu ----
 
   elSearch.addEventListener('input', () => renderBoard(false));
+  elFilters.addEventListener('change', (e) => { if (e.target && e.target.tagName === 'SELECT') markSet(e.target); });
   elThreadsOnly.addEventListener('click', () => {
     elThreadsOnly.setAttribute('aria-pressed', elThreadsOnly.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
     renderBoard(false);

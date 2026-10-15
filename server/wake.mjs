@@ -1,15 +1,18 @@
 // Waking an idle session from the board: what the waiter (scripts/waiter.mjs) looks for in the state file, and the
 // one-waiter-per-session file. The waiter never carries the content itself: it only wakes the session, and the
-// UserPromptSubmit hook of the woken turn delivers the answers and report requests through its usual path.
-// An older plugin version ignores everything here: `reportPushedFor` and `reportPushedAt` on a thread, and the waiter files, which are not in the state file.
+// UserPromptSubmit hook of the woken turn delivers the answers, report requests and notify requests through its usual path.
+// An older plugin version ignores everything here: `reportPushedFor` and `reportPushedAt` on a thread, `notifyPushedFor` on a card (the
+// request id it was for, see notify.mjs),
+// and the waiter files, which are not in the state file.
 import { randomBytes } from 'node:crypto';
-import { readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { PRIVATE_FILE, mkdirPrivate, now, projectPaths, readState, updateState } from './state.mjs';
+import { PRIVATE_FILE, mkdirPrivate, now, projectPaths, readState, updateState, withLock } from './state.mjs';
 import { sameSession } from './sessions.mjs';
 import { configPaths, readConfig } from './config.mjs';
 import { waitsOf } from './waits.mjs';
+import { notifyActive, notifyPushed } from './notify.mjs';
 
 const WAITER_FILE_RE = /^waiter-[0-9a-z-]{8,64}\.json$/;
 const WAITER_FILE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
@@ -42,27 +45,49 @@ function reportWaiting(card, sessionId) {
   return !(typeof th.reportPushedAt === 'string' && th.reportPushedAt >= th.reportRequestedAt);
 }
 
+// A notify click that has not been pushed yet: asked for the session `sessionId`, and no wake or prompt hook carried this request. Like a report
+// click, a push is remembered as the request it was for (`notifyPushedFor` is the request's `notifyId`) and compared for equality, so a clock
+// that steps backwards cannot wake the same click again, and a second click (a new notifyId) wakes again.
+function notifyWaiting(card, sessionId) {
+  return notifyActive(card) && sameSession(card.notifySession, sessionId) && !notifyPushed(card);
+}
+
 /** The key that tells one answer from another, so a wake is never made twice for it. */
 const answerKey = (item) => `${item.id}@${item.answeredAt || ''}`;
 
 /**
- * What would wake `sessionId` now, read-only: { answers: [wait keys], reports: [card ids] }. Answers need the task board;
- * `skip` is the list of answer keys that already woke this session once and must not do so again.
+ * What would wake `sessionId` now, read-only: { answers: [wait keys], reports: [card ids], notifies: [card ids] }. Answers and notifies need
+ * the task board; `skip` is the list of answer keys that already woke this session once and must not do so again.
  */
 export function pendingWake(projectDirArg, sessionId, skip = []) {
-  const state = readState(projectDirArg);
-  const tasks = readConfig(projectDirArg).mode !== 'chat';
+  return pendingIn(readState(projectDirArg), readConfig(projectDirArg).mode !== 'chat', sessionId, skip);
+}
+
+// pendingWake on a state already read (the waiter's claim reads it under the state lock).
+function pendingIn(state, tasks, sessionId, skip) {
   const answers = [];
   const reports = [];
+  const notifies = [];
   for (const card of state.cards) {
     if (tasks) {
       for (const item of waitsOf(card)) {
         if (item.state === 'answered' && !item.deliveredAt && sameSession(item.askedBy, sessionId) && !skip.includes(answerKey(item))) answers.push(answerKey(item));
       }
+      if (notifyWaiting(card, sessionId)) notifies.push(card.id);
     }
     if (reportWaiting(card, sessionId)) reports.push(card.id);
   }
-  return { answers, reports };
+  return { answers, reports, notifies };
+}
+
+/** The keys of the answers `sessionId` has not been delivered yet (whether or not they already woke it). Read-only; none in a chat-only project. */
+export function undeliveredAnswerKeys(projectDirArg, sessionId) {
+  if (readConfig(projectDirArg).mode === 'chat') return [];
+  const keys = [];
+  for (const card of readState(projectDirArg).cards) {
+    for (const item of waitsOf(card)) if (item.state === 'answered' && !item.deliveredAt && sameSession(item.askedBy, sessionId)) keys.push(answerKey(item));
+  }
+  return keys;
 }
 
 /** True when the project has a thread card; a chat-only project without one has nothing a wake could be for. */
@@ -70,23 +95,69 @@ export function hasThreads(projectDirArg) {
   return readState(projectDirArg).cards.some(isThreadCard);
 }
 
+// Marks the report clicks and the notify clicks for `sessionId` in `state` as pushed (the kinds asked for). Returns { reports: card ids,
+// notifies: card ids } that were still waiting. The caller holds the state lock.
+function applyClaims(state, tasks, sessionId, { reports: wantReports, notifies: wantNotifies }) {
+  const reports = [];
+  const notifies = [];
+  for (const card of state.cards) {
+    if (wantReports && reportWaiting(card, sessionId)) {
+      card.thread.reportPushedFor = card.thread.reportRequestedAt;
+      card.thread.reportPushedAt = now();
+      reports.push(card.id);
+    }
+    if (wantNotifies && tasks && notifyWaiting(card, sessionId)) {
+      card.notifyPushedFor = card.notifyId;
+      notifies.push(card.id);
+    }
+  }
+  return { reports, notifies };
+}
+
+// The same under the state lock, for the kinds asked for. With the waiter's `token` the waiter file also records that it is waking the session.
+async function claimPushes(projectDirArg, sessionId, token, want) {
+  const tasks = readConfig(projectDirArg).mode !== 'chat';
+  const out = await updateState(projectDirArg, (state) => applyClaims(state, tasks, sessionId, want));
+  if ((out.reports.length || out.notifies.length) && token) await markWoke(projectDirArg, sessionId, token, []).catch(() => {});   // the push is made either way: the wake must still go out
+  return out;
+}
+
 /**
  * Mark the report clicks for `sessionId` as pushed, under the state lock. Returns the card ids that were still waiting.
  * With the waiter's `token`, the waiter file also records that this waiter is waking the session (see `stopWaiter`).
  */
 export async function claimReportPushes(projectDirArg, sessionId, token) {
-  const out = await updateState(projectDirArg, (state) => {
-    const ids = [];
-    for (const card of state.cards) {
-      if (!reportWaiting(card, sessionId)) continue;
-      card.thread.reportPushedFor = card.thread.reportRequestedAt;
-      card.thread.reportPushedAt = now();
-      ids.push(card.id);
-    }
-    return ids;
+  return (await claimPushes(projectDirArg, sessionId, token, { reports: true, notifies: false })).reports;
+}
+
+/** The same for the notify clicks: the card ids that were still waiting. */
+export async function claimNotifyPushes(projectDirArg, sessionId, token) {
+  return (await claimPushes(projectDirArg, sessionId, token, { reports: false, notifies: true })).notifies;
+}
+
+/** Both at once, in one write: { reports, notifies }. The waiter uses this when it wakes the session. */
+export async function claimAllPushes(projectDirArg, sessionId, token) {
+  return claimPushes(projectDirArg, sessionId, token, { reports: true, notifies: true });
+}
+
+/**
+ * The waiter's last step before it wakes the session, all under the state lock that `stopWaiter` takes too: the waiter must still own the
+ * session (no turn started since its process did), and something must still be pending. Only then are the report and notify clicks marked
+ * as pushed and the answers recorded as having woken the session. Returns true when the session is to be woken. A turn that started
+ * while the claim waited for the lock has written its start under the same lock, so it is seen here and nothing wakes.
+ */
+export async function claimWake(projectDirArg, sessionId, token, startedAtMs = null) {
+  const tasks = readConfig(projectDirArg).mode !== 'chat';
+  return updateState(projectDirArg, async (state) => {
+    const path = waiterPath(projectDirArg, sessionId);
+    const cur = readWaiterFile(path);
+    if (cur.token !== token || turnSince(cur, startedAtMs)) return false;
+    const pending = pendingIn(state, tasks, sessionId, cur.fired);
+    if (!pending.answers.length && !pending.reports.length && !pending.notifies.length) return false;
+    applyClaims(state, tasks, sessionId, { reports: true, notifies: true });
+    await writeWaiterFile(path, { ...cur, fired: [...cur.fired, ...pending.answers], wokeAt: Date.now() });
+    return true;
   });
-  if (out.length && token) await markWoke(projectDirArg, sessionId, token, []).catch(() => {});   // the push is made either way: the wake must still go out
-  return out;
 }
 
 /** A cheap fingerprint of the files `pendingWake` reads, so a poll that finds them unchanged need not parse them. */
@@ -194,6 +265,20 @@ export async function recordFired(projectDirArg, sessionId, token, keys) {
  */
 export async function stopWaiter(projectDirArg, sessionId) {
   if (unattended()) return false;   // no waiter runs there, so there is no race and nothing to record
+  if (!wakeEnabled(projectDirArg) && !existsSync(waiterPath(projectDirArg, sessionId))) return false;   // nothing to record, nothing to race
+  // Under the state lock, which the waiter's claim (claimWake) holds too: a claim that comes after this sees the turn, and one that came
+  // first has woken the session before the turn started. Without the lock (it is held for over a second) the write is still made.
+  let locked = false;
+  try {
+    return await withLock(projectDirArg, async () => { locked = true; return await recordTurnStart(projectDirArg, sessionId); });
+  } catch (e) {
+    if (locked) throw e;
+    return recordTurnStart(projectDirArg, sessionId);
+  }
+}
+
+// The body of stopWaiter; the caller holds the state lock when it can. Exported for the test that plays the other side of the race.
+export async function recordTurnStart(projectDirArg, sessionId) {
   const path = waiterPath(projectDirArg, sessionId);
   const cur = readWaiterFile(path);
   const on = wakeEnabled(projectDirArg);
@@ -205,4 +290,18 @@ export async function stopWaiter(projectDirArg, sessionId) {
     await writeWaiterFile(path, { ...cur, token: null, wokeAt: null, turnStartedAt: Date.now() });
   }
   return woke;
+}
+
+/**
+ * Take answers out of the record of those that already woke the session, so that a waiter wakes it for them again. The prompt hook does this
+ * for the answers it had no room for: they were not delivered, and they must still reach the session with a wake when waking is on.
+ * Nothing happens when there is no waiter file (waking was never on for this session).
+ */
+export async function forgetFired(projectDirArg, sessionId, keys) {
+  if (!keys.length || unattended()) return;
+  const path = waiterPath(projectDirArg, sessionId);
+  try { statSync(path); } catch { return; }
+  const cur = readWaiterFile(path);
+  const fired = cur.fired.filter((k) => !keys.includes(k));
+  if (fired.length !== cur.fired.length) await writeWaiterFile(path, { ...cur, fired });
 }

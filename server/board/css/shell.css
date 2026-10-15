@@ -49,13 +49,19 @@
 .gate-card code, .mode-note code, .report-note code { font-size: 12.5px; background: var(--surface-2); border-radius: 4px; padding: 0 4px; }
 .gate-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); margin-top: var(--s4); }
 
+/* The filter bar is two rows. Row 1: the search, the selects, New card (pushed right). Row 2: the toggle chips, the waiting key, and the result note (pushed right). */
 .toolbar {
-  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2);
+  display: flex; flex-direction: column; gap: var(--s2);
   padding: 0 var(--gut) var(--s4);
 }
+.tb-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); min-width: 0; }
+.tb-chips:not(:has(> :not([hidden], :empty))) { display: none; }   /* nothing to show in row 2 (chat-only, no note) */
 .toolbar .btn, .toolbar .input { min-height: 36px; }
-.sel { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
-.sel select.input { width: auto; max-width: min(260px, 56vw); text-overflow: ellipsis; color: var(--text); }
+.toolbar .filters, .toolbar .list-filters, .toolbar .list-toggles { display: contents; }   /* the groups join the row (thread.css has another .filters, for a card page) */
+.toolbar .sel { display: inline-flex; flex: none; min-width: 0; }
+.toolbar .sel select.input { width: auto; min-width: 150px; max-width: 220px; text-overflow: ellipsis; color: var(--text); }
+.toolbar .sel select.input option { color: var(--text); background: var(--surface); }
+.toolbar .sel select.input.is-set { border-color: var(--accent); color: var(--accent); font-weight: 500; }
 .search { position: relative; flex: 1 1 220px; max-width: 360px; min-width: 0; }
 .search input { display: block; width: 100%; padding-right: 30px; }
 .search .kbd {
@@ -64,11 +70,20 @@
   border-radius: 4px; padding: 0 5px; pointer-events: none; line-height: 16px;
 }
 .search input:focus + .kbd, .search input:not(:placeholder-shown) + .kbd { display: none; }
-.toolbar-note { flex: 1 1 200px; min-width: 0; color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: var(--s2); }
-.toolbar-note:empty { display: none; }
-.mode-note { margin: 0 var(--gut) var(--s3); flex: none; font-size: 12.5px; color: var(--muted); padding: var(--s2) var(--s3); }
 .toolbar #new-btn { margin-left: auto; }
-.toolbar .filters { display: contents; }   /* the filters join the toolbar's own row (thread.css has another .filters, for a card page) */
+/* toggle chips: Threads only, Waiting for you, Blocked, Done, not verified */
+.toolbar .btn.chip { min-height: 32px; padding: 0 14px; border-radius: var(--pill); }
+.toolbar .btn.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 500; }
+.toolbar .btn.chip:not(.wait-pill)[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+/* the result note: how many cards are left, then Clear filters as a link */
+.toolbar-note { margin-left: auto; min-width: 0; display: flex; align-items: center; gap: var(--s2); color: var(--muted); font-size: 12.5px; }
+.toolbar-note:empty { display: none; }
+.toolbar-note .tb-count { white-space: nowrap; }
+.toolbar-note .btn { min-height: 28px; padding: 0 6px; border-color: transparent; background: transparent; color: var(--accent); font-size: 12.5px; text-decoration: underline; text-underline-offset: 2px; }
+.toolbar-note .btn:hover:not(:disabled) { background: var(--accent-bg); }
+.mode-note { margin: 0 var(--gut) var(--s3); flex: none; font-size: 12.5px; color: var(--muted); padding: var(--s2) var(--s3); }
+.sel { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.sel select.input { width: auto; max-width: min(260px, 56vw); text-overflow: ellipsis; color: var(--text); }
 
 /* ---------- controls ---------- */
 .input, input.input, textarea.input, select.input {

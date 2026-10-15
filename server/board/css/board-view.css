@@ -66,6 +66,9 @@
 .card-agent { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
 .unseen { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--warn); }
 .unseen .shape { color: var(--warn); width: 7px; height: 7px; }
+.notified { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ok); }
+.notified .shape { color: var(--ok); }
+.unseen + .notified { margin-left: var(--s2); }
 
 /* milestones: the progress line, the tag on a card and the list on a milestone's page */
 .ms-prog { display: flex; align-items: center; gap: var(--s2); min-width: 0; font-size: 12.5px; color: var(--muted); }
@@ -95,16 +98,17 @@
 .ms-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* waiting for you: the red pill in the toolbar, the legend, the tag on a card, the count on the top bar and the section on a card's page */
-.wait-pill { color: var(--danger); background: var(--danger-bg); border-color: var(--danger); font-weight: 500; }
+.wait-pill, .toolbar .btn.chip.wait-pill { color: var(--danger); background: var(--danger-bg); border-color: var(--danger); font-weight: 500; }
 .wait-pill:hover:not(:disabled) { background: var(--danger-bg); filter: brightness(0.96); }
 .wait-pill .wait-n, .wait-badge {
   min-width: 20px; padding: 0 6px; border-radius: var(--pill); text-align: center; font-size: 12px; font-weight: 600; line-height: 18px;
   background: var(--danger); color: var(--on-accent);
 }
-.wait-pill[aria-pressed="true"] { background: var(--danger); color: var(--on-accent); border-color: var(--danger); }
+.wait-pill[aria-pressed="true"], .toolbar .btn.chip.wait-pill[aria-pressed="true"] { background: var(--danger); color: var(--on-accent); border-color: var(--danger); }
 .wait-pill[aria-pressed="true"] .wait-n { background: var(--on-accent); color: var(--danger); }
-.wait-legend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); }
-.wait-legend .pill { font-weight: 400; }
+/* the legend is a key, not a row of buttons: no fill, no border, small, after a thin separator */
+.wait-legend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px var(--s3); margin-left: var(--s2); padding-left: var(--s3); border-left: 1px solid var(--border-strong); cursor: default; }
+.wait-legend .pill { padding: 0; background: transparent; font-size: 12px; font-weight: 500; }
 .wait-tag { color: var(--danger); background: var(--danger-bg); }
 .wait-tag .wait-icons { display: inline-flex; align-items: center; gap: 4px; }
 .wait-tag .shape { color: var(--k); }
@@ -122,8 +126,22 @@
 .wait-opts legend, .start-mode legend { padding: 0 0 4px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
 .wait-opts .radio { align-items: flex-start; }
 .wait-opts .radio input { margin-top: 3px; }
-.wait-send { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
-.wait-send .foot-note { flex: 1 1 160px; min-width: 0; }
+.wait-draft { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.wait-draft[hidden] { display: none; }
+.wait-draft-note { font-size: 12.5px; font-weight: 500; color: var(--warn); }
+.wait-item[data-draft="1"] { box-shadow: inset 0 0 0 1px var(--warn); }
+/* the bar that sends every drafted answer at once: under every view of the project, and under a card's page */
+.send-bar {
+  position: fixed; z-index: 55; left: 0; right: 0; bottom: 0; height: var(--send-h);
+  display: flex; align-items: center; justify-content: center; gap: var(--s4); padding: 0 var(--s4);
+  background: var(--surface); border-top: 1px solid var(--border-strong); box-shadow: 0 -4px 16px rgba(31, 30, 29, 0.10);
+}
+.send-bar[hidden] { display: none; }
+.send-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--muted); }
+.send-bar .btn { flex: none; }
+:root { --send-h: 56px; }
+html:has(.send-bar:not([hidden])) #app { height: calc(100vh - var(--send-h)); height: calc(100dvh - var(--send-h)); }
+html:has(.send-bar:not([hidden])) .overlay { bottom: var(--send-h); }
 .wait-line { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; column-gap: var(--s2); align-items: start; padding: 2px 0; color: var(--muted); font-size: 12.5px; }
 .wait-line .shape { margin-top: 4px; color: var(--muted); }
 .wait-line-text { min-width: 0; overflow-wrap: anywhere; }

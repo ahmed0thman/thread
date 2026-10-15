@@ -1326,7 +1326,7 @@ test('the Board draws no milestone and counts none; the Milestone filter and the
   assert.match(html, /const pool = chat \? current\.cards\.filter\(isThread\) : current\.cards\.filter\(\(c\) => c\.kind !== 'milestone'\);/);
   assert.doesNotMatch(html, /is-milestone/);
   assert.match(html, /if \(ms\) el\.appendChild\(milestoneTag\(ms\)\);/, 'a card keeps its milestone tag');
-  assert.match(html, /fillSelect\(elMilestone, \[\['', 'All'\]\]\.concat\(choices, \[\[NO_MS, 'No milestone'\]\]\), milestoneSel\);/, 'the filter still lists the milestones');
+  assert.match(html, /fillSelect\(elMilestone, \[\['', 'All milestones'\]\]\.concat\(choices, \[\[NO_MS, 'No milestone'\]\]\), milestoneSel\);/, 'the filter still lists the milestones');
 });
 
 test('the Milestones view shows a state tag and the waiting items of a milestone\'s cards, and sorts open, empty, done', () => {

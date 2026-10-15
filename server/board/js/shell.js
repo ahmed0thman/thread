@@ -162,6 +162,7 @@
     elThreadsOnly.hidden = chat;
     elModeNote.hidden = !chat;
     updateWaitingPill();
+    updateSendBar();
     elOldNote.hidden = !(current && !current.config);
     showVersionNote();
     updateChrome();
@@ -244,6 +245,7 @@
     ids.forEach((i) => { const o = h('option', null, map[i]); o.value = i; o.title = map[i]; frag.appendChild(o); });
     elSession.replaceChildren(frag);
     elSession.value = sessionSel;
+    markSet(elSession);
   }
   elSession.addEventListener('change', () => { sessionSel = elSession.value; renderBoard(false); });
 

@@ -384,6 +384,18 @@ test('over the tunnel a person can read, edit, answer and ask for a report, but 
   await ok(await a.write('PATCH', `/api/cards/${made.json.id}`, { note: 'Edited on the old route' }));
   const answered = await ok(await a.write('POST', `${P}/cards/c1/waits/${w.item.id}`, { text: 'Three.' }));
   assert.equal(answered.json.waits.find((x) => x.id === w.item.id).state, 'answered');
+  // "Notify Claude" on a card that is new from the user, and the drafted answers sent together: both on both route shapes
+  await core.touchSession(b.projectDir, PARENT_SESSION);
+  const notified = await ok(await a.write('POST', `${P}/cards/${made.json.id}/notify`, { session: PARENT_SESSION }));
+  assert.equal(notified.json.notified, true);
+  await ok(await a.write('POST', `/api/cards/${made.json.id}/notify`, { session: PARENT_SESSION }));
+  assert.equal(core.readState(b.projectDir).cards.find((c) => c.id === made.json.id).notifySession, PARENT_SESSION);
+  const w2 = await addWait(b.projectDir, { card: 'c1', kind: 'todo', text: 'Run it', sessionId: PARENT_SESSION });
+  const w3 = await addWait(b.projectDir, { card: 'c1', kind: 'question', text: 'Why?', sessionId: PARENT_SESSION });
+  const batch = await ok(await a.write('POST', `${P}/waits/answer-batch`, { items: [{ id: w2.item.id, done: true }] }));
+  assert.deepEqual(batch.json.applied, [w2.item.id]);
+  await ok(await a.write('POST', '/api/waits/answer-batch', { items: [{ id: w3.item.id, text: 'because' }] }));
+  assert.equal(core.waitsOf(core.readState(b.projectDir).cards.find((c) => c.id === 'c1')).filter((x) => x.state === 'answered').length, 3);
   await ok(await a.write('POST', `${P}/threads/c2/report-request`, {}));
   assert.ok(core.readState(b.projectDir).cards.find((c) => c.id === 'c2').thread.reportRequestedAt);
   await ok(await a.write('DELETE', `${P}/threads/c2/report-request`));
@@ -603,7 +615,7 @@ test('board_open with tunnel works from the owner and from a guest, board_stop c
   assert.match(fromGuest, /It works until .+ \(in 12 h\)\./);
   assert.match(fromGuest, /Whoever has this link acts as you on this board/);
   assert.match(fromGuest, /It can read: every project on the board with its absolute path \(which contains your username\), thread reports and transcripts, sub-agent run prompts, reports and steps, the session list, the agents list and the lane settings\./);
-  assert.match(fromGuest, /It can do: create and edit cards \(which gives Claude new instructions\), answer waiting items \(which can approve a review and wake Claude\), and ask for thread reports\. It acts as you, so it can also move a card that has criteria to done, or edit those criteria/);
+  assert.match(fromGuest, /It can do: create and edit cards \(which gives Claude new instructions\), answer waiting items \(which can approve a review and wake Claude\), notify Claude about a card \(its title and note reach Claude as if you had typed them, whether or not waking is on; with waking on that also wakes it\), and ask for thread reports\. It acts as you, so it can also move a card that has criteria to done, or edit those criteria/);
   assert.doesNotMatch(fromGuest, /already open/);
   assert.equal(fromGuest.slice(fromGuest.indexOf('Remote link:')).includes(boardToken()), false, 'the board token is not in the remote link');
 

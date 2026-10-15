@@ -12,6 +12,7 @@ import { dataDir, envValue, now, projectKey, projectPaths, readState, updateStat
 import { EFFORTS, cleanEffort, cleanModel, collapse, sameSession, sessionModel } from './sessions.mjs';
 import { ChatOnlyError, DEFAULT_STAGES, readConfig } from './config.mjs';
 import { openWaits, reviewApproved } from './waits.mjs';
+import { notifyActive } from './notify.mjs';
 import { FIELD_NAMES, addHistory, cleanFields, cleanWorker, finishedStageIds, hasCriteria, liveBlockers } from './fields.mjs';
 import { RESUME, laneSnapshot, requireRunnableLane, unusableLane } from './lanes.mjs';
 
@@ -19,6 +20,7 @@ export * from './state.mjs';
 export * from './sessions.mjs';
 export * from './config.mjs';
 export * from './waits.mjs';
+export * from './notify.mjs';
 export * from './fields.mjs';
 
 // The default stage ids. A project's own stages come from readConfig.
@@ -500,7 +502,9 @@ export async function sweepOrphanLogs(projectDirArg) {
   });
 }
 
-export async function markSeen(projectDirArg) {
+// Listing the board marks the cards the user added or edited as seen by Claude, for every session. A "Notify Claude" request is different:
+// it ends only when the session that was picked lists the board (`sessionId`, the caller's), so another session's listing leaves it open.
+export async function markSeen(projectDirArg, sessionId) {
   return updateState(projectDirArg, (state) => {
     const unseen = [];
     for (const card of state.cards) {
@@ -508,6 +512,7 @@ export async function markSeen(projectDirArg) {
         unseen.push(JSON.parse(JSON.stringify(card)));
         card.seenByClaude = true;
       }
+      if (sessionId && notifyActive(card) && sameSession(card.notifySession, sessionId)) card.notifySeenFor = card.notifyId;
     }
     return unseen;
   });

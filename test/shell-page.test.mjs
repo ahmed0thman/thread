@@ -357,8 +357,49 @@ test('the page has the project switcher, the top bar, the pane and the board, wi
   assert.match(html, /<main class="pane" id="pane"/);
   assert.doesNotMatch(html, /ptabs|ptab\b|role="tablist"/, 'the project tab row is gone');
   const bar = html.slice(html.indexOf('<div class="toolbar"'), html.indexOf('<main class="board"'));
-  assert.match(bar, /id="search"[\s\S]*<div class="filters" id="filters">[\s\S]*id="threads-only"[\s\S]*id="waiting-btn"[\s\S]*id="filter-note"[\s\S]*<\/div>\s*<button[^>]*id="new-btn"/);
-  assert.match(html, /\.filters \{ display: contents; \}/);
+  // row 1: the search, the selects, New card; row 2 (the chips): the toggles, the waiting key, the result note. The focus order follows it.
+  assert.match(bar, /id="search"[\s\S]*<div class="filters" id="filters">[\s\S]*id="session-filter"[\s\S]*id="milestone-filter"[\s\S]*<\/div>\s*<button[^>]*id="new-btn"[\s\S]*id="chips"[\s\S]*id="threads-only"[\s\S]*id="waiting-btn"[\s\S]*id="wait-legend"[\s\S]*id="filter-note"/);
+  assert.match(html, /\.toolbar \.filters, \.toolbar \.list-filters, \.toolbar \.list-toggles \{ display: contents; \}/);
+});
+
+test('the filter bar is two rows: the search, the selects and New card, then the chips; a select has no outside label', () => {
+  const bar = html.slice(html.indexOf('<div class="toolbar"'), html.indexOf('<main class="board"'));
+  assert.match(bar, /<div class="tb-row tb-main">[\s\S]*id="new-btn"[\s\S]*<\/div>\s*<div class="tb-row tb-chips" id="chips">/);
+  const chips = bar.slice(bar.indexOf('id="chips"'));
+  assert.deepEqual([...chips.matchAll(/<button[^>]*class="btn chip[^"]*"[^>]*id="([^"]+)"/g)].map((m) => m[1]), ['threads-only', 'waiting-btn', 'lblocked', 'lunverified'], 'every toggle is a chip, in this order');
+  assert.ok(chips.indexOf('id="lunverified"') < chips.indexOf('id="wait-legend"') && chips.indexOf('id="wait-legend"') < chips.indexOf('id="filter-note"'), 'the key follows the toggles, the note ends the row');
+  assert.doesNotMatch(bar, /<label class="sel"[^>]*><span>/, 'the selects carry no text label; the first option names the filter');
+  for (const id of ['session-filter', 'milestone-filter', 'ltype-filter', 'lprio-filter', 'llabel-filter']) assert.match(bar, new RegExp(`<select class="input" id="${id}" aria-label="[^"]+">`), id);
+  assert.match(html, /\.toolbar #new-btn \{ margin-left: auto; \}/);
+  assert.match(html, /\.toolbar-note \{ margin-left: auto;/, 'the result note is pushed right');
+  assert.match(html, /\.toolbar-note \.tb-count \{ white-space: nowrap; \}/);
+  assert.match(html, /\.toolbar \.btn\.chip \{ min-height: 32px;[^}]*border-radius: var\(--pill\)/);
+  assert.match(html, /\.toolbar \.btn\.chip\[aria-pressed="true"\] \{ background: var\(--accent\)/);
+  assert.match(html, /\.wait-legend \.pill \{ padding: 0; background: transparent;/, 'the key is not a row of buttons');
+  assert.match(html, /\.tb-chips:not\(:has\(> :not\(\[hidden\], :empty\)\)\) \{ display: none; \}/, 'an empty chips row takes no room');
+  assert.match(html, /elChips\.hidden = !\(board \|\| viewSel === 'list'\);\n\s+elListFilters\.hidden = viewSel !== 'list';\n\s+elListToggles\.hidden = viewSel !== 'list';/, 'the Summary and Milestones views show neither row 2 nor the selects');
+});
+
+test('the first option of a filter select names the filter, and a select that is not on it gets the active class', () => {
+  assert.match(html, /fillSelect\(elMilestone, \[\['', 'All milestones'\]\]/);
+  assert.match(html, /const all = h\('option', null, 'All sessions'\);/);
+  assert.match(html, /set\(elListType, ch\.types, \(t\) => TYPE_LABEL\[t\], u\.type, 'All types'\);/);
+  assert.match(html, /set\(elListPrio, ch\.priorities, \(p\) => PRIORITY_LABEL\[p\], u\.priority, 'All priorities'\);/);
+  assert.match(html, /set\(elListLabel, ch\.labels, \(l\) => l, u\.label, 'All labels'\);/);
+  assert.match(html, /function markSet\(sel\) \{ sel\.classList\.toggle\('is-set', sel\.value !== ''\); \}/);
+  assert.match(html, /elFilters\.addEventListener\('change', \(e\) => \{ if \(e\.target && e\.target\.tagName === 'SELECT'\) markSet\(e\.target\); \}\);/, 'choosing a value sets it');
+  assert.match(html, /elSession\.value = sessionSel;\n\s+markSet\(elSession\);/, 'and so does a value set from code');
+  assert.match(html, /fillSelect\(sel, \[\['', all\]\][^\n]*\n\s+markSet\(sel\);/);
+  assert.match(html, /\.toolbar \.sel select\.input\.is-set \{ border-color: var\(--accent\); color: var\(--accent\);/);
+  assert.match(html, /\.toolbar \.sel select\.input \{ width: auto; min-width: 150px; max-width: 220px; text-overflow: ellipsis;/);
+});
+
+test('the result note is short ("3 of 33 cards") and the narrow layout keeps the search beside New card', () => {
+  assert.match(html, /const count = h\('span', 'tnum tb-count', shown\.length \+ ' of ' \+ total \+ \(total === 1 \? ' card' : ' cards'\)\);/);
+  assert.match(html, /elNote\.appendChild\(h\('span', 'tnum tb-count', rows\.length \+ ' of ' \+ all\.length \+ \(all\.length === 1 \? ' card' : ' cards'\)\)\);/);
+  assert.doesNotMatch(html, /'Showing '/);
+  const narrow = html.slice(html.indexOf('@media (max-width: 760px) {\n  :root { --gut'));
+  assert.match(narrow, /\.search \{ flex: 1 1 160px; max-width: none; \}\n\s+\.toolbar #new-btn \{ order: 1; \}\n\s+\.toolbar \.sel \{ order: 2; flex: 1 1 calc\(50% - var\(--s2\) \/ 2\); \}/, 'two selects to a line, after the search and New card');
 });
 
 test('the top bar is made of links to the views, marks the current one and carries the waiting count', () => {

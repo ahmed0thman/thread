@@ -128,7 +128,7 @@
     return listMemo[selKey] || (listMemo[selKey] = { sort: Object.assign({}, LIST_DEFAULT_SORT), type: '', priority: '', label: '', blocked: false, unverified: false });
   }
   const elListFilters = $('list-filters'), elListType = $('ltype-filter'), elListPrio = $('lprio-filter'), elListLabel = $('llabel-filter');
-  const elListBlocked = $('lblocked'), elListUnver = $('lunverified');
+  const elListBlocked = $('lblocked'), elListUnver = $('lunverified'), elListToggles = $('list-toggles');
 
   function listFilterState() {
     const u = listUi();
@@ -277,13 +277,14 @@
     if (u.type && !ch.types.includes(u.type)) u.type = '';
     if (u.priority && !ch.priorities.includes(u.priority)) u.priority = '';
     if (u.label && !ch.labels.includes(u.label)) u.label = '';
-    const set = (sel, values, text, want) => {
+    const set = (sel, values, text, want, all) => {
       sel.parentNode.hidden = values.length < 2 && !want;
-      fillSelect(sel, [['', 'All']].concat(values.map((v) => [v, text(v)])), want);
+      fillSelect(sel, [['', all]].concat(values.map((v) => [v, text(v)])), want);
+      markSet(sel);
     };
-    set(elListType, ch.types, (t) => TYPE_LABEL[t], u.type);
-    set(elListPrio, ch.priorities, (p) => PRIORITY_LABEL[p], u.priority);
-    set(elListLabel, ch.labels, (l) => l, u.label);
+    set(elListType, ch.types, (t) => TYPE_LABEL[t], u.type, 'All types');
+    set(elListPrio, ch.priorities, (p) => PRIORITY_LABEL[p], u.priority, 'All priorities');
+    set(elListLabel, ch.labels, (l) => l, u.label, 'All labels');
     elListBlocked.setAttribute('aria-pressed', u.blocked ? 'true' : 'false');
     elListUnver.setAttribute('aria-pressed', u.unverified ? 'true' : 'false');
   }
@@ -324,7 +325,7 @@
     // the line beside the toolbar, as on the board
     elNote.replaceChildren();
     if (all.length && filtering) {
-      elNote.appendChild(h('span', 'tnum', 'Showing ' + rows.length + ' of ' + all.length + (all.length === 1 ? ' card.' : ' cards.')));
+      elNote.appendChild(h('span', 'tnum tb-count', rows.length + ' of ' + all.length + (all.length === 1 ? ' card' : ' cards')));
       elNote.appendChild(plainBtn('Clear filters', 'small', clearListFilters));
     }
 

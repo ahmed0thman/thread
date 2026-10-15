@@ -163,12 +163,14 @@
     startFor = '';
     const atWaits = waitsFor === target;
     waitsFor = '';
+    const notifyNow = notifyFor === target;
+    notifyFor = '';
     if (target === 'new') { buildTaskPanel(null); }
     else {
       const card = shownCard(target);
       if (!card) buildMissing(target);
       else if (isThread(card)) buildThreadPanel(card);
-      else buildTaskPanel(card, startNow);
+      else buildTaskPanel(card, startNow, notifyNow);
     }
     if (panel) {
       const first = panel.initialFocus ? panel.initialFocus() : panel.root;

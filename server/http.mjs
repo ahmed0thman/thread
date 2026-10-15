@@ -80,12 +80,17 @@ function hostAllowed(hostHeader) {
   }
 }
 
-function readJsonBody(req) {
+// The drafted answers sent together: the most the batch may hold, each as long as an answer and a comment may be. A character takes up to
+// 6 bytes in JSON text (4 in UTF-8; a control character is escaped to 6), plus room for the ids and keys. No other route is given this much.
+const MAX_BATCH_BODY = core.MAX_BATCH * (core.MAX_ANSWER + core.MAX_COMMENT) * 6 + 64 * 1024;
+
+function readJsonBody(req, limit = MAX_BODY) {
+  const sayLimit = limit >= 1024 * 1024 ? `${(limit / (1024 * 1024)).toFixed(1)} MB` : `${Math.round(limit / 1024)} KB`;
   return new Promise((resolve, reject) => {
     const declared = Number(req.headers['content-length']);
-    if (Number.isFinite(declared) && declared > MAX_BODY) {
+    if (Number.isFinite(declared) && declared > limit) {
       req.resume();
-      reject(new HttpError(413, 'request body too large (limit 64 KB)'));
+      reject(new HttpError(413, `request body too large (limit ${sayLimit})`));
       return;
     }
     const chunks = [];
@@ -94,10 +99,10 @@ function readJsonBody(req) {
     req.on('data', (c) => {
       if (done) return;
       size += c.length;
-      if (size > MAX_BODY) {
+      if (size > limit) {
         done = true;
         chunks.length = 0;
-        reject(new HttpError(413, 'request body too large (limit 64 KB)'));
+        reject(new HttpError(413, `request body too large (limit ${sayLimit})`));
         return;
       }
       chunks.push(c);
@@ -173,7 +178,9 @@ async function handleProject(req, res, projectDir, sub, query) {
   const rm = method === 'GET' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/runs\/([0-9]{1,6})\/(activity|prompt|report)$/.exec(sub) : null;
   const stopm = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/runs\/([0-9]{1,6})\/stop$/.exec(sub) : null;
   const waitm = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/waits\/([A-Za-z0-9_.-]{1,80})$/.exec(sub) : null;
-  const known = isState || isAgents || isLanes || isCardCreate || !!rm || !!stopm || !!waitm || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
+  const notifym = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/notify$/.exec(sub) : null;
+  const isBatch = method === 'POST' && sub === '/waits/answer-batch';
+  const known = isState || isAgents || isLanes || isCardCreate || !!rm || !!stopm || !!waitm || !!notifym || isBatch || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
   if (!known) {
     req.resume();
     send(res, 404, { error: 'not found' });
@@ -301,6 +308,24 @@ async function handleProject(req, res, projectDir, sub, query) {
     return;
   }
 
+  if (notifym) {
+    // "Notify Claude": stores the request on a card that is new from the user (see notify.mjs); the hook or the waiter tells the session.
+    requireJson(req);
+    const body = await readJsonBody(req);
+    const { session } = pick(body, ['session']);
+    send(res, 200, viewOf(await core.requestNotify(projectDir, notifym[1], session)));
+    return;
+  }
+
+  if (isBatch) {
+    // All the answers the user has drafted, in one write (see answerWaits in waits.mjs).
+    requireJson(req);
+    const body = await readJsonBody(req, MAX_BATCH_BODY);
+    const { applied, skipped, cards } = await core.answerWaits(projectDir, body.items);
+    send(res, 200, { applied, skipped, cards: cards.map(viewOf) });
+    return;
+  }
+
   if (threadRoute === 'DELETE report-request') {
     req.resume();
     send(res, 200, viewOf(await core.cancelReportRequest(projectDir, tm[1])));
@@ -358,6 +383,8 @@ const REMOTE_ROUTES = [
   ['POST', /^\/cards$/],                                                  // a new card
   ['PATCH', new RegExp(`^/cards/${RID}$`)],                                // an edit
   ['POST', new RegExp(`^/cards/${RID}/waits/[A-Za-z0-9_.-]{1,80}$`)],      // answer or close a waiting item
+  ['POST', /^\/waits\/answer-batch$/],                                      // the drafted answers, sent together
+  ['POST', new RegExp(`^/cards/${RID}/notify$`)],                          // "Notify Claude" about a card it has not seen
   ['POST', new RegExp(`^/threads/${RID}/report-request$`)],                // ask for a report to the main session
   ['DELETE', new RegExp(`^/threads/${RID}/report-request$`)],              // take it back
 ];
@@ -367,7 +394,7 @@ function remoteRouteAllowed(method, path) {
   const pm = /^\/api\/p\/([0-9a-f]{12})(\/.*)?$/.exec(path);
   let sub;
   if (pm) sub = pm[2] || '';
-  else if (/^\/api\/(state|agents|cards|threads)(\/|$)/.test(path)) sub = path.slice('/api'.length);
+  else if (/^\/api\/(state|agents|cards|threads|waits)(\/|$)/.test(path)) sub = path.slice('/api'.length);
   else return false;
   return REMOTE_ROUTES.some(([m, re]) => m === method && re.test(sub));
 }
@@ -525,7 +552,7 @@ function makeHandler(homeDir, token, stop, { remote = null, tunnel = null } = {}
       return;
     }
 
-    if (path === '/api/state' || path === '/api/agents' || path === '/api/cards' || path.startsWith('/api/cards/') || path.startsWith('/api/threads/')) {
+    if (path === '/api/state' || path === '/api/agents' || path === '/api/cards' || path.startsWith('/api/cards/') || path.startsWith('/api/threads/') || path.startsWith('/api/waits/')) {
       await handleProject(req, res, homeDir, path.slice('/api'.length), url.searchParams);
       return;
     }
@@ -558,6 +585,8 @@ function withViews(card, cfg, cards) {
     if (live.length) view.blockedBy = live; else delete view.blockedBy;
   }
   view.workedBy = core.workedBy(card);
+  // an open "Notify Claude" request (notify.mjs): the card is unchanged since the click and the session picked has not listed the board; computed, never stored
+  if (core.notifyActive(card)) view.notified = true;
   // criteria in a finished stage without an approving review: the board can move a card there, and so could an older plugin version
   // (and 0.11.0 turned cards into threads without checking for criteria, so a thread can carry them too)
   if (core.hasCriteria(card) && core.isFinished(card, cfg) && !core.reviewApproved(card, core.finishedStageIds(cfg))) view.verified = false;

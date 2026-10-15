@@ -23,7 +23,8 @@
     if (sig === msSig) return;
     msSig = sig;
     elMilestoneWrap.hidden = !choices.length;
-    fillSelect(elMilestone, [['', 'All']].concat(choices, [[NO_MS, 'No milestone']]), milestoneSel);
+    fillSelect(elMilestone, [['', 'All milestones']].concat(choices, [[NO_MS, 'No milestone']]), milestoneSel);
+    markSet(elMilestone);
   }
   elMilestone.addEventListener('change', () => { milestoneSel = elMilestone.value; renderBoard(false); });
   // a card's milestone tag: show only that milestone and its cards
@@ -75,6 +76,8 @@
     }
     sel.value = pairs.some((p) => p[0] === want) ? want : (pairs.length ? pairs[0][0] : '');
   }
+  // A filter select that is not on its first option ("All …") gets the accent look, so it is plain that a filter is on.
+  function markSet(sel) { sel.classList.toggle('is-set', sel.value !== ''); }
 
   let dirShown = null;
   function setDir(dir) {

@@ -143,10 +143,10 @@
     return api;
   }
 
-  // startNow: open at the "Start as thread" step (the gear menu asked for it)
-  function buildTaskPanel(card, startNow) {
+  // startNow: open at the "Start as thread" step (the gear menu asked for it); notifyNow: at the "Notify Claude" step
+  function buildTaskPanel(card, startNow, notifyNow) {
     const create = !card;
-    const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? panelKey(card) : '', confirmDelete: false, starting: !!startNow && !create && card.kind !== 'milestone' && !isRO(), scrollers: {}, actOpen: {} };
+    const P = panel = { target: create ? 'new' : card.id, type: create ? 'create' : 'task', cardKey: card ? panelKey(card) : '', confirmDelete: false, starting: !!startNow && !create && card.kind !== 'milestone' && !isRO(), notifying: !!notifyNow && !create && !isRO() && !isChat() && notifyState(card) !== '', scrollers: {}, actOpen: {} };
     const page = !create;      // a new card stays a side drawer
     const isMs = !create && card.kind === 'milestone';
     const ws = page && !isMs;  // a task or idea opens the workspace of a thread; a milestone keeps its page
@@ -265,7 +265,7 @@
       if (FX && Object.keys(fieldsPatch(P.base.fields, FX.values(), fxKeys())).length) return true;
       return create ? fKind.value !== P.base.kind : false;
     };
-    P.initialFocus = () => (create ? fTitle : P.starting ? foot.querySelector('select') || foot.querySelector('button') : P.root);
+    P.initialFocus = () => (create ? fTitle : P.starting || P.notifying ? foot.querySelector('select') || foot.querySelector('button') : P.root);
 
     function refreshConflict() {
       conflict.hidden = !(!create && P.isDirty() && P.latestUpdatedAt && P.latestUpdatedAt !== P.baseUpdatedAt);
@@ -369,7 +369,7 @@
     }
 
     // The Start as thread button, or its Start button once the step is open: both wait for saved fields.
-    let startBtn = null, goBtn = null, whyEl = null, startWhyEl = null;
+    let startBtn = null, goBtn = null, whyEl = null, startWhyEl = null, notifyBtn = null;
     function syncStart() {
       if (create) return;   // a new card has no saved card to start from
       const savedCard = findCard(P.target) || card;
@@ -384,6 +384,12 @@
     function startSessions() {
       const all = (current && current.sessions) || {};
       return Object.keys(all).map((id) => [id, all[id] || {}]).sort((a, b) => String(b[1].lastSeenAt || '').localeCompare(String(a[1].lastSeenAt || '')));
+    }
+    // The sessions Notify Claude offers: the ones active in the last 7 days, and the most recent one whatever its age (it is the preselected one).
+    // A session that ended long ago would only collect in the list.
+    const NOTIFY_RECENT_MS = 7 * 24 * 3600 * 1000;
+    function notifySessions() {
+      return startSessions().filter(([, info], i) => i === 0 || Date.now() - Date.parse(info.lastSeenAt) <= NOTIFY_RECENT_MS);
     }
 
     const CONTEXT_NOTE = { brief: 'Gets only this card’s title and note.', full: 'Copies the whole session; uses far more tokens.' };
@@ -405,7 +411,7 @@
     function renderFoot(focusFirst) {
       foot.replaceChildren();
       if (isRemote()) P.starting = P.confirmDelete = false;
-      startBtn = goBtn = whyEl = startWhyEl = null;
+      startBtn = goBtn = whyEl = startWhyEl = notifyBtn = null;
       if (P.starting) {
         const step = h('div', 'start-step');
         const lp0 = laneStartPlan(findCard(P.target) || card);
@@ -478,6 +484,33 @@
         syncStart();
         return;
       }
+      if (P.notifying) {
+        const step = h('div', 'start-step');
+        step.appendChild(h('p', null, 'Ask a Claude session to look at this card now. It hears about it with its next message, or within a few seconds when waking is turned on (/thread:setup).'));
+        const list = notifySessions();
+        const cancel = plainBtn('Cancel', null, () => { P.notifying = false; renderFoot(); if (notifyBtn) notifyBtn.focus(); });
+        if (!list.length) {
+          step.appendChild(h('p', 'muted', 'No recent session in this project. Open the project in Claude Code and send one message, then try again.'));
+          const go = actionBtn('Notify', 'primary', 'notify:' + selKey + ':' + card.id, () => {});
+          setOff(go, true);
+          step.appendChild(h('div', 'start-btns')).append(go, cancel);
+          if (focusFirst) cancel.focus();
+        } else {
+          const sel = h('select', 'input');
+          list.forEach(([id, info]) => {
+            const o = h('option', null, (info.label || sessionLabel(id)) + (info.lastSeenAt ? ' · last active ' + rel(info.lastSeenAt) : ''));
+            o.value = id;
+            sel.appendChild(o);
+          });
+          step.appendChild(field('Session to notify', sel, 'f-notify-session'));
+          const go = actionBtn('Notify', 'primary', 'notify:' + selKey + ':' + card.id, () => doNotify(sel.value));
+          step.appendChild(h('div', 'start-btns')).append(go, cancel);
+          if (focusFirst) sel.focus();
+        }
+        foot.appendChild(step);
+        syncBusy();
+        return;
+      }
       if (P.confirmDelete) {
         foot.appendChild(h('span', 'confirm-text', deleteConfirmText(card)));
         foot.appendChild(h('span', 'grow'));
@@ -497,6 +530,13 @@
       foot.append(saveBtn, plainBtn('Cancel', null, cancel), msgEl);
       foot.appendChild(h('span', 'grow'));
       if (!create) {
+        // a task or idea that is new from the user can be pointed out to a session; a seen card, a thread and a milestone cannot (see notifyState)
+        const nf = isChat() ? '' : notifyState(findCard(P.target) || card);
+        if (nf && !ro) {
+          notifyBtn = plainBtn(nf === 'sent' ? 'Notify again' : 'Notify Claude', null, () => { P.notifying = true; P.starting = false; renderFoot(true); });
+          notifyBtn.title = 'Ask a Claude session to look at this card now';
+          foot.appendChild(notifyBtn);
+        }
         if (!isMs && !away) {      // a milestone cannot be a thread
           startBtn = plainBtn('Start as thread', null, () => { P.starting = true; renderFoot(true); });
           startWhyEl = h('span', 'foot-note');
@@ -511,6 +551,17 @@
         syncStart();
       }
       syncBusy();
+    }
+
+    // The board stores the request; the session hears of it with its next message, or within a few seconds when waking is on.
+    async function doNotify(session) {
+      clearError();
+      const pk = selKey;
+      await runAction('notify:' + pk + ':' + card.id, async () => {
+        try { const sent = await api('POST', pp(pk, 'cards/' + encodeURIComponent(card.id) + '/notify'), { session }); P.notifying = false; applyCard(sent, pk); wrote(); if (panel === P) renderFoot(); }
+        catch (e) { showError(e.message); }
+      });
+      poll();
     }
 
     // The server turns the card into a thread under the same id; updatePanel then swaps this page for the workspace.
@@ -545,7 +596,7 @@
       roNote.hidden = !ro;
       [fTitle, fNote, fStatus, fMs, fKind].forEach((f) => { if (f) { f.disabled = ro; f.title = ro ? READONLY_WHY : ''; } });
       if (FX) FX.setDisabled(ro, READONLY_WHY);
-      if (ro) P.confirmDelete = P.starting = false;
+      if (ro) P.confirmDelete = P.starting = P.notifying = false;
       renderFoot();
     }
 
@@ -557,6 +608,7 @@
       headRowWrap.replaceChildren(h('span', 'idchip', c.id), kindMark(c.kind), ...[bugMark(fm), priorityMark(fm)].filter(Boolean));
       seenWrap.replaceChildren();
       if (c.seenByClaude === false) seenWrap.appendChild(unseenEl(ws ? 'span' : 'div'));
+      if (c.notified === true) seenWrap.appendChild(notifiedEl(ws ? 'span' : 'div', c));
       if (ws) {
         const n = Array.isArray(c.runs) ? c.runs.length : 0;
         S.meta.replaceChildren(h('span', null, label(c.status)), h('span', 'tnum', n ? n + (n === 1 ? ' agent run' : ' agent runs') : 'No agent runs'), seenWrap);
@@ -604,6 +656,11 @@
       const ls = laneSig(c);
       if (P.laneSig !== undefined && P.laneSig !== ls) { if (P.starting) renderFoot(); else syncStart(); }   // the lane changed: the start step, or the button, follows
       P.laneSig = ls;
+      // Notify Claude comes and goes with the card (Claude lists it, or it is edited again), and its label with the request
+      const ns = notifyState(c);
+      if (!ns) P.notifying = false;
+      if (P.notifySig !== undefined && P.notifySig !== ns) renderFoot();
+      P.notifySig = ns;
       if (msSection) renderMsCards(c);
       refreshConflict();
       syncStart();

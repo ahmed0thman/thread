@@ -10,7 +10,7 @@ import {
   HOOK_PATH, PARENT_SESSION, ROOT, TEST_DIR,
 } from './helpers.mjs';
 import * as core from '../server/core.mjs';
-import { pendingWake } from '../server/wake.mjs';
+import { claimWake, claimWaiter, pendingWake, recordTurnStart, stopWaiter } from '../server/wake.mjs';
 
 cleanAmbientEnv();
 
@@ -32,10 +32,10 @@ async function world(t, { wake = true, extra = {} } = {}) {
 const answer = (e, id = 'c1.w1') => core.answerWait(e.projectDir, 'c1', id, { text: 'three' });
 
 /** Start the Stop hook's waiter. `done` resolves with { code, stderr } when it exits. */
-function startWaiter(t, e, { session = PARENT_SESSION, env = {}, input } = {}) {
-  const childEnv = { ...process.env, CLAUDE_PROJECT_DIR: e.projectDir, THREAD_DATA_DIR: e.dataDir, THREAD_WAKE_POLL_MS: '100', ...env };
+function startWaiter(t, e, { session = PARENT_SESSION, env = {}, input, nodeArgs = [] } = {}) {
+  const childEnv = { ...process.env, CLAUDE_PROJECT_DIR: e.projectDir, THREAD_DATA_DIR: e.dataDir, THREAD_WAKE_POLL_MS: '100', THREAD_WAKE_SETTLE_MS: '0', ...env };
   for (const [k, v] of Object.entries(env)) if (v === undefined) delete childEnv[k];
-  const child = spawn(process.execPath, [WAITER], { env: childEnv, cwd: e.projectDir, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [...nodeArgs, WAITER], { env: childEnv, cwd: e.projectDir, stdio: ['pipe', 'pipe', 'pipe'] });
   let stderr = '';
   let stdout = '';
   child.stderr.on('data', (d) => (stderr += d));
@@ -341,6 +341,230 @@ test('a report click for another session\'s thread, or for a thread already repo
   assert.equal(cardOf(e, 'c1').thread.reportPushedAt, undefined);
 });
 
+// ---------------------------------------------------------------- a notify click
+
+/** A card the user added on the board, a session that is known, and `wake` on. */
+async function notifyWorld(t) {
+  const e = setupThreadEnv(t);
+  await core.saveConfig(e.projectDir, 'project', { wake: true });
+  await core.touchSession(e.projectDir, PARENT_SESSION);
+  await core.addCard(e.projectDir, { title: 'Fix the importer', note: 'Retries are off.', source: 'user' });
+  return e;
+}
+
+test('a notify click wakes the session picked, once: notifyPushedFor remembers the click, and a second click wakes again', async (t) => {
+  const e = await notifyWorld(t);
+  const w = startWaiter(t, e);
+  await waitFor(() => waiterFiles(e).length === 1);
+  assert.equal(await running(w, 300), true, 'a card the user added is not a wake by itself');
+  await core.requestNotify(e.projectDir, 'c1', PARENT_SESSION);
+  const r = await w.done;
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /^\[thread\] Not an error/);
+  const card = cardOf(e, 'c1');
+  assert.equal(card.notifyPushedFor, card.notifyId);
+  const again = startWaiter(t, e);
+  assert.equal(await running(again, 700), true, 'the same click wakes nobody twice');
+  await sleep(5);
+  await core.requestNotify(e.projectDir, 'c1', PARENT_SESSION);
+  assert.equal((await again.done).code, 2);
+});
+
+test('the woken turn adds the line for the card, and the click wakes nobody once the card is listed, for another session, or with wake off', async (t) => {
+  const e = await notifyWorld(t);
+  await core.requestNotify(e.projectDir, 'c1', PARENT_SESSION);
+  const woke = await startWaiter(t, e).done;
+  assert.equal(woke.code, 2);
+  const ctx = context(await hook(e, PARENT_SESSION, `[thread] Not an error: the user acted on the thread board\n${woke.stderr}`));
+  assert.match(ctx, /^This turn was started by the thread board/);
+  assert.match(ctx, /The user asks you to look at card c1 "Fix the importer" \(task, New\): "Retries are off\."\. Treat it as if they had typed it/);
+  // listed meanwhile: a waiter finds nothing to wake for
+  await core.addCard(e.projectDir, { title: 'Second', source: 'user' });
+  await core.requestNotify(e.projectDir, 'c2', PARENT_SESSION);
+  await core.markSeen(e.projectDir, PARENT_SESSION);
+  const w = startWaiter(t, e);
+  assert.equal(await running(w, 600), true);
+  w.child.kill('SIGKILL');
+  await w.done;
+  // another session's waiter
+  await core.addCard(e.projectDir, { title: 'Third', source: 'user' });
+  await core.touchSession(e.projectDir, OTHER_SESSION);
+  await core.requestNotify(e.projectDir, 'c3', OTHER_SESSION);
+  const mine = startWaiter(t, e);
+  assert.equal(await running(mine, 600), true, 'the click was for the other session');
+  mine.child.kill('SIGKILL');
+  await mine.done;
+  await core.saveConfig(e.projectDir, 'project', { wake: false });
+  assert.equal((await startWaiter(t, e, { session: OTHER_SESSION }).done).code, 0, 'wake off: it leaves at once');
+});
+
+test('chat-only with a thread: a notify click left from before wakes nobody', async (t) => {
+  const e = await notifyWorld(t);
+  await core.requestNotify(e.projectDir, 'c1', PARENT_SESSION);
+  const s = core.readState(e.projectDir);
+  s.cards.push(threadCard({ id: 'c2' }));
+  s.seq = 2;
+  writeStateFile(e.dataDir, e.projectDir, s);
+  await core.saveConfig(e.projectDir, 'project', { mode: 'chat' });
+  const w = startWaiter(t, e);
+  assert.equal(await running(w, 600), true);
+  w.child.kill('SIGKILL');
+  await w.done;
+  assert.equal(cardOf(e, 'c1').notifyPushedFor, undefined);
+});
+
+// ---------------------------------------------------------------- the settle time
+
+test('the waiter waits the settle time after it sees a trigger, and what arrives meanwhile goes with it', async (t) => {
+  const e = await world(t);
+  await core.addWait(e.projectDir, { card: 'c1', kind: 'todo', text: 'Second', sessionId: PARENT_SESSION });
+  await core.addWait(e.projectDir, { card: 'c1', kind: 'todo', text: 'Third', sessionId: PARENT_SESSION });
+  const w = startWaiter(t, e, { env: { THREAD_WAKE_SETTLE_MS: '1500' } });
+  await waitFor(() => waiterFiles(e).length === 1);
+  await sleep(300);
+  const seenAt = Date.now();
+  await answer(e);
+  await sleep(900);
+  assert.equal(w.exited(), false, 'nearly a second after the first answer it is still settling');
+  await core.answerWait(e.projectDir, 'c1', 'c1.w2', { done: true });
+  const r = await w.done;
+  assert.equal(r.code, 2);
+  assert.ok(Date.now() - seenAt >= 1400, `it woke ${Date.now() - seenAt} ms after the first answer`);
+  const file = JSON.parse(fs.readFileSync(path.join(core.projectPaths(e.projectDir).dir, waiterFiles(e)[0]), 'utf8'));
+  assert.deepEqual(file.fired.sort(), [`c1.w1@${itemOf(e, 'c1.w1').answeredAt}`, `c1.w2@${itemOf(e, 'c1.w2').answeredAt}`].sort(), 'both answers are one wake');
+  // the woken turn carries both
+  const ctx = context(await hook(e, PARENT_SESSION, 'the wake text'));
+  assert.match(ctx, /The user answered c1\.w1[^]*The user answered c1\.w2/);
+});
+
+test('a trigger that is gone when the settle time is over does not wake the session', async (t) => {
+  const e = await world(t);
+  const w = startWaiter(t, e, { env: { THREAD_WAKE_SETTLE_MS: '1000' } });
+  await waitFor(() => waiterFiles(e).length === 1);
+  await answer(e);
+  await sleep(400);
+  await core.deliverWaitAnswers(e.projectDir, PARENT_SESSION);   // delivered by some other path meanwhile
+  assert.equal(await running(w, 1500), true, 'nothing is left to wake for');
+  w.child.kill('SIGKILL');
+  await w.done;
+});
+
+test('a typed prompt during the settle time stops the waiter, and nothing wakes the busy turn', async (t) => {
+  const e = await world(t);
+  const w = startWaiter(t, e, { env: { THREAD_WAKE_SETTLE_MS: '1500' } });
+  await waitFor(() => waiterFiles(e).length === 1);
+  await answer(e);
+  await sleep(300);
+  await hook(e, PARENT_SESSION, 'typed meanwhile');
+  const r = await w.done;
+  assert.equal(r.code, 0);
+  assert.equal(r.stderr, '');
+});
+
+test('the settle time defaults to about two seconds', async (t) => {
+  const e = await world(t);
+  await answer(e);
+  const t0 = Date.now();
+  const r = await startWaiter(t, e, { env: { THREAD_WAKE_SETTLE_MS: undefined } }).done;
+  assert.equal(r.code, 2);
+  const took = Date.now() - t0;
+  assert.ok(took >= 1900 && took < 5000, `woke after ${took} ms`);
+});
+
+test('the settle time runs on a monotonic clock: a wall clock that steps back an hour during it delays nothing', { timeout: 20000 }, async (t) => {
+  const e = await world(t);
+  const step = path.join(e.base, 'step-clock');
+  const w = startWaiter(t, e, { env: { THREAD_WAKE_SETTLE_MS: '1500', THREAD_TEST_STEP_FILE: step }, nodeArgs: ['--import', path.join(TEST_DIR, 'fixtures', 'step-back-clock.mjs')] });
+  await waitFor(() => waiterFiles(e).length === 1);
+  const t0 = Date.now();
+  await answer(e);
+  await sleep(400);
+  fs.writeFileSync(step, '');   // the settle time is running, and now the wall clock goes back an hour
+  const r = await w.done;
+  assert.equal(r.code, 2);
+  assert.ok(Date.now() - t0 < 6000, `it woke ${Date.now() - t0} ms after the answer`);
+});
+
+test('answers that did not fit in a woken turn wake the session again, and then arrive; a wake is made only while something is left', async (t) => {
+  const e = await world(t);
+  await core.answerWait(e.projectDir, 'c1', 'c1.w1', { text: 'a'.repeat(900) });
+  for (let i = 2; i <= 20; i++) {
+    await core.addWait(e.projectDir, { card: 'c1', kind: 'question', text: `question ${i} ${'q'.repeat(80)}`, sessionId: PARENT_SESSION });
+    await core.answerWait(e.projectDir, 'c1', `c1.w${i}`, { text: 'a'.repeat(900) });
+  }
+  const woke = await startWaiter(t, e).done;
+  assert.equal(woke.code, 2);
+  const first = context(await hook(e, PARENT_SESSION, woke.stderr));
+  assert.match(first, /^This turn was started by the thread board/);
+  const n = first.split('\n').filter((l) => l.startsWith('The user answered')).length;
+  assert.ok(n > 5 && n < 20, `${n} answers fit`);
+  assert.match(first, new RegExp(`${20 - n} more answers are waiting; they come with your next message\\.`));
+  const waiting = pendingWake(e.projectDir, PARENT_SESSION, []);
+  assert.equal(waiting.answers.length, 20 - n);
+  // the waiter still sees the rest as pending, although they were already counted when it woke the session
+  const again = await startWaiter(t, e).done;
+  assert.equal(again.code, 2, 'the rest wake the session again');
+  const second = context(await hook(e, PARENT_SESSION, again.stderr));
+  assert.equal(second.split('\n').filter((l) => l.startsWith('The user answered')).length, 20 - n);
+  assert.doesNotMatch(second, /more answers? (is|are) waiting/);
+  const quiet = startWaiter(t, e);
+  assert.equal(await running(quiet, 600), true, 'all delivered: nothing to wake for');
+  quiet.child.kill('SIGKILL');
+  await quiet.done;
+});
+
+// ---------------------------------------------------------------- the claim and a turn that starts
+
+test('a turn that starts while the waiter\'s claim waits for the state lock means no wake, and nothing is marked', async (t) => {
+  const e = await world(t, { extra: {} });
+  await core.addWait(e.projectDir, { card: 'c1', kind: 'todo', text: 'Report me', sessionId: PARENT_SESSION });
+  const startedAt = Date.now();
+  const { token } = await claimWaiter(e.projectDir, PARENT_SESSION, startedAt);
+  await answer(e);
+  let claim;
+  await core.withLock(e.projectDir, async () => {
+    claim = claimWake(e.projectDir, PARENT_SESSION, token, startedAt);   // waits for the lock
+    await sleep(200);
+    await recordTurnStart(e.projectDir, PARENT_SESSION);   // what stopWaiter does when the prompt hook runs, here ahead of the claim
+  });
+  assert.equal(await claim, false, 'the turn started first');
+  assert.equal(pendingWake(e.projectDir, PARENT_SESSION).answers.length, 1, 'the answer is still pending: nothing was recorded as woken');
+  const file = JSON.parse(fs.readFileSync(path.join(core.projectPaths(e.projectDir).dir, waiterFiles(e)[0]), 'utf8'));
+  assert.deepEqual(file.fired, []);
+  assert.equal(file.wokeAt, undefined);
+});
+
+test('the claim wakes when the waiter still owns the session and something is pending, and not when nothing is left or another waiter took over', async (t) => {
+  const e = await world(t);
+  const startedAt = Date.now();
+  const { token } = await claimWaiter(e.projectDir, PARENT_SESSION, startedAt);
+  assert.equal(await claimWake(e.projectDir, PARENT_SESSION, token, startedAt), false, 'nothing pending');
+  await answer(e);
+  assert.equal(await claimWake(e.projectDir, PARENT_SESSION, 'someone-else', startedAt), false, 'not its token');
+  assert.equal(await claimWake(e.projectDir, PARENT_SESSION, token, startedAt), true);
+  assert.equal(pendingWake(e.projectDir, PARENT_SESSION, [`c1.w1@${itemOf(e, 'c1.w1').answeredAt}`]).answers.length, 0);
+  assert.equal(await claimWake(e.projectDir, PARENT_SESSION, token, startedAt), false, 'the answer has woken the session once already');
+  // the pending was re-read under the lock: an answer delivered after the waiter looked leaves nothing to wake for
+  await core.addWait(e.projectDir, { card: 'c1', kind: 'todo', text: 'Second', sessionId: PARENT_SESSION });
+  await core.answerWait(e.projectDir, 'c1', 'c1.w2', { done: true });
+  await core.deliverWaitAnswers(e.projectDir, PARENT_SESSION);
+  assert.equal(await claimWake(e.projectDir, PARENT_SESSION, token, startedAt), false);
+});
+
+test('stopWaiter takes the state lock, so it cannot interleave with a claim', async (t) => {
+  const e = await world(t);
+  let settled = false;
+  let stopping;
+  await core.withLock(e.projectDir, async () => {
+    stopping = stopWaiter(e.projectDir, PARENT_SESSION).then(() => { settled = true; });
+    await sleep(250);
+    assert.equal(settled, false, 'it waits for the lock');
+  });
+  await stopping;
+  assert.equal(settled, true);
+  assert.equal(waiterFiles(e).length, 1, 'and records the turn once it has it');
+});
+
 // ---------------------------------------------------------------- an older version
 
 const WAKE_WRITER = path.join(TEST_DIR, 'fixtures', 'old-wake-writer.mjs');
@@ -485,7 +709,7 @@ test('a waiter whose process started before a turn began, but claims after it, l
   const e = await world(t);
   await answer(e);   // a wake would be tempting
   // The Stop hook has started the process, which is slow to get to its claim (here: its input has not arrived yet) ...
-  const child = spawn(process.execPath, [WAITER], { env: { ...process.env, CLAUDE_PROJECT_DIR: e.projectDir, THREAD_DATA_DIR: e.dataDir, THREAD_WAKE_POLL_MS: '100' }, cwd: e.projectDir, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [WAITER], { env: { ...process.env, CLAUDE_PROJECT_DIR: e.projectDir, THREAD_DATA_DIR: e.dataDir, THREAD_WAKE_POLL_MS: '100', THREAD_WAKE_SETTLE_MS: '0' }, cwd: e.projectDir, stdio: ['pipe', 'pipe', 'pipe'] });
   t.after(() => child.kill('SIGKILL'));
   let stderr = '';
   child.stderr.on('data', (d) => (stderr += d));
@@ -546,7 +770,7 @@ function holdParent(t) {
 
 test('the waiter exits when its parent process is killed', async (t) => {
   const e = await world(t);
-  const env = { ...process.env, CLAUDE_PROJECT_DIR: e.projectDir, THREAD_DATA_DIR: e.dataDir, THREAD_WAKE_POLL_MS: '100' };
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: e.projectDir, THREAD_DATA_DIR: e.dataDir, THREAD_WAKE_POLL_MS: '100', THREAD_WAKE_SETTLE_MS: '0' };
   const parent = spawn(process.execPath, [parentFixture, 'spawn', WAITER], { env, stdio: ['pipe', 'pipe', 'ignore'] });
   t.after(() => parent.kill('SIGKILL'));
   let out = '';
@@ -563,7 +787,7 @@ test('the waiter exits when its parent process is killed', async (t) => {
 test('behind a shell wrapper (the parent stays alive), the waiter exits when Claude Code, named by CLAUDE_PID, is gone', async (t) => {
   const e = await world(t);
   const claude = holdParent(t);
-  const env = { ...process.env, CLAUDE_PROJECT_DIR: e.projectDir, THREAD_DATA_DIR: e.dataDir, THREAD_WAKE_POLL_MS: '100', CLAUDE_PID: String(claude.pid) };
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: e.projectDir, THREAD_DATA_DIR: e.dataDir, THREAD_WAKE_POLL_MS: '100', THREAD_WAKE_SETTLE_MS: '0', CLAUDE_PID: String(claude.pid) };
   const shell = spawn('/bin/sh', ['-c', `"${process.execPath}" "${WAITER}"; echo done > /dev/null`], { env, stdio: ['pipe', 'ignore', 'ignore'] });
   t.after(() => shell.kill('SIGKILL'));
   shell.stdin.end(JSON.stringify({ session_id: PARENT_SESSION, cwd: e.projectDir, hook_event_name: 'Stop' }));
