@@ -163,11 +163,11 @@ test('blockedBy names other cards of the project, never a milestone, and the vie
 
 test('a history entry takes a worker of one of four forms', async (t) => {
   const e = setupThreadEnv(t);
-  for (const w of ['main', 'agent:worker-high', 'agent:plugin:reviewer', 'thread:c12', 'lane:code-codex']) {
+  for (const w of ['main', 'agent:worker-high', 'agent:plugin:reviewer', 'thread:c12', 'thread:c8k2x1', 'lane:code-codex']) {
     const c = await core.addCard(e.projectDir, { title: w, worker: w });
     assert.equal(c.history[0].worker, w);
   }
-  for (const w of ['mainx', 'agent:', 'agent: x', 'thread:12', 'thread:c1x', 'lane:', 'someone', 'agent:' + 'a'.repeat(60), 42]) {
+  for (const w of ['mainx', 'agent:', 'agent: x', 'thread:12', 'thread:cxx', 'lane:', 'someone', 'agent:' + 'a'.repeat(60), 42]) {
     await rejects(core.addCard(e.projectDir, { title: 'x', worker: w }), /worker must be/, String(w));
   }
   assert.equal((await core.addCard(e.projectDir, { title: 'none', worker: '  ' })).history[0].worker, undefined, 'an empty worker is no worker');
@@ -999,7 +999,7 @@ for (const ref of RELEASED_REFS) test(`this version reads cards the plugin versi
 });
 
 // 0.12.0 brought the gate, so only the versions before it let Claude move such a card
-for (const ref of RELEASED_REFS.filter((r) => !['v0.12.1', 'v0.13.0'].includes(r))) test(`a card with criteria that the plugin version at ${ref} moves to done is shown as not verified`, async (t) => {
+for (const ref of RELEASED_REFS.filter((r) => !['v0.12.1', 'v0.13.0', 'v0.14.0'].includes(r))) test(`a card with criteria that the plugin version at ${ref} moves to done is shown as not verified`, async (t) => {
   const old = oldServerFrom(t, ref);
   if (!old) return;
   const e = setupThreadEnv(t);

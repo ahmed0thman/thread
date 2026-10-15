@@ -179,8 +179,9 @@ async function handleProject(req, res, projectDir, sub, query) {
   const stopm = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/runs\/([0-9]{1,6})\/stop$/.exec(sub) : null;
   const waitm = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/waits\/([A-Za-z0-9_.-]{1,80})$/.exec(sub) : null;
   const notifym = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/notify$/.exec(sub) : null;
+  const approvalm = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/approval$/.exec(sub) : null;
   const isBatch = method === 'POST' && sub === '/waits/answer-batch';
-  const known = isState || isAgents || isLanes || isCardCreate || !!rm || !!stopm || !!waitm || !!notifym || isBatch || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
+  const known = isState || isAgents || isLanes || isCardCreate || !!rm || !!stopm || !!waitm || !!notifym || !!approvalm || isBatch || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
   if (!known) {
     req.resume();
     send(res, 404, { error: 'not found' });
@@ -203,6 +204,8 @@ async function handleProject(req, res, projectDir, sub, query) {
       projectDir,
       exists: present,
       config: { mode: cfg.mode, stages: cfg.stages, roles: cfg.roles },
+      // card files of a repo-backed project that could not be read (a git conflict, invalid JSON): named on the page, never touched
+      notices: Array.isArray(state.notices) ? state.notices : [],
       cards: state.cards.map((c) => withViews(c, cfg, state.cards)),
       sessions: sessionsView(state),
     });
@@ -257,13 +260,13 @@ async function handleProject(req, res, projectDir, sub, query) {
   }
   if (cm && method === 'DELETE') {
     req.resume();
-    await core.removeCard(projectDir, cm[1], { source: 'user' });
-    send(res, 200, { ok: true });
+    const removed = await core.removeCard(projectDir, cm[1], { source: 'user' });
+    send(res, 200, removed === true ? { ok: true } : { ok: true, keptFile: true });
     return;
   }
 
   if (isActivity) {
-    const card = core.readState(projectDir).cards.find((c) => c.id === tm[1]);
+    const card = core.threadById(core.readState(projectDir).cards, tm[1]);
     if (!core.isThread(card)) throw new HttpError(404, `thread not found: ${tm[1]}`);
     const turn = Number(query.get('turn'));
     if (!Number.isInteger(turn) || turn < 1 || turn > card.thread.turns.length) throw new HttpError(404, `thread ${tm[1]} has no turn ${query.get('turn')}`);
@@ -274,7 +277,7 @@ async function handleProject(req, res, projectDir, sub, query) {
 
   if (rm) {
     // The page names a card and a run, never a path: the only file read is the transcript recorded on the run.
-    const card = core.readState(projectDir).cards.find((c) => c.id === rm[1]);
+    const card = core.cardById(core.readState(projectDir).cards, rm[1]);
     const n = Number(rm[2]);
     const run = card && Array.isArray(card.runs) ? card.runs.find((r) => r && r.n === n) : null;
     if (!run) throw new HttpError(404, `card ${rm[1]} has no run ${rm[2]}`);
@@ -291,11 +294,11 @@ async function handleProject(req, res, projectDir, sub, query) {
     // "Mark as stopped": writes only that run's own state fields
     requireJson(req);
     await readJsonBody(req);
-    const card = core.readState(projectDir).cards.find((c) => c.id === stopm[1]);
+    const card = core.cardById(core.readState(projectDir).cards, stopm[1]);
     const n = Number(stopm[2]);
     if (!card || !Array.isArray(card.runs) || !card.runs.some((r) => r && r.n === n)) throw new HttpError(404, `card ${stopm[1]} has no run ${stopm[2]}`);
     await markRunStopped(projectDir, card.id, n);
-    send(res, 200, viewOf(core.readState(projectDir).cards.find((c) => c.id === card.id)));
+    send(res, 200, viewOf(core.cardById(core.readState(projectDir).cards, card.id)));
     return;
   }
 
@@ -304,6 +307,19 @@ async function handleProject(req, res, projectDir, sub, query) {
     requireJson(req);
     const body = await readJsonBody(req);
     const { card } = await core.answerWait(projectDir, waitm[1], waitm[2], body);
+    send(res, 200, viewOf(card));
+    return;
+  }
+
+  if (approvalm) {
+    // "Confirm approval": this machine takes over an approval that only the repo file has (see waits.mjs confirmApproval). Writes only the local record.
+    // The body says which approval the page showed (the review item, when it was answered, the criteria's fingerprint: view.approvalOf); a card
+    // that changed since is refused with a 409.
+    requireJson(req);
+    const body = await readJsonBody(req);
+    const cfg = core.readConfig(projectDir);
+    if (cfg.mode === 'chat') throw new core.ChatOnlyError();
+    const { card } = await core.confirmApproval(projectDir, approvalm[1], core.finishedStageIds(cfg), body);
     send(res, 200, viewOf(card));
     return;
   }
@@ -350,7 +366,7 @@ async function handleProject(req, res, projectDir, sub, query) {
 
 function projectsView(homeDir) {
   const list = core.listProjects();
-  const homeKey = core.projectKey(homeDir);
+  const homeKey = core.storeKey(homeDir);
   if (!list.some((p) => p.key === homeKey)) {
     const parts = String(homeDir).split(/[\\/]+/).filter(Boolean);
     list.unshift({
@@ -384,6 +400,7 @@ const REMOTE_ROUTES = [
   ['PATCH', new RegExp(`^/cards/${RID}$`)],                                // an edit
   ['POST', new RegExp(`^/cards/${RID}/waits/[A-Za-z0-9_.-]{1,80}$`)],      // answer or close a waiting item
   ['POST', /^\/waits\/answer-batch$/],                                      // the drafted answers, sent together
+  ['POST', new RegExp(`^/cards/${RID}/approval$`)],                        // "Confirm approval": take over an approval given on another device
   ['POST', new RegExp(`^/cards/${RID}/notify$`)],                          // "Notify Claude" about a card it has not seen
   ['POST', new RegExp(`^/threads/${RID}/report-request$`)],                // ask for a report to the main session
   ['DELETE', new RegExp(`^/threads/${RID}/report-request$`)],              // take it back
@@ -526,7 +543,7 @@ function makeHandler(homeDir, token, stop, { remote = null, tunnel = null } = {}
       return;
     }
 
-    const homeKey = core.projectKey(homeDir);
+    const homeKey = core.storeKey(homeDir);
     const pm = /^\/api\/p\/([^/]*)(\/.*)?$/.exec(path);
     if (pm) {
       const key = pm[1];
@@ -548,7 +565,9 @@ function makeHandler(homeDir, token, stop, { remote = null, tunnel = null } = {}
         send(res, 404, { error: 'unknown project' });
         return;
       }
-      await handleProject(req, res, dir, sub, url.searchParams);
+      // An older per-path store of a repo-backed project (a worktree's, a sub-folder's) is shown as the store it is, not as the repo's board.
+      if (core.storeKey(dir) !== key) await core.runInStore(key, () => handleProject(req, res, dir, sub, url.searchParams));
+      else await handleProject(req, res, dir, sub, url.searchParams);
       return;
     }
 
@@ -570,6 +589,11 @@ function makeHandler(homeDir, token, stop, { remote = null, tunnel = null } = {}
 function withViews(card, cfg, cards) {
   if (!card) return card;
   const view = { ...card, status: core.effectiveStatus(card, cfg) };
+  delete view.localAnswers;   // the same kind of record (answers given here), and when the card last left the finished stages here
+  delete view.localLeftDoneAt;
+  delete view.localDoneAt;
+  delete view.localCriteria;   // how many criteria this machine's board last had; the page is told the result (criteriaCut)
+  delete view.approvals;   // this machine's own record of the approvals it was given; the page is told the result (verified, approvalElsewhere)
   // where the transcript of a sub-agent run lies stays on the server
   if (Array.isArray(view.runs)) view.runs = view.runs.filter((r) => r && typeof r === 'object').map(({ transcript, ...run }) => run);
   // an older plugin version can remove a milestone without clearing its cards
@@ -589,7 +613,18 @@ function withViews(card, cfg, cards) {
   if (core.notifyActive(card)) view.notified = true;
   // criteria in a finished stage without an approving review: the board can move a card there, and so could an older plugin version
   // (and 0.11.0 turned cards into threads without checking for criteria, so a thread can carry them too)
-  if (core.hasCriteria(card) && core.isFinished(card, cfg) && !core.reviewApproved(card, core.finishedStageIds(cfg))) view.verified = false;
+  if (core.gatedByCriteria(card) && core.isFinished(card, cfg) && !core.reviewApproved(card, core.finishedStageIds(cfg))) view.verified = false;
+  // the repo file has fewer criteria than this machine's board last had (a pull dropped or cut them): the gate still holds until the owner edits them here
+  if (core.criteriaCut(card)) view.criteriaCut = true;
+  // a project kept in the repo: the repo file says a review was approved, but this machine has no record of that (it came from another device)
+  const gap = core.gatedByCriteria(card) ? core.approvalGap(card, core.finishedStageIds(cfg)) : null;
+  if (gap === 'elsewhere') view.approvalElsewhere = true;
+  if (gap === 'criteria') view.approvalCriteriaChanged = true;
+  if (gap === 'changed') view.approvalReviewChanged = true;
+  // what Confirm approval confirms: the page sends it back, and the server refuses when the file has another review, answer time or criteria by then
+  if (gap) view.approvalOf = core.approvalTarget(card, core.finishedStageIds(cfg));
+  // a card that came with a pull and that Claude has not listed on this machine yet (it can be pointed out with Notify Claude)
+  if (card.newInRepo === true) view.newInRepo = true;
   return threadView(view);
 }
 

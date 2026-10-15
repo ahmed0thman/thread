@@ -88,7 +88,7 @@
   const draftEmpty = (d) => !d.text.trim() && !d.choices.length && !d.done && !d.verdict && !d.comment.trim();
   // A stored draft as the page uses it, or null when it is not one. The text is cut to what the server accepts.
   function cleanDraft(id, v) {
-    if (!/^c[0-9]+\.w[0-9]+$/.test(id) || !v || typeof v !== 'object') return null;
+    if (!/^c(?=[a-z]*[0-9])[0-9a-z]+\.w[0-9]+$/.test(id) || !v || typeof v !== 'object') return null;
     return {
       text: typeof v.text === 'string' ? v.text.slice(0, 4000) : '',
       choices: Array.isArray(v.choices) ? v.choices.filter((c) => typeof c === 'string').slice(0, 8) : [],
@@ -327,7 +327,8 @@
     const ans = h('span', 'wait-line-ans');
     if (w.state === 'withdrawn') ans.textContent = 'Withdrawn: Claude no longer needs it.';
     else {
-      ans.append((w.answeredVia === 'chat' ? 'Answered in the chat: ' : 'Your answer: ') + clip(waitAnswerText(w), 200));
+      // fromFile: the answer is in the repo file only (pulled from another device, or written there), not given on this board
+      ans.append((w.fromFile ? 'Answered on another device (from the repo file): ' : w.answeredVia === 'chat' ? 'Answered in the chat: ' : 'Your answer: ') + clip(waitAnswerText(w), 200));
       const d = waitDelivery(w);
       if (d.textContent) { ans.append(' · '); ans.appendChild(d); }
     }

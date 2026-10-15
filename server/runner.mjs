@@ -1,14 +1,17 @@
 // thread plugin: detached process that runs one thread turn.
-// usage: node runner.mjs <projectDir> <cardId>
+// usage: node runner.mjs <projectDir> <cardId> [store key]
 import { spawn } from 'node:child_process';
 import { appendFileSync, createWriteStream, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { UUID_RE, activityPath, buildClaudeArgs, buildPrompt, buildRelayArgs, clip, findThread, isThread, projectPaths, readStateLocked, setRunState, tail, updateState } from './core.mjs';
+import { UUID_RE, activityPath, buildClaudeArgs, buildPrompt, buildRelayArgs, clip, findThread, isThread, pinStore, projectPaths, readStateLocked, setRunState, tail, threadById, updateState } from './core.mjs';
 import { relayPath, resumeIdOf, unusableLane } from './lanes.mjs';
 import { MAX_EVENTS, MAX_TEXT, resultText, summarize } from './runs.mjs';
 import { PRIVATE_FILE, mkdirPrivateSync } from './state.mjs';
 
-const [projectDir, cardId] = process.argv.slice(2);
+const [projectDir, cardId, storeArg] = process.argv.slice(2);
+// The store the thread lives in (its record names it): the folder's board may have moved into the repo since, and this process still
+// writes to the store it was started for. An argument that is no store key (an older launcher gave none) pins nothing.
+if (storeArg) pinStore(storeArg);
 const bin = process.env.THREAD_CLAUDE_BIN || 'claude';
 const LANE_GRACE_MS = Number(process.env.THREAD_LANE_GRACE_MS) > 0 ? Number(process.env.THREAD_LANE_GRACE_MS) : 20000;   // the runner's own limit comes this long after the relay's --timeout
 const LANE_KILL_MS = 15000;    // a relay told to stop gets this long to stop its child and write its result
@@ -292,7 +295,7 @@ function endStream(s) {
 
 async function record(outcome) {
   const apply = (state) => {
-    const card = state.cards.find((c) => c.id === cardId);
+    const card = threadById(state.cards, cardId);
     if (!isThread(card)) return;
     const th = card.thread;
     const turn = th.turns[th.turns.length - 1];
@@ -361,7 +364,7 @@ process.on('unhandledRejection', (e) => { finish(e instanceof Error ? e : new Er
 
 async function main() {
   if (!projectDir || !cardId) {
-    process.stderr.write('usage: runner.mjs <projectDir> <cardId>\n');
+    process.stderr.write('usage: runner.mjs <projectDir> <cardId> [store key]\n');
     process.exit(2);
   }
   let card;

@@ -9,8 +9,9 @@ import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, re
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { PRIVATE_FILE, envValue, mkdirPrivateSync, now, projectPaths, readState, updateState } from './state.mjs';
+import { PRIVATE_FILE, envValue, legacyStoreOf, mkdirPrivateSync, now, projectPaths, readState, runInStore, storePinned, updateState } from './state.mjs';
 import { collapse, SESSION_ID_RE } from './sessions.mjs';
+import { CARD_ID_RE, CARD_ID_SRC, cardById, claudeCard } from './fields.mjs';
 import { readConfig } from './config.mjs';
 
 export const MAX_RUNS = 50;                   // runs kept on one card; the oldest go first
@@ -31,7 +32,7 @@ const MAX_RESPONSE_EVENTS = 500;
 const MAX_SNAPSHOT = 8 * 1024 * 1024;
 const SETTLE_MS = 500;                        // the last transcript line lands about 130 ms after SubagentStop
 const SUMMARY_KEYS = ['file_path', 'path', 'command', 'pattern', 'query', 'url', 'description', 'prompt'];
-const MARKER_RE = /^\s*\[c([0-9]{1,9})\]/;
+const MARKER_RE = new RegExp(`^\\s*\\[(${CARD_ID_SRC})\\]`);
 const AGENT_ID_RE = /^[0-9a-f]{6,64}$/i;
 const AGENT_FILE_RE = /^agent-([0-9a-f]{6,64})\.jsonl$/i;
 
@@ -251,7 +252,7 @@ export function readRunActivity(file, offset) {
 // ---------------------------------------------------------------- what is kept outside the state file
 
 export function snapshotPath(projectDirArg, cardId, n) {
-  if (!/^c[0-9]+$/.test(String(cardId)) || !Number.isInteger(n) || n < 1) throw new Error('invalid run');
+  if (!CARD_ID_RE.test(String(cardId)) || !Number.isInteger(n) || n < 1) throw new Error('invalid run');
   return join(projectPaths(projectDirArg).logs, `${cardId}.r${n}.activity.jsonl`);
 }
 
@@ -332,8 +333,9 @@ function agentTranscript(input) {
 
 const lower = (s) => String(s).toLowerCase();
 
-// The meta file of the agent, when its description starts with [cN], it is not a nested agent, the project is not chat-only
-// and N is a task or idea of this project: { transcript, meta, cardId }; else null. The meta file can land a moment after
+// The meta file of the agent, when its description starts with [cN] (or [c8k2x1]), it is not a nested agent, the project is not chat-only
+// and N is a task or idea of this project: { transcript, meta, cardId, store }; else null. `store` is the key of an older per-path store when
+// the card is only there (see olderStoreCard); the run is then kept in that store. The meta file can land a moment after
 // SubagentStart, so with retryMs a file that is not there yet is waited for, in short steps.
 async function trackedAgent(projectDirArg, input, retryMs) {
   const transcript = agentTranscript(input);
@@ -345,10 +347,33 @@ async function trackedAgent(projectDirArg, input, retryMs) {
   const marker = meta && typeof meta.description === 'string' ? MARKER_RE.exec(meta.description) : null;
   if (!marker) return null;
   if (Number(meta.spawnDepth) > 1) return null;
-  const cardId = `c${marker[1]}`;
   if (readConfig(projectDirArg).mode === 'chat') return null;
-  if (!isWorkCard(readState(projectDirArg).cards.find((c) => c.id === cardId))) return null;
+  const state = readState(projectDirArg);
+  let cardId = marker[1];
+  // a card that was copied into the repo under a new id is still found by the id it was given before (the marker was written then); the
+  // marker is Claude's word for the card, so it is resolved as Claude's other calls are (fields.claudeCard)
+  // an id that names two cards (fields.claudeCard throws) records nothing rather than guess
+  let named;
+  try { named = claudeCard(state, cardId); } catch { return null; }
+  if (isWorkCard(named)) cardId = named.id;
+  if (!isWorkCard(named)) {
+    const older = olderStoreCard(projectDirArg, cardId);
+    return older ? { transcript, meta, cardId, store: older.key } : null;
+  }
   return { transcript, meta, cardId };
+}
+
+// A session that works in a worktree or sub-folder which had a board store of its own before the project was kept in the repo may still name
+// cards by the ids that store gave, and a card that was not copied is only there. Its runs go to that store (the one its board shows), never to
+// the repo's cards. { key } when this folder's older store has that task or idea.
+function olderStoreCard(projectDirArg, cardId) {
+  if (storePinned()) return null;
+  try {
+    const store = legacyStoreOf(projectDirArg);
+    return store && store.state.cards.some((c) => isWorkCard(c) && c.id === cardId) ? { key: store.key } : null;
+  } catch {
+    return null;
+  }
 }
 
 // Add the run for this agent to the card, or reopen the one it has. Inside updateState. `dropped` collects the numbers of runs pushed out.
@@ -407,7 +432,8 @@ function givePrompt(projectDirArg, cardId, run, text) {
 // starts a background worker, so a project without a board costs nothing.
 export function canTrack(projectDirArg) {
   try {
-    return readConfig(projectDirArg).mode !== 'chat' && readState(projectDirArg).cards.some(isWorkCard);
+    if (readConfig(projectDirArg).mode === 'chat') return false;
+    return readState(projectDirArg).cards.some(isWorkCard) || (!storePinned() && !!legacyStoreOf(projectDirArg));
   } catch {
     return false;
   }
@@ -418,10 +444,13 @@ export function canTrack(projectDirArg) {
 // Claude Code writes the agent's meta file (its description) only after the SubagentStart hooks have returned, so the hook itself
 // cannot wait for it: it starts a worker that calls this with a long retryMs. `eventAt` (ms) is when the event happened.
 // The caller sets THREAD_LOCK_WAIT_MS so a busy lock never holds anything up for long.
-export async function startRun(projectDirArg, input, { retryMs = META_RETRY_MS, eventAt = 0 } = {}) {
-  const tracked = await trackedAgent(projectDirArg, input, retryMs);
+export async function startRun(projectDirArg, input, opts = {}) {
+  const tracked = await trackedAgent(projectDirArg, input, opts.retryMs ?? META_RETRY_MS);
   if (!tracked) return false;
-  const { transcript, meta, cardId } = tracked;
+  return tracked.store ? runInStore(tracked.store, () => recordStart(projectDirArg, input, tracked, opts)) : recordStart(projectDirArg, input, tracked, opts);
+}
+
+async function recordStart(projectDirArg, input, { transcript, meta, cardId }, { retryMs = META_RETRY_MS, eventAt = 0 }) {
   if (retryMs) {
     const until = Date.now() + TRANSCRIPT_WAIT_MS;
     while (!existsSync(transcript) && Date.now() < until) await sleep(META_STEP_MS);
@@ -430,7 +459,7 @@ export async function startRun(projectDirArg, input, { retryMs = META_RETRY_MS, 
   try { prompt = readRunActivity(transcript, 0).prompt; } catch { /* the file is not written yet */ }
   const dropped = [];
   const recorded = await updateState(projectDirArg, (state) => {
-    const card = state.cards.find((c) => c.id === cardId);
+    const card = cardById(state.cards, cardId);
     if (!isWorkCard(card)) return false;
     const run = openRun(card, input, { transcript, meta, dropped, eventAt });
     if (!run) return false;
@@ -455,13 +484,17 @@ export async function stopRun(projectDirArg, input, { settleMs = SETTLE_MS } = {
     return null;
   };
   const found = find(readState(projectDirArg));
-  let late = null;   // the meta of an agent whose start was not recorded
+  let late = null;   // the meta of an agent whose start was not recorded (or whose run is in an older store: see olderStoreCard)
   if (found) {
     if (readConfig(projectDirArg).mode === 'chat') return false;
   } else {
     late = await trackedAgent(projectDirArg, input, 0);
     if (!late) return false;
   }
+  return late && late.store ? runInStore(late.store, () => recordStop(projectDirArg, input, { found, late, id, find, settleMs })) : recordStop(projectDirArg, input, { found, late, id, find, settleMs });
+}
+
+async function recordStop(projectDirArg, input, { found, late, id, find, settleMs }) {
   await sleep(settleMs);
 
   const transcriptOf = found ? found.run.transcript : late.transcript;
@@ -475,7 +508,7 @@ export async function stopRun(projectDirArg, input, { settleMs = SETTLE_MS } = {
     let target = find(state);
     if (!target) {
       if (!late) return false;
-      const card = state.cards.find((c) => c.id === cardId);
+      const card = cardById(state.cards, cardId);
       if (!isWorkCard(card)) return false;
       target = { card, run: openRun(card, input, { transcript: late.transcript, meta: late.meta, dropped }) };
     }
@@ -505,7 +538,7 @@ export async function stopRun(projectDirArg, input, { settleMs = SETTLE_MS } = {
 // Only this run's state fields are written.
 export async function markRunStopped(projectDirArg, cardId, n) {
   return updateState(projectDirArg, (state) => {
-    const card = state.cards.find((c) => c.id === cardId);
+    const card = cardById(state.cards, cardId);
     if (!isWorkCard(card)) throw new Error(`card ${cardId} is not a task or idea`);
     const run = Array.isArray(card.runs) ? card.runs.find((r) => r && r.n === n) : null;
     if (!run) throw new Error(`card ${cardId} has no run ${n}`);

@@ -9,7 +9,7 @@
     const kids = countedKids(cards, m.id);
     const r = config.roles;
     const order = (c) => { const i = config.stages.findIndex((s) => s.id === c.status); return i < 0 ? config.stages.length : i; };
-    const num = (c) => parseInt(String(c.id).replace(/\D/g, ''), 10) || 0;
+    const num = (c) => { const m = /^c(\d+)$/.exec(String(c.id)); return m ? Number(m[1]) : Date.parse(c.createdAt) || 0; };   // as cardNum in the list model
     const out = { total: kids.length, todo: 0, working: 0, done: 0, open: [] };
     kids.forEach((c) => {
       if (finishedIn(c, config)) out.done++;

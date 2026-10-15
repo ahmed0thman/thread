@@ -232,7 +232,7 @@
   function notifyState(c) {
     if (c.kind !== 'task' && c.kind !== 'idea') return '';
     if (c.notified === true) return 'sent';
-    return c.seenByClaude === false ? 'ready' : '';
+    return c.seenByClaude === false || c.newInRepo === true ? 'ready' : '';
   }
   function cardThreadStartWhy(c) {
     return (c.criteria || []).length || (c.blockedBy || []).length ? 'A card with acceptance criteria or a Blocked by list cannot be started as a thread; clear them first.' : '';

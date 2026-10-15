@@ -770,6 +770,22 @@ test('an answered item collapses to a muted line with a tick, the answer and whe
   assert.equal(t.ctl.host.querySelector('h3').textContent, 'Waiting for you1', 'the count is of open ones');
 });
 
+test('an answer that only the repo file has is marked as such, as text, delivered or not', () => {
+  const t = openSection();
+  const base = { state: 'answered', answeredVia: 'board', answeredAt: '2026-10-14T03:05:00.000Z', answer: { text: '<img src=x onerror=alert(1)> drop it' } };
+  t.show(CARD([
+    wait('c1.w1', 'question', { ...base, fromFile: true, deliveredAt: '2026-10-14T03:06:00.000Z' }),
+    wait('c1.w2', 'question', { ...base, fromFile: true }),
+    wait('c1.w3', 'question', { ...base, answer: { text: 'given here' } }),
+  ]));
+  const line = (id) => row(t, id);
+  assert.match(line('c1.w1').textContent, /Answered on another device \(from the repo file\): <img src=x onerror=alert\(1\)> drop it · delivered/);
+  assert.match(line('c1.w2').textContent, /^c1\.w2 .*Answered on another device \(from the repo file\): .* · not yet delivered/);
+  assert.equal(line('c1.w1').querySelector('img'), null, 'the words are text, never markup');
+  assert.match(line('c1.w3').textContent, /Your answer: given here/);
+  assert.doesNotMatch(line('c1.w3').textContent, /another device/);
+});
+
 test('a session that is not known is still named in "not yet delivered"', () => {
   const t = openSection();
   t.show(CARD([wait('c1.w1', 'todo', { state: 'answered', answer: { done: true }, askedBy: '' })]));

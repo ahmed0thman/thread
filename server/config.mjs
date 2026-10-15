@@ -1,11 +1,14 @@
 // Board settings: chat-only or task mode, the stages and which stage the plugin itself uses, and whether the board may wake the session.
-// Two optional files with the same shape, <data dir>/config.json and <project data>/config.json.
-// Imports only state.mjs.
+// Two optional files with the same shape, <data dir>/config.json and <project data>/config.json. A repo-backed project (see repo.mjs) keeps
+// its mode, stages and roles in `.claude/thread/config.json` instead, and only the `wake` setting in its local file: whether the board may
+// wake a session is the machine's own choice, so a committed file can never turn it on.
+// Imports only state.mjs and repo.mjs.
 import { randomBytes } from 'node:crypto';
-import { rename, rm, unlink, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { PRIVATE_FILE, dataDir, mkdirPrivate, projectPaths } from './state.mjs';
+import { mkdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { PRIVATE_FILE, dataDir, mkdirPrivate, projectKey, projectPaths, repoConfigPath, repoRootOf } from './state.mjs';
+import { MAX_CONFIG_FILE, hasConflictMarkers, readPlainFile } from './repo.mjs';
 
 export const DEFAULT_STAGES = [
   { id: 'idea', label: 'Idea' },
@@ -108,8 +111,15 @@ function fillRoles(roles, stages, isDefault) {
 
 // ---------------------------------------------------------------- files
 
+// global: the config for every project. project: the file that holds the project's mode, stages and roles (the repo's for a repo-backed
+// project). local: the project's file in the data directory (its `wake`, and for an older project the rest too).
 export function configPaths(projectDirArg) {
-  return { global: join(dataDir(), 'config.json'), project: join(projectPaths(projectDirArg).dir, 'config.json') };
+  const local = join(projectPaths(projectDirArg).dir, 'config.json');
+  const root = repoRootOf(projectDirArg);
+  // `spelled`: the file the project had before it was repo-backed, when its folder was given another way then (a symlink): a repo-backed
+  // project is keyed by the real path of its main checkout
+  const spelled = join(dataDir(), 'projects', projectKey(resolve(String(projectDirArg))), 'config.json');
+  return { global: join(dataDir(), 'config.json'), project: root ? repoConfigPath(root) : local, local, spelled };
 }
 
 const logged = new Set();
@@ -121,14 +131,42 @@ function logOnce(path, message) {
 }
 
 // { exists, config, invalid } for one file. An unreadable or invalid file has config null and says why.
-function readFile(path) {
-  if (!existsSync(path)) return { exists: false, config: null, invalid: null };
+const lstatExists = (p) => { try { lstatSync(p); return true; } catch { return false; } };
+// `plain`: the file comes from a repo, so it is read only when it is a plain file of an ordinary size (not a link, a device, a pipe or a huge file).
+function readFile(path, { plain = false } = {}) {
+  if (!existsSync(path) && !(plain && lstatExists(path))) return { exists: false, config: null, invalid: null };
   try {
-    return { exists: true, config: validateConfig(JSON.parse(readFileSync(path, 'utf8'))), invalid: null };
+    let text;
+    if (plain) {
+      const r = readPlainFile(path, MAX_CONFIG_FILE);
+      if (r.problem) throw new Error(`the file ${r.problem}`);
+      text = r.text;
+    } else text = readFileSync(path, 'utf8');
+    if (hasConflictMarkers(text)) throw new Error('the file has git merge conflict markers: resolve the conflict and commit it');
+    return { exists: true, config: validateConfig(JSON.parse(text)), invalid: null };
   } catch (e) {
     logOnce(path, e.message);
     return { exists: true, config: null, invalid: String(e.message).split('\n')[0] };
   }
+}
+
+// The project layer. For a repo-backed project: mode, stages and roles from the repo's file, else from the local one (a project that was
+// set up before it moved into the repo keeps working); wake from the local file only.
+function projectFile(paths, backed) {
+  let local = readFile(paths.local);
+  if (!backed) return local;
+  if (!local.exists && paths.spelled !== paths.local) local = readFile(paths.spelled);
+  const repo = readFile(paths.project, { plain: true });
+  const rc = repo.config || {};
+  const lc = local.config || {};
+  const config = {};
+  const mode = rc.mode !== undefined ? rc.mode : lc.mode;
+  if (mode !== undefined) config.mode = mode;
+  const from = rc.stages !== undefined ? rc : lc;
+  if (from.stages !== undefined) config.stages = from.stages;
+  if (from.stages !== undefined && from.roles !== undefined) config.roles = from.roles;
+  if (lc.wake !== undefined) config.wake = lc.wake;
+  return { exists: repo.exists || local.exists, config: repo.config || local.config ? config : null, invalid: repo.invalid || local.invalid };
 }
 
 // The effective config of a project: defaults, then the global file, then the project file.
@@ -136,7 +174,7 @@ function readFile(path) {
 // are the fixed chat-only ones; the task board's own stay in `taskStages` and `taskRoles`.
 export function readConfig(projectDirArg) {
   const paths = configPaths(projectDirArg);
-  const files = { global: readFile(paths.global), project: readFile(paths.project) };
+  const files = { global: readFile(paths.global), project: projectFile(paths, repoRootOf(projectDirArg) !== null) };
   const layers = ['project', 'global'].filter((s) => files[s].config);
   const pick = (has) => layers.find((s) => has(files[s].config)) || 'default';
   const modeFrom = pick((c) => c.mode !== undefined);
@@ -164,10 +202,10 @@ export function readConfig(projectDirArg) {
   };
 }
 
-async function writeAtomic(path, text) {
+async function writeAtomic(path, text, mode = PRIVATE_FILE) {
   const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   try {
-    await writeFile(tmp, text, { encoding: 'utf8', mode: PRIVATE_FILE });
+    await writeFile(tmp, text, { encoding: 'utf8', ...(mode === undefined ? {} : { mode }) });
     await rename(tmp, path);
   } catch (e) {
     await unlink(tmp).catch(() => {});
@@ -175,32 +213,52 @@ async function writeAtomic(path, text) {
   }
 }
 
-// Merge `patch` into the scope's file. A field given as null is removed from it. Roles belong
+// Merge `patch` into one config file. A field given as null is removed from it. Roles belong
 // to the stages they were chosen for, so changing stages without giving roles drops the old ones.
-export async function saveConfig(projectDirArg, scope, patch) {
-  if (!CONFIG_SCOPES.includes(scope)) throw new Error(`scope must be one of: ${CONFIG_SCOPES.join(', ')}`);
-  if (!isObject(patch)) throw new Error('config changes must be an object');
-  const path = configPaths(projectDirArg)[scope];
-  const file = readFile(path);
+// A repo file is written with the normal file modes (it is committed), the others owner-only.
+async function mergeIntoFile(path, label, patch, keys, { repo = false } = {}) {
+  const file = readFile(path, { plain: repo });
   // Saving would silently replace what the user wrote there.
-  if (file.invalid) throw new Error(`the ${scope} config file is not valid (${file.invalid}); correct it by hand or reset it first`);
+  if (file.invalid) throw new Error(`the ${label} config file is not valid (${file.invalid}); correct it by hand or reset it first`);
   const current = file.config || {};
   const merged = { ...current };
-  for (const key of ['mode', 'wake', 'stages', 'roles']) {
+  for (const key of keys) {
     if (patch[key] === null) delete merged[key];
     else if (patch[key] !== undefined) merged[key] = patch[key];
   }
   if (patch.stages !== undefined && patch.roles === undefined) delete merged.roles;
   else if (patch.stages === undefined && isObject(patch.roles) && current.roles) merged.roles = { ...current.roles, ...patch.roles };
   const valid = validateConfig(merged);
-  await mkdirPrivate(join(path, '..'));
-  await writeAtomic(path, JSON.stringify(valid, null, 2) + '\n');
+  if (repo) await mkdir(join(path, '..'), { recursive: true });
+  else await mkdirPrivate(join(path, '..'));
+  await writeAtomic(path, JSON.stringify(valid, null, 2) + '\n', repo ? undefined : PRIVATE_FILE);
+}
+
+export async function saveConfig(projectDirArg, scope, patch) {
+  if (!CONFIG_SCOPES.includes(scope)) throw new Error(`scope must be one of: ${CONFIG_SCOPES.join(', ')}`);
+  if (!isObject(patch)) throw new Error('config changes must be an object');
+  const paths = configPaths(projectDirArg);
+  if (scope === 'project' && repoRootOf(projectDirArg)) {
+    // mode, stages and roles are the project's and go in the repo; wake is this machine's. A removal is made in both files, so the older
+    // local value does not show through again.
+    const shared = ['mode', 'stages', 'roles'];
+    if (shared.some((k) => patch[k] !== undefined)) await mergeIntoFile(paths.project, 'project', patch, shared, { repo: true });
+    const removing = shared.some((k) => patch[k] === null) && existsSync(paths.local);
+    if (patch.wake !== undefined || removing) {
+      const localPatch = { wake: patch.wake, ...Object.fromEntries(shared.filter((k) => patch[k] === null).map((k) => [k, null])) };
+      await mergeIntoFile(paths.local, 'project', localPatch, ['wake', ...shared]);
+    }
+  } else {
+    await mergeIntoFile(paths[scope], scope, patch, ['mode', 'wake', 'stages', 'roles']);
+  }
   return readConfig(projectDirArg);
 }
 
 // Delete the scope's file.
 export async function resetConfig(projectDirArg, scope) {
   if (!CONFIG_SCOPES.includes(scope)) throw new Error(`scope must be one of: ${CONFIG_SCOPES.join(', ')}`);
-  await rm(configPaths(projectDirArg)[scope], { force: true });
+  const paths = configPaths(projectDirArg);
+  await rm(paths[scope], { force: true });
+  if (scope === 'project') await rm(paths.local, { force: true });   // a repo-backed project has the repo's file and its local one
   return readConfig(projectDirArg);
 }

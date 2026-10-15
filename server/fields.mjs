@@ -1,7 +1,8 @@
 // The optional project-management fields of a task or idea card (type, priority, labels, blockedBy, criteria), who did
 // the work on a card (the `worker` of a history entry), and whether a card's acceptance criteria have been approved.
 // Pure checks (and the history writer): nothing here reads or writes the state file. A field is stored only when it differs
-// from its default, and an older plugin version ignores all of them and keeps them. Imports nothing.
+// from its default, and an older plugin version ignores all of them and keeps them. Imports only node:crypto.
+import { createHash } from 'node:crypto';
 
 export const TYPES = ['task', 'bug'];
 export const PRIORITIES = ['high', 'normal', 'low'];
@@ -13,10 +14,68 @@ export const MAX_CRITERION = 200;
 export const MAX_WORKER = 64;
 export const FIELD_NAMES = ['type', 'priority', 'labels', 'blockedBy', 'criteria'];
 
-const CARD_ID_RE = /^c[0-9]+$/;
-const WORKER_RE = /^(?:main|agent:[A-Za-z0-9][A-Za-z0-9:_.-]*|thread:c[0-9]+|lane:[A-Za-z0-9][A-Za-z0-9._-]*)$/;
+// A card id: `c` and lowercase letters and digits, with at least one digit. Cards of a project that keeps its board on the machine are
+// c1, c2, ... (the digit is the count); cards of a repo-backed project get a random one such as c8k2x1 (see repo.mjs), so two
+// devices never hand out the same id. The digit keeps an id apart from the words of the board's addresses and of the log files.
+export const CARD_ID_SRC = 'c(?=[a-z]*[0-9])[0-9a-z]+';
+export const CARD_ID_RE = new RegExp(`^${CARD_ID_SRC}$`);
+const WORKER_RE = new RegExp(`^(?:main|agent:[A-Za-z0-9][A-Za-z0-9:_.-]*|thread:${CARD_ID_SRC}|lane:[A-Za-z0-9][A-Za-z0-9._-]*)$`);
 
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+const sha16 = (text) => createHash('sha1').update(text).digest('hex').slice(0, 16);
+// JSON with the keys of every object in order, so the same value is always the same text.
+const canonical = (v) => (Array.isArray(v) ? `[${v.map(canonical).join(',')}]` : isObject(v) ? `{${Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}` : JSON.stringify(v) ?? 'null');
+
+/** A short fingerprint of a waiting item's answer (the answer and the comment): a repo-backed project records it for an answer given on this machine's board. */
+export const answerHash = (item) => sha16(canonical({ answer: item && item.answer, comment: item && item.comment }));
+
+/** A short fingerprint of a waiting item as it was asked (when and what): the record of who asked it is for that question, not for a later one with the same id. */
+export const askFingerprint = (item) => sha16(`${item && item.askedAt}\n${item && item.text}`);
+
+/** A short fingerprint of a card's acceptance criteria: an approval recorded on this machine is for the criteria it was given for. */
+export const criteriaHash = (card) => sha16(JSON.stringify(Array.isArray(card && card.criteria) ? card.criteria : []));
+
+/**
+ * The card with this id. Two cards can have one id in a repo-backed project (a repo card and an unrelated thread on this machine, see
+ * repo.mjs mergeState): this takes the card that is not a thread, else the thread. `threadById` takes the thread.
+ */
+export function cardById(cards, id) {
+  let found;
+  for (const c of cards) if (c && c.id === id) { if (c.kind !== 'thread') return c; found = found ?? c; }
+  return found;
+}
+export const threadById = (cards, id) => cards.find((c) => c && c.id === id && c.kind === 'thread' && c.thread);
+/**
+ * The card a call from Claude means by `id` (board_update, board_remove, wait_add, wait_close, wait_list, a parent or blocker, a [cN] run
+ * marker). A card that was copied into the repo under a new id is also named by the id it had before (`state.aliases`, old id -> id now).
+ * When the id is such an old id, a thread on this machine with that id wins (an older plugin version turned its own copy of the card into a
+ * thread in place, so that id is the thread now), unless the thread stands for a card file of that id (`fromRepo`). When the old id is also
+ * the id of a card file that was pushed under it (or of a thread that stands for one) while the card it was copied to is still there, the id
+ * names two cards and it throws (oldIdClash): it never guesses, and the card file stays reachable from the board only. With no alias the id
+ * names the card that has it (cardById). The board's own routes do not use this: they take the card that has the id the board shows.
+ */
+export function claudeCard(state, id) {
+  if (!(state.aliases && state.aliases.has(id))) return cardById(state.cards, id);
+  const thread = threadById(state.cards, id);
+  if (thread && !thread.fromRepo) return thread;
+  const target = cardById(state.cards, state.aliases.get(id));
+  const other = state.cards.find((c) => c && c.id === id && c !== target);
+  if (target && other) {
+    throw new Error(`${id} names two cards: the card that was copied to ${target.id} and a card file ${id}.json that is in the repo now. Use ${target.id} for the copied card; the card file ${id}.json can only be changed on the board.`);
+  }
+  return target ?? thread;
+}
+
+/**
+ * The id a card was copied to when this card has the old id of that copy (a card file pushed under it, or a thread that stands for one) and
+ * the copy is still there: the two share the id as far as Claude's calls go (claudeCard refuses it). undefined for any other card.
+ */
+export function oldIdClash(state, card) {
+  if (!card || !state.aliases || !state.aliases.has(card.id) || (card.kind === 'thread' && !card.fromRepo)) return undefined;
+  const target = cardById(state.cards, state.aliases.get(card.id));
+  return target && target !== card ? target.id : undefined;
+}
 // "no value": the field is removed
 const isEmpty = (v) => v === null || (typeof v === 'string' && !v.trim()) || (Array.isArray(v) && v.length === 0);
 
@@ -57,7 +116,7 @@ export function cleanBlockedBy(v) {
   const out = [];
   for (const x of cleanList(v, 'blocked_by', MAX_BLOCKERS)) {
     const t = typeof x === 'string' ? x.trim() : '';
-    if (!CARD_ID_RE.test(t)) throw new Error(`blocked_by takes card ids like "c4", not "${String(x).slice(0, 40)}"`);
+    if (!CARD_ID_RE.test(t)) throw new Error(`blocked_by takes card ids like "c4" or "c8k2x1", not "${String(x).slice(0, 40)}"`);
     if (out.includes(t)) throw new Error(`${t} is given twice in blocked_by`);
     out.push(t);
   }
@@ -139,6 +198,14 @@ export function finishedStageIds(cfg) {
   return at < 0 ? [] : stages.slice(at).map((s) => s.id);
 }
 
+// A time read from a repo file is believed only up to now (plus a little for clocks that differ): a file can say what it likes, and a date
+// far ahead would otherwise sit above every later exit and review. NaN for what is not a time, or is later than now + 5 minutes.
+export const FUTURE_SLACK_MS = 5 * 60 * 1000;
+export function fileTime(iso) {
+  const t = typeof iso === 'string' ? Date.parse(iso) : NaN;
+  return Number.isFinite(t) && t <= Date.now() + FUTURE_SLACK_MS ? t : NaN;
+}
+
 /**
  * When the card last left the finished range (a finished stage to an unfinished one), in ms: the later of the card's own
  * `leftDoneAt` (written whenever a card moves out of the range, so the capped history cannot lose it) and the latest `moved`
@@ -147,24 +214,94 @@ export function finishedStageIds(cfg) {
  * (Done to Released) is no exit. An older version wrote `leftDoneAt` for any move out of the done stage, Done to Released
  * included; that is read as it stands, so such a card needs a new approval: stricter, never looser.
  * -Infinity when there is neither (never reopened), so every review counts.
+ * A card of a project kept in the repo (`card.approvals` is an object) is read with fileTime: a time in the file that is later than now
+ * (+ 5 minutes) is no exit at all, so a pushed date far ahead cannot lock the card.
  */
 export function leftDoneAt(card, finished) {
   let at = -Infinity;
   const range = Array.isArray(finished) ? finished : typeof finished === 'string' ? [finished] : null;
   if (!card || !range || !range.length) return at;
-  const stored = typeof card.leftDoneAt === 'string' ? Date.parse(card.leftDoneAt) : NaN;
+  const repo = isObject(card.approvals);
+  const time = (v) => (repo ? fileTime(v) : typeof v === 'string' ? Date.parse(v) : NaN);
+  const stored = time(card.leftDoneAt);
   if (Number.isFinite(stored)) at = stored;
+  // a card of a project kept in the repo also has this machine's own record (`localLeftDoneAt`, in the overlay): a pushed file that drops
+  // `leftDoneAt` and the moves from its history cannot make an old approval count again
+  const local = typeof card.localLeftDoneAt === 'string' ? Date.parse(card.localLeftDoneAt) : NaN;
+  if (Number.isFinite(local) && local > at) at = local;
   if (!Array.isArray(card.history)) return at;
   for (const h of card.history) {
     if (!isObject(h) || h.type !== 'moved' || !range.includes(h.from) || range.includes(h.to)) continue;
-    const t = Date.parse(h.at);
+    const t = time(h.at);
     if (Number.isFinite(t) && t > at) at = t;
   }
   return at;
 }
 
+/**
+ * True while this machine has seen a repo card in the finished stages (`localDoneAt`) and has not seen it leave them since
+ * (`localLeftDoneAt`, which a write sets when it notices an exit). A card that is unfinished while this is true was reopened by a pull
+ * whose file may have dropped every trace of it.
+ */
+export function doneSpellOpen(card) {
+  const done = typeof card.localDoneAt === 'string' ? Date.parse(card.localDoneAt) : NaN;
+  const left = typeof card.localLeftDoneAt === 'string' ? Date.parse(card.localLeftDoneAt) : NaN;
+  return Number.isFinite(done) && !(Number.isFinite(left) && done <= left);
+}
+
+/**
+ * This machine's own watch on a repo card's finished stages, run inside a write (`at` is the time of the write, an ISO string): the
+ * card in a finished stage starts a spell (`localDoneAt`); the card out of them while a spell is open has left them unseen (a pull
+ * reopened it), so the exit is pinned at `at` (`localLeftDoneAt`) and the approvals given before are over. True when it pinned an exit.
+ * Does nothing to a card that is not a repo task or idea (no `approvals` object).
+ */
+export function watchFinished(card, cfg, at) {
+  if (!card || card.kind === 'thread' || card.kind === 'milestone' || !isObject(card.approvals)) return false;
+  const finished = finishedStageIds(cfg);
+  if (!finished.length) return false;
+  const stages = Array.isArray(cfg.taskStages) ? cfg.taskStages : [];
+  const status = stages.some((s) => s && s.id === card.status) ? card.status : cfg.taskRoles.start;
+  const now = Date.parse(at);
+  const open = doneSpellOpen(card);
+  if (finished.includes(status)) {
+    if (!open) {
+      const left = typeof card.localLeftDoneAt === 'string' ? Date.parse(card.localLeftDoneAt) : NaN;
+      card.localDoneAt = new Date(Number.isFinite(left) && left >= now ? left + 1 : now).toISOString();
+    }
+    return false;
+  }
+  if (!open) return false;
+  card.localLeftDoneAt = new Date(Math.max(now, Date.parse(card.localDoneAt))).toISOString();
+  for (const k of Object.keys(card.approvals)) delete card.approvals[k];
+  return true;
+}
+
+/**
+ * The watch (watchFinished) and then this machine's own pin of the card's latest exit from the finished stages (`localLeftDoneAt`), run inside
+ * a write at `at` (an ISO string), for a card of a project kept in the repo: the exit as the card now shows it, with a time that the file has
+ * up to 5 minutes ahead of this clock (fileTime) pinned as `at` (this machine's clock says when it saw the exit). A file that is replaced
+ * later cannot drop the exit then. Does nothing to a card that is not a repo task or idea.
+ */
+export function pinLeftDone(card, cfg, at) {
+  if (!card || card.kind === 'thread' || card.kind === 'milestone' || !isObject(card.approvals)) return;
+  watchFinished(card, cfg, at);
+  const exit = Math.min(leftDoneAt(card, finishedStageIds(cfg)), Date.parse(at));
+  if (!Number.isFinite(exit)) return;
+  if (typeof card.localLeftDoneAt !== 'string' || Date.parse(card.localLeftDoneAt) < exit) card.localLeftDoneAt = new Date(exit).toISOString();
+}
+
 /** True when the card has acceptance criteria. */
 export const hasCriteria = (card) => !!card && Array.isArray(card.criteria) && card.criteria.length > 0;
+
+/**
+ * True when the criteria of a card of a project kept in the repo are fewer than this machine's own record of them (`localCriteria`, in the
+ * overlay: how many there were the last time the owner's board had them): a pushed file dropped or cut them. The gate still counts the
+ * card as having criteria until the owner changes them on this board, which updates the record.
+ */
+export const criteriaCut = (card) => !!card && isObject(card.approvals) && isObject(card.localCriteria) && card.localCriteria.n > (hasCriteria(card) ? card.criteria.length : 0);
+
+/** True when the card is held to the done gate: it has acceptance criteria, or this machine's record says it had more (criteriaCut). */
+export const gatedByCriteria = (card) => hasCriteria(card) || criteriaCut(card);
 
 /** The ids of the cards a card is blocked by that still exist, finished or not. `cards` are the project's cards. */
 export function liveBlockers(card, cards) {

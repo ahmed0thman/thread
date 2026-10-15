@@ -29,7 +29,7 @@
   const elApp = $('app'), elBoard = $('board'), elSearch = $('search'), elThreadsOnly = $('threads-only');
   const elNote = $('filter-note'), elNewBtn = $('new-btn'), elOverlay = $('overlay');
   const elBanner = $('banner'), elBannerText = $('banner-text');
-  const elNotice = $('notice'), elSwitcher = $('switcher'), elProjSelect = $('proj-select'), elViews = $('views');
+  const elNotice = $('notice'), elFilesNotice = $('files-notice'), elSwitcher = $('switcher'), elProjSelect = $('proj-select'), elViews = $('views');
   const elToolbar = $('toolbar'), elSearchWrap = $('search-wrap'), elFilters = $('filters'), elChips = $('chips'), elPane = $('pane');
   const elSession = $('session-filter'), elSessionWrap = $('session-wrap');
   const elMilestone = $('milestone-filter'), elMilestoneWrap = $('milestone-wrap'), elModeNote = $('mode-note'), elOldNote = $('old-note');

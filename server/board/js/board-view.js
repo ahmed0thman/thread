@@ -281,7 +281,12 @@
     let ok = false;
     const pk = selKey;
     await runAction('delete:' + pk + ':' + id, async () => {
-      try { await api('DELETE', pp(pk, 'cards/' + encodeURIComponent(id)), {}); ok = true; wrote(); }
+      try {
+        const r = await api('DELETE', pp(pk, 'cards/' + encodeURIComponent(id)), {});
+        ok = true; wrote();
+        // a thread that was a repo card: the card's file changed since the thread was started, so it was kept and the card is back on the board
+        if (r && r.keptFile === true) showError('The thread was removed, but its card file in the repo changed since the thread was started, so the file was kept: the card is on the board again.');
+      }
       catch (e) { showError(e.message); }
     });
     if (after) after(ok, pk === selKey);

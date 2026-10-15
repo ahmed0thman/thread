@@ -124,7 +124,7 @@
   const RUN_EVENT_CAP = 2000;   // the newest events a run's view keeps, as the server's snapshot does
   const RUN_QUIET_MS = 10 * 60 * 1000;   // a running run with no new activity for this long may have stopped
   // The title of a run: the Agent call's description without its [cN] marker.
-  function runTitle(run) { return String(run.description || '').replace(/^\s*\[c\d+\]\s*/, '').trim() || String(run.agentType || '') || 'Sub-agent'; }
+  function runTitle(run) { return String(run.description || '').replace(/^\s*\[c(?=[a-z]*[0-9])[0-9a-z]+\]\s*/, '').trim() || String(run.agentType || '') || 'Sub-agent'; }
   // A run's state as a thread's pill names it.
   function runPillState(run) { return run.state === 'running' ? 'running' : run.state === 'stopped' ? 'ended' : 'idle'; }
   // The note under a running run that has been quiet for a long time, else ''.

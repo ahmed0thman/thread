@@ -68,7 +68,7 @@ async function main() {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
   if (!projectDir) return 0;
 
-  const { projectPaths } = await import(new URL('../server/state.mjs', import.meta.url).href);
+  const { projectPaths, repoRootOf, cardsFolder } = await import(new URL('../server/state.mjs', import.meta.url).href);
   const { readConfig } = await import(new URL('../server/config.mjs', import.meta.url).href);
   if (!wake.wakeEnabled(projectDir)) return 0;
   if (readConfig(projectDir).mode === 'chat' && !wake.hasThreads(projectDir)) return 0;
@@ -82,6 +82,7 @@ async function main() {
   const parent = process.ppid;
   const claudePid = Number(process.env.CLAUDE_PID);   // Claude Code's own process: the parent may be a shell wrapper that outlives it
   const stateFile = projectPaths(projectDir).state;
+  const repoRoot = repoRootOf(projectDir);   // a repo-backed project's cards are files in its repo folder: the answers are written there
   let seen = null;   // the files' fingerprint at the last look: unchanged files are not parsed again
 
   return new Promise((resolve) => {
@@ -90,6 +91,7 @@ async function main() {
     let again = false;
     let debounce = null;
     let watcher = null;
+    let cardsWatcher = null;
     let poll = null;
     let settle = null;      // the timer that looks again once the settle time since the first trigger is over
     let triggeredAt = null; // when a trigger was first seen (performance.now(): a clock that cannot step back, as the wall clock can), null while there is none
@@ -100,6 +102,7 @@ async function main() {
       clearInterval(poll);
       clearTimeout(settle);
       try { if (watcher) watcher.close(); } catch { /* ignore */ }
+      try { if (cardsWatcher) cardsWatcher.close(); } catch { /* ignore */ }
       resolve(code);
     };
     const gone = (pid) => {
@@ -153,6 +156,12 @@ async function main() {
       watcher = watch(dirname(stateFile), (_event, name) => { if (!name || name === 'state.json') soon(); });
       watcher.on('error', () => {});
     } catch { /* the poll alone then */ }
+    if (repoRoot) {
+      try {
+        cardsWatcher = watch(cardsFolder(repoRoot), () => soon());
+        cardsWatcher.on('error', () => {});
+      } catch { /* the poll alone then */ }
+    }
     poll = setInterval(check, pollMs);
     check();
   });

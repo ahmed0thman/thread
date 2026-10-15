@@ -171,7 +171,46 @@
   // The bar above the columns for a project whose folder is gone.
   let noticeSig = '';
   let forgetAsk = '';          // project key whose forget confirm step is showing
+  // Card files of a repo-backed project that could not be read (a git merge conflict, invalid JSON): named, so they can be fixed in the repo.
+  // The server never touches such a file. A notice marked `shown` is a card that is shown but shares its id with a thread on this machine.
+  // Text only.
+  let filesNoticeSig = '';
+  function renderFilesNotice() {
+    const all = selKey && current && Array.isArray(current.notices) ? current.notices.filter((n) => n && typeof n.file === 'string') : [];
+    const list = all.filter((n) => !n.shown);
+    const kept = all.filter((n) => n.shown);
+    const sig = selKey + '|' + JSON.stringify(all);
+    if (sig === filesNoticeSig) return;
+    filesNoticeSig = sig;
+    elFilesNotice.replaceChildren();
+    elFilesNotice.hidden = !all.length;
+    if (!all.length) return;
+    const grow = h('span', 'grow');
+    if (list.length) {
+      grow.append(list.length === 1 ? 'A card file in the repo is not shown, and is left as it is: ' : list.length + ' card files in the repo are not shown, and are left as they are: ');
+      list.slice(0, 8).forEach((n, i) => {
+        if (i) grow.append('; ');
+        grow.appendChild(h('code', null, n.file));
+        grow.append(' ' + String(n.reason || 'could not be read'));
+      });
+      if (list.length > 8) grow.append('; and ' + (list.length - 8) + ' more');
+      grow.append('. Fix them in the repo (resolve the git conflict, or correct the JSON).');
+    }
+    if (kept.length) {
+      if (list.length) grow.append(' ');
+      grow.append(kept.length === 1 ? 'A card shares its id with a thread on this machine: ' : kept.length + ' cards share their id with a thread on this machine: ');
+      kept.slice(0, 8).forEach((n, i) => {
+        if (i) grow.append('; ');
+        grow.appendChild(h('code', null, n.file));
+      });
+      if (kept.length > 8) grow.append('; and ' + (kept.length - 8) + ' more');
+      grow.append('. Both are shown.');
+    }
+    elFilesNotice.appendChild(grow);
+  }
+
   function renderNotice() {
+    renderFilesNotice();
     const ro = !!selKey && isRO();
     if (!ro) { noticeSig = ''; forgetAsk = ''; elNotice.hidden = true; elNotice.replaceChildren(); return; }
     const p = projectByKey(selKey);

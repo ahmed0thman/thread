@@ -1,14 +1,14 @@
 // Waking an idle session from the board: what the waiter (scripts/waiter.mjs) looks for in the state file, and the
 // one-waiter-per-session file. The waiter never carries the content itself: it only wakes the session, and the
 // UserPromptSubmit hook of the woken turn delivers the answers, report requests and notify requests through its usual path.
-// An older plugin version ignores everything here: `reportPushedFor` and `reportPushedAt` on a thread, `notifyPushedFor` on a card (the
+// What wakes a session is read from the joined state, so an answer written to a repo card file counts too. An older plugin version ignores everything here: `reportPushedFor` and `reportPushedAt` on a thread, `notifyPushedFor` on a card (the
 // request id it was for, see notify.mjs),
 // and the waiter files, which are not in the state file.
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { PRIVATE_FILE, mkdirPrivate, now, projectPaths, readState, updateState, withLock } from './state.mjs';
+import { PRIVATE_FILE, mkdirPrivate, now, projectPaths, readState, repoSignature, updateState, withLock } from './state.mjs';
 import { sameSession } from './sessions.mjs';
 import { configPaths, readConfig } from './config.mjs';
 import { waitsOf } from './waits.mjs';
@@ -52,6 +52,10 @@ function notifyWaiting(card, sessionId) {
   return notifyActive(card) && sameSession(card.notifySession, sessionId) && !notifyPushed(card);
 }
 
+// An answer that wakes a session, or is left over for one: given on this machine's board (or closed here), for an item that session asked, not
+// delivered yet. An answer that only the repo file has (`fromFile`, see repo.mjs) wakes nothing: it comes with the next prompt, as information.
+const isWakeAnswer = (item, sessionId) => item.state === 'answered' && !item.deliveredAt && !item.fromFile && sameSession(item.askedBy, sessionId);
+
 /** The key that tells one answer from another, so a wake is never made twice for it. */
 const answerKey = (item) => `${item.id}@${item.answeredAt || ''}`;
 
@@ -71,7 +75,7 @@ function pendingIn(state, tasks, sessionId, skip) {
   for (const card of state.cards) {
     if (tasks) {
       for (const item of waitsOf(card)) {
-        if (item.state === 'answered' && !item.deliveredAt && sameSession(item.askedBy, sessionId) && !skip.includes(answerKey(item))) answers.push(answerKey(item));
+        if (isWakeAnswer(item, sessionId) && !skip.includes(answerKey(item))) answers.push(answerKey(item));
       }
       if (notifyWaiting(card, sessionId)) notifies.push(card.id);
     }
@@ -85,7 +89,7 @@ export function undeliveredAnswerKeys(projectDirArg, sessionId) {
   if (readConfig(projectDirArg).mode === 'chat') return [];
   const keys = [];
   for (const card of readState(projectDirArg).cards) {
-    for (const item of waitsOf(card)) if (item.state === 'answered' && !item.deliveredAt && sameSession(item.askedBy, sessionId)) keys.push(answerKey(item));
+    for (const item of waitsOf(card)) if (isWakeAnswer(item, sessionId)) keys.push(answerKey(item));
   }
   return keys;
 }
@@ -160,17 +164,21 @@ export async function claimWake(projectDirArg, sessionId, token, startedAtMs = n
   });
 }
 
-/** A cheap fingerprint of the files `pendingWake` reads, so a poll that finds them unchanged need not parse them. */
+/**
+ * A cheap fingerprint of the files `pendingWake` reads, so a poll that finds them unchanged need not parse them. A repo-backed project's cards are
+ * files in its repo folder (an answer is written there): the card files and the folder are part of it.
+ */
 export function filesSignature(projectDirArg) {
-  const paths = [projectPaths(projectDirArg).state, configPaths(projectDirArg).global, configPaths(projectDirArg).project];
-  return paths.map((p) => {
+  const cp = configPaths(projectDirArg);
+  const paths = [projectPaths(projectDirArg).state, cp.global, cp.project, cp.local];
+  return [...paths.map((p) => {
     try {
       const st = statSync(p);
       return `${st.mtimeMs}:${st.size}:${st.ino}`;
     } catch {
       return '-';
     }
-  }).join('|');
+  }), repoSignature(projectDirArg)].join('|');
 }
 
 // ---------------------------------------------------------------- one waiter per session

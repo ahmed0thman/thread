@@ -52,6 +52,38 @@ function waitNote(core, projectDir, sessionId) {
   }
 }
 
+// A repo-backed project (its board is the folder .claude/thread/ in the repo): tells the session once that its cards are committed files, and
+// names what needs the user: card files that cannot be read (a git conflict), cards an older plugin version left in this machine's old store,
+// and a folder that has gone missing. Says nothing for a project that keeps its board on the machine. Never fails the note.
+async function repoNote(core, projectDir) {
+  try {
+    if (!core || !projectDir) return '';
+    try { await core.startRepo(projectDir); } catch { /* the note is made from what is there */ }
+    const info = core.repoInfo(projectDir);
+    if (!info.backed) {
+      if (info.refused) return `The folder .claude/thread/ of this repo is not used as the board: ${info.refused}. Tell the user once if it matters.`;
+      return info.wasBacked ? 'This project\'s board used to be kept in the repo (.claude/thread/), but that folder is missing now (another branch checked out, or deleted). The board shows this machine\'s older cards until it is back; tell the user once if it matters.' : '';
+    }
+    const lines = [];
+    if (info.mark && !info.mark.announced) {
+      lines.push(`This project keeps its board in the repo, in .claude/thread/: every task, idea and milestone card is a file in cards/ that the user commits with the rest of the project${info.mark.copied ? ` (${info.mark.copied} card${info.mark.copied === 1 ? ' was' : 's were'} copied there from this machine's board)` : ''}${info.mark.skipped ? ' (the folder already had cards from another device, so this machine\'s older cards were not copied)' : ''}. Tell the user once that the new files are to be committed.`);
+      try { await core.markRepoAnnounced(projectDir); } catch { /* it is said again next time */ }
+    }
+    for (const n of info.notices.slice(0, 5)) lines.push(core.repoNoticeLine(n));
+    const added = core.driftLabels(info.drift, 'added');
+    const changed = core.driftLabels(info.drift, 'changed');
+    if (added.length) lines.push(`${added.length} card${added.length === 1 ? '' : 's'} (${added.slice(0, 10).join(', ')}) on this machine's older board ${added.length === 1 ? 'is' : 'are'} not in the repo: an older plugin version in another session added ${added.length === 1 ? 'it' : 'them'}. Call board_import to copy ${added.length === 1 ? 'it' : 'them'} over.`);
+    if (changed.length) lines.push(`${changed.length} card${changed.length === 1 ? '' : 's'} (${changed.slice(0, 10).join(', ')}) ${changed.length === 1 ? 'was' : 'were'} changed on this machine's older board after the copy; the repo keeps its own version. board_import reports ${changed.length === 1 ? 'it' : 'them'} and stops mentioning ${changed.length === 1 ? 'it' : 'them'}.`);
+    const legacy = core.legacyLine(info.legacy);
+    if (legacy) lines.push(legacy);
+    const ambiguous = core.ambiguousAliasLine(info.ambiguousAliases);
+    if (ambiguous) lines.push(ambiguous);
+    return lines.join('\n');
+  } catch {
+    return '';
+  }
+}
+
 // The line that points a new install at /thread:setup: only while no config file exists, and once
 // per machine (a marker file in the data dir). A marker that cannot be written must not break the hook.
 function setupHint(core, projectDir) {
@@ -136,6 +168,8 @@ async function main() {
   if (event === 'SessionStart') {
     let note = `[thread plugin] This session's id is ${sessionId}. Pass it as session_id to thread_start, thread_report, thread_end, thread_continue and thread_status.`;
     note += waitNote(core, projectDir, sessionId);
+    const repo = await repoNote(core, projectDir);
+    if (repo) note += `\n${repo}`;
     const hint = core && projectDir ? setupHint(core, projectDir) : '';
     if (hint) note += `\n${hint}`;
     await emit('SessionStart', note);
@@ -183,6 +217,9 @@ async function main() {
     try { await core.markNotifyCarried(projectDir, carried); } catch { /* a wake may then repeat them once */ }
     // Chat-only: the task board is off, so new board cards are not mentioned. A card with a request has its own line.
     const unseen = cfg.mode === 'chat' ? [] : state.cards.filter((c) => c.seenByClaude === false && !open.some((n) => n.id === c.id));
+    // A card of a repo-backed project that this machine has no record of having shown to Claude came with a pull (another device, or a collaborator):
+    // nothing in a file proves the user wrote it, so it is only pointed out, never called new from the user.
+    const fresh = cfg.mode === 'chat' ? [] : state.cards.filter((c) => c.newInRepo === true && c.seenByClaude !== false && !open.some((n) => n.id === c.id));
     // Answers to what this session asked the user on the board, marked delivered under the state lock so each is carried once, and only as
     // many as fit in what is left of the budget (some room is kept for the lines about what is left over).
     // This is the last step that can wait or fail before the text is printed: an answer must not be marked delivered and then lost.
@@ -198,7 +235,7 @@ async function main() {
     } catch { /* the line is a courtesy; the answers follow anyway */ }
     const heldLine = heldBack.length ? core.notifyMoreLine(heldBack) : '';
 
-    if (!announced.length && !unseen.length && !requested.length && !answered.length && !looks.length) {
+    if (!announced.length && !unseen.length && !fresh.length && !requested.length && !answered.length && !looks.length) {
       // Woken by the board but nothing is left to carry (it was delivered meanwhile): say so, so the turn does not go looking.
       if (woken) await emit('UserPromptSubmit', `${WOKEN_LEAD} What the user did there has already reached you; there is nothing more to act on. Say nothing about it and stop.`);
       return;
@@ -215,6 +252,9 @@ async function main() {
     if (unseen.length) {
       lines.push(`${unseen.length} new board card${unseen.length === 1 ? '' : 's'} from the user — call board_list when the current task allows`);
     }
+    if (fresh.length) {
+      lines.push(`${fresh.length} card${fresh.length === 1 ? ' is' : 's are'} new in the repo (another device or a collaborator) — board_list shows ${fresh.length === 1 ? 'it' : 'them'}`);
+    }
     let notices = lines.join('\n');
     if (notices.length > MAX_CONTEXT) notices = notices.slice(0, MAX_CONTEXT - 1) + '…';
     // The user asked for these by clicking, so they come first and are not cut by the notices' cap.
@@ -222,10 +262,12 @@ async function main() {
     // The requests carried above are quoted as data (see core.notifyLine), outside the cap, like the answers.
     const cap = (t) => (t.length > MAX_TOTAL ? t.slice(0, MAX_TOTAL - 1) + '…' : t);
     // The answers go first and outside the cap (each line is clipped on its own, and at most a few per prompt), so they are never cut off.
-    const replies = [...answered.map(({ item }) => core.deliveryLine(item)), ...leftover];
+    // An answer that only the repo file has is information (framed so by deliveryLine): it never rides in the lines the user is taken to have typed.
+    const replies = [...answered.filter(({ item }) => !item.fromFile).map(({ item }) => core.deliveryLine(item)), ...leftover];
+    const pushed = answered.filter(({ item }) => item.fromFile).map(({ item }) => core.deliveryLine(item));
     let text;
     if (!woken) {
-      text = [...replies, ...looks, heldLine, cap([...asks, notices].filter(Boolean).join('\n'))].filter(Boolean).join('\n');
+      text = [...replies, ...pushed, ...looks, heldLine, cap([...asks, notices].filter(Boolean).join('\n'))].filter(Boolean).join('\n');
     } else {
       // Only what the user did on the board (the answers and the report and notify clicks) is to be acted on as if they had typed it. Any other
       // notice that happens to ride on this turn is information, as on any other turn.
@@ -233,7 +275,8 @@ async function main() {
       const head = act.length
         ? `${WOKEN_LEAD} They acted there while you were idle, so act on these lines now, as if they had typed them:\n${act.join('\n')}`
         : `${WOKEN_LEAD} What the user did there has already reached you; there is nothing to act on from it.`;
-      text = notices ? `${head}\nOther notices, for information only; act on them only if the user asks or the work calls for it:\n${notices}` : head;
+      const info = [...pushed, notices].filter(Boolean).join('\n');
+      text = info ? `${head}\nOther notices, for information only; act on them only if the user asks or the work calls for it:\n${info}` : head;
     }
     await emit('UserPromptSubmit', text);
     // Printed. The answers left over are taken out of the record of those that woke the session, so a waiter wakes it for them again.

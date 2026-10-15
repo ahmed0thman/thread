@@ -37,7 +37,7 @@ test('#/<key> is the default view of that project, and #/<key>/<view> names a vi
 });
 
 test('#/<key>/<card> is the card page, and a card id is never taken for a view', () => {
-  for (const id of ['c1', 'c42', 'c1000', 'new']) {
+  for (const id of ['c1', 'c42', 'c1000', 'c8k2x1', 'new']) {
     assert.deepEqual(route(`#/abc123/${id}`), { home: false, key: 'abc123', view: '', card: id }, id);
     assert.ok(!routes.VIEWS.includes(id), `${id} is not a view name`);
   }

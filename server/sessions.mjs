@@ -1,7 +1,7 @@
 // Session names: the session record in the state file and how its name is found. Imports only ./state.mjs.
 import { open } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
-import { now, readState, updateState } from './state.mjs';
+import { now, readLocalState, updateLocalState } from './state.mjs';
 
 export const SESSION_ID_RE = /^[0-9A-Za-z-]{8,64}$/;
 const TRANSCRIPT_CHUNK = 256 * 1024;
@@ -121,7 +121,7 @@ async function modelFromTranscript(file) {
 // The model and effort a session is running with, from its recorded transcript; nulls when unknown.
 export async function sessionModel(projectDirArg, sessionId) {
   let rec;
-  try { rec = sessionsOf(readState(projectDirArg))[String(sessionId).toLowerCase()]; } catch { rec = undefined; }
+  try { rec = sessionsOf(readLocalState(projectDirArg))[String(sessionId).toLowerCase()]; } catch { rec = undefined; }
   return modelFromTranscript(rec && rec.transcriptPath);
 }
 
@@ -140,7 +140,7 @@ export async function touchSession(projectDirArg, sessionId, { transcriptPath, s
   const key = sessionId.toLowerCase();
   const tp = validTranscriptPath(transcriptPath) ? transcriptPath : '';
   let prev;
-  try { prev = sessionsOf(readState(projectDirArg))[key]; } catch { prev = undefined; }
+  try { prev = sessionsOf(readLocalState(projectDirArg))[key]; } catch { prev = undefined; }
   if (recentlyNamed(prev)) return prev;
 
   let found = null;
@@ -148,7 +148,7 @@ export async function touchSession(projectDirArg, sessionId, { transcriptPath, s
   if (title) found = { name: title.slice(0, NAME_MAX), source: 'title' };
   else found = await nameFromTranscript(tp || (prev && prev.transcriptPath));
 
-  return updateState(projectDirArg, (state) => {
+  return updateLocalState(projectDirArg, (state) => {
     state.sessions = sessionsOf(state);
     const ts = now();
     let rec = state.sessions[key];

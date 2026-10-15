@@ -33,6 +33,8 @@ test('a card can be notified only while it is a task or an idea that is new from
   assert.equal(notifyState(task('c1', { seenByClaude: true, notified: true })), 'sent', 'another session listed the card, but the request stays open until the session picked does');
   assert.equal(notifyState(task('c1', { seenByClaude: undefined, notified: true })), 'sent');
   assert.equal(notifyState(task('c1', { seenByClaude: undefined })), '', 'a card an older version wrote has no flag: nothing to point out');
+  assert.equal(notifyState(task('c1', { seenByClaude: undefined, newInRepo: true })), 'ready', 'a card that came with a pull (a repo-backed project) can be pointed out too');
+  assert.equal(notifyState(task('c1', { newInRepo: true, kind: 'milestone' })), '');
   assert.equal(notifyState(task('c1', { kind: 'thread' })), '');
   assert.equal(notifyState(task('c1', { kind: 'milestone' })), '');
 });

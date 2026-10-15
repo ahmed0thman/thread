@@ -4,16 +4,16 @@
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readdir, rm } from 'node:fs/promises';
-import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dataDir, envValue, now, projectKey, projectPaths, readState, updateState, withLock } from './state.mjs';
+import { dataDir, envValue, legacyStores, mainCheckout, nextCardId, now, projectKey, projectPaths, readRepoMark, readLocalState, readState, repoDrift, repoImport, repoRefusal, repoRootOf, runInStore, storeKey, storePinned, updateLocalState, updateState, withLock } from './state.mjs';
 import { EFFORTS, cleanEffort, cleanModel, collapse, sameSession, sessionModel } from './sessions.mjs';
 import { ChatOnlyError, DEFAULT_STAGES, readConfig } from './config.mjs';
 import { openWaits, reviewApproved } from './waits.mjs';
 import { notifyActive } from './notify.mjs';
-import { FIELD_NAMES, addHistory, cleanFields, cleanWorker, finishedStageIds, hasCriteria, liveBlockers } from './fields.mjs';
+import { CARD_ID_RE, CARD_ID_SRC, FIELD_NAMES, addHistory, cardById, claudeCard, cleanFields, cleanWorker, criteriaCut, criteriaHash, finishedStageIds, gatedByCriteria, hasCriteria, leftDoneAt, liveBlockers, pinLeftDone as pinExit, threadById, watchFinished } from './fields.mjs';
 import { RESUME, laneSnapshot, requireRunnableLane, unusableLane } from './lanes.mjs';
 
 export * from './state.mjs';
@@ -33,7 +33,6 @@ export const AGENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const MAX_BRIEF = 50000;
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const KEY_RE = /^[0-9a-f]{12}$/;
-const CARD_ID_RE = /^c[0-9]+$/;
 export const VERSION = (() => {
   try {
     const v = JSON.parse(readFileSync(new URL('../.claude-plugin/plugin.json', import.meta.url), 'utf8')).version;
@@ -42,6 +41,7 @@ export const VERSION = (() => {
     return 'unknown';
   }
 })();
+const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const RUNNER_PATH = fileURLToPath(new URL('./runner.mjs', import.meta.url));
 const HEARTBEAT_STALE_MS = 15000;
 
@@ -61,14 +61,20 @@ function listedProject(key) {
     const s = JSON.parse(readFileSync(file, 'utf8'));
     if (!s || typeof s !== 'object' || Array.isArray(s) || !Array.isArray(s.cards)) return null;
     if (typeof s.projectDir !== 'string' || !s.projectDir || projectKey(s.projectDir) !== key) return null;
+    // A folder that a repo-backed board now stands for (a worktree, a sub-folder, a symlinked path) keeps an older store here. It is listed only
+    // while it holds a thread that has not ended, and then as what it is, an older store, so that nothing running is hidden.
+    const legacy = storeKey(s.projectDir) !== key;
+    if (legacy && !s.cards.some((c) => c && c.kind === 'thread' && c.thread && c.thread.runState !== 'ended')) return null;
+    // A repo-backed project's cards are the repo's, joined with this store's threads; the store's own task cards are the old copies.
+    const cards = !legacy && repoRootOf(s.projectDir) ? readState(s.projectDir).cards : s.cards;
     let newest = NaN;
     let threads = 0;
     let running = 0;
     let waiting = 0;
     let open = 0;
     let done = 0;
-    const cfg = readConfig(s.projectDir);
-    for (const c of s.cards) {
+    const cfg = legacy ? runInStore(key, () => readConfig(s.projectDir)) : readConfig(s.projectDir);
+    for (const c of cards) {
       if (!c || typeof c !== 'object') continue;
       waiting += openWaits(c).length;
       // open: not finished (see isFinished), milestones left out; a chat-only board shows threads only
@@ -87,9 +93,9 @@ function listedProject(key) {
     return {
       key,
       projectDir: s.projectDir,
-      name: parts.length ? parts[parts.length - 1] : s.projectDir,
+      name: (parts.length ? parts[parts.length - 1] : s.projectDir) + (legacy ? ' (older store)' : ''),
       exists: dirExists(s.projectDir),
-      cards: s.cards.length,
+      cards: cards.length,
       threads,
       running,
       // cards not done (milestones left out), cards done, and items waiting for the user; chat-only projects do not show waiting items
@@ -129,7 +135,7 @@ export async function forgetProject(key) {
   const root = join(dataDir(), 'projects');
   const target = join(root, key);
   if (!KEY_RE.test(key) || resolve(target) !== target) throw new Error('unknown project');
-  return withLock(entry.projectDir, async () => {
+  return runInStore(key, () => withLock(entry.projectDir, async () => {
     const again = listedProject(key);
     if (!again) throw new Error('unknown project');
     if (again.exists) throw new Error(`project folder still exists: ${again.projectDir}`);
@@ -138,7 +144,85 @@ export async function forgetProject(key) {
     if (busy) throw new Error(`thread ${busy.id} is still running; end it before forgetting the project`);
     await rm(target, { recursive: true, force: true });
     return true;
-  });
+  }));
+}
+
+// ---------------------------------------------------------------- the board in the repo
+
+/**
+ * What a session needs to know about a project's repo folder (`.claude/thread/`), read-only: { backed, root, notices, drift, mark, legacy, refused }.
+ * backed: the project keeps its cards there. notices: card files that could not be read, and ids two cards share ({ file, reason, shown }).
+ * drift: the cards an older plugin version added or changed in this machine's older stores since the one-time copy ({ id, why, from }).
+ * mark: what is recorded about that copy. legacy: the older per-path stores of this repo's worktrees and sub-folders ({ key, projectDir,
+ * cards, active }, active being the threads in them that have not ended). `wasBacked`: not backed now, but it was (the folder is gone, for
+ * example on another branch). refused: why a `.claude/thread/` folder that exists is not used (a link, outside the repository, the home folder).
+ * ambiguousAliases: old card ids that name no card, because two of the project's older stores had the same one.
+ */
+export function repoInfo(projectDirArg) {
+  const root = repoRootOf(projectDirArg);
+  if (!root) {
+    const main = mainCheckout(projectDirArg);
+    const refused = repoRefusal(projectDirArg);
+    const was = !refused && typeof readRepoMark(main).importedAt === 'string';
+    return { backed: false, wasBacked: was, refused, root: main, notices: [], drift: [], mark: null, legacy: [], ambiguousAliases: [] };
+  }
+  const state = readState(projectDirArg);
+  const m = state.repo && typeof state.repo === 'object' ? state.repo : {};
+  const mark = typeof m.importedAt === 'string' ? { importedAt: m.importedAt, copied: Number(m.copied) || 0, skipped: m.skipped === true, announced: m.announced !== false } : null;
+  const legacy = legacyStores(projectDirArg).map((s) => ({
+    key: s.key,
+    projectDir: s.projectDir,
+    cards: s.state.cards.filter((c) => c && c.kind !== 'thread').length,
+    active: s.state.cards.filter((c) => c && c.kind === 'thread' && c.thread && c.thread.runState !== 'ended').length,
+  }));
+  const drift = repoDrift(projectDirArg, state);
+  for (const l of legacy) l.pending = drift.filter((d) => d.src === l.key).length;
+  return { backed: true, wasBacked: true, refused: null, root, notices: state.notices || [], drift, mark, legacy, ambiguousAliases: state.ambiguousAliases || [] };
+}
+
+/** One notice of repoInfo as a sentence: a card file that is not shown, or two cards that share an id (both shown). */
+export function repoNoticeLine(n) {
+  const file = String(n.file);
+  return n.shown ? `${file} ${n.reason}.` : `${file} ${n.reason}, so that card is not on the board. Do not edit or delete the file; tell the user.`;
+}
+
+/** The ids of the drift entries of one kind, as the session should name them: the id, and where it is when it is an older per-path store's. */
+export function driftLabels(drift, why) {
+  const base = (p) => String(p).split(/[\\/]+/).filter(Boolean).pop() || String(p);
+  return drift.filter((d) => d.why === why).map((d) => (d.from ? `${d.id} in the older store of ${base(d.from)}` : d.id));
+}
+
+/** The sentence about old card ids that name no card (repoInfo().ambiguousAliases), or ''. */
+export function ambiguousAliasLine(ids) {
+  if (!ids || !ids.length) return '';
+  const shown = ids.slice(0, 10).join(', ') + (ids.length > 10 ? ` and ${ids.length - 10} more` : '');
+  return `${ids.length === 1 ? 'The old card id' : 'The old card ids'} ${shown} no longer name${ids.length === 1 ? 's' : ''} a card: two older boards of this project had ${ids.length === 1 ? 'that id' : 'those ids'} on different cards, and the one-time copy gave them different new ids. Use the new ids (board_list shows them).`;
+}
+
+/** The sentence about the older per-path stores of a repo-backed project (repoInfo().legacy), or ''. */
+export function legacyLine(legacy) {
+  legacy = (legacy || []).filter((l) => l.active || l.pending);   // one that is copied and has nothing running is not worth a line
+  if (!legacy.length) return '';
+  const parts = legacy.slice(0, 5).map((l) => `${l.projectDir} (${l.cards} card${l.cards === 1 ? '' : 's'}${l.active ? `, ${l.active} thread${l.active === 1 ? '' : 's'} not ended` : ''})`);
+  return `Older stores of this machine belong to this repo's worktrees or sub-folders: ${parts.join('; ')}${legacy.length > 5 ? `; and ${legacy.length - 5} more` : ''}. Their cards are copied into the repo by board_import. Threads in them finish where they are and show on the board's projects home while they are not ended; they are not in this session's thread tools.`;
+}
+
+/** The SessionStart note has told the session about the copy: it is not told again. */
+export async function markRepoAnnounced(projectDirArg) {
+  if (!repoRootOf(projectDirArg)) return;
+  await updateState(projectDirArg, (state) => { if (state.repo && state.repo.announced === false) state.repo.announced = true; });
+}
+
+/**
+ * `board_import`: brings the cards an older plugin version added to this machine's older stores since the one-time copy into the repo's
+ * `cards/`, with new random ids (shared fields only). A card changed there is reported, not copied over the repo's version. With `dismiss`,
+ * nothing is copied and those cards are no longer mentioned. Returns { copied, changed } (the cards' old ids).
+ */
+export async function importOldCards(projectDirArg, { dismiss = false } = {}) {
+  refuseInsideThread('import cards for');
+  const root = repoRootOf(projectDirArg);
+  if (!root) throw new Error('this project does not keep its board in the repo (there is no .claude/thread/ folder at the main checkout\'s root); there is nothing to import into');
+  return updateState(projectDirArg, (state) => repoImport(projectDirArg, state, { dismiss }));
 }
 
 // ---------------------------------------------------------------- cards and run state
@@ -173,16 +257,24 @@ function runnerAlive(projectDirArg, card) {
 
 export const isThread = (card) => !!card && card.kind === 'thread' && !!card.thread;
 
-function findCard(state, id) {
-  const card = state.cards.find((c) => c.id === id);
+// The card with this id (a repo card before a thread of the same id, see fields.cardById). A card that was copied into the repo under a new id
+// is also found by the id it had before (state.aliases), when no card has that id now. `aliasFirst` (the calls Claude makes, which may name a
+// card by the id it had before the copy) resolves the id as fields.claudeCard does: the alias comes before a card file that anyone pushed under
+// that old id, and a thread on this machine with that id comes before both. The board names a card by the id it shows, so its calls take the
+// card that has that id.
+function findCard(state, id, aliasFirst = false) {
+  const card = aliasFirst
+    ? claudeCard(state, id)
+    : cardById(state.cards, id) ?? (state.aliases && state.aliases.has(id) ? cardById(state.cards, state.aliases.get(id)) : undefined);
   if (!card) throw new Error(`card not found: ${id}`);
   return card;
 }
 
 export function findThread(state, id) {
-  const card = findCard(state, id);
-  if (!isThread(card)) throw new Error(`card ${id} is not a thread`);
-  return card;
+  const card = threadById(state.cards, id);
+  if (card) return card;
+  findCard(state, id);
+  throw new Error(`card ${id} is not a thread`);
 }
 
 function checkStatus(cfg, status) {
@@ -236,7 +328,7 @@ export function isFinished(card, cfg) {
 
 // The ids of the cards `card` is blocked by that still exist and are not finished: the ones that hold it up.
 export function openBlockers(card, cards, cfg) {
-  return liveBlockers(card, cards).filter((id) => !isFinished(cards.find((c) => c.id === id), cfg));
+  return liveBlockers(card, cards).filter((id) => !isFinished(cardById(cards, id), cfg));
 }
 
 // A milestone has no stage of its own: its state follows its cards. The cards that count are its children except ideas (an
@@ -257,10 +349,15 @@ export const NO_MS_STAGE = 'a milestone has no stage: it is done when all its ca
 // Checks a parent for `card` (kind, or null when not known yet) against the state.
 function checkParent(state, parentId, kind) {
   if (kind === 'milestone') throw new Error('a milestone cannot have a parent');
-  const m = state.cards.find((c) => c.id === parentId);
+  const m = state.cards.find((c) => c.id === parentId && c.kind === 'milestone') ?? cardById(state.cards, parentId);
   if (!m) throw new Error(`milestone not found: ${parentId}`);
   if (m.kind !== 'milestone') throw new Error(`${parentId} is not a milestone`);
 }
+
+// The ids Claude gave for a parent and for blockers, as the ids of the cards they name (fields.claudeCard): an id a card had before it was
+// copied into the repo is stored as the id it has now. An id that names nothing stays as given, and the checks refuse it.
+const claudeId = (state, id) => (typeof id === 'string' ? claudeCard(state, id)?.id ?? id : id);
+const claudeIds = (state, ids) => (Array.isArray(ids) ? ids.map((id) => claudeId(state, id)) : ids);
 
 const cleanParent = (parent) => {
   if (parent === undefined) return undefined;
@@ -298,7 +395,7 @@ const FIELD_LABEL = { type: 'type', priority: 'priority', labels: 'labels', bloc
 function checkBlockers(state, card, ids) {
   for (const id of ids) {
     if (id === card.id) throw new Error(`${id} cannot be blocked by itself`);
-    const b = state.cards.find((c) => c.id === id);
+    const b = cardById(state.cards, id);
     if (!b) throw new Error(`blocked_by: card not found: ${id}`);
     if (b.kind === 'milestone') throw new Error(`blocked_by: ${id} is a milestone; a card is blocked by tasks, ideas or threads`);
   }
@@ -326,15 +423,29 @@ function setFields(state, card, fields) {
 // Moving a card that has acceptance criteria into a finished stage (the done stage or a later one) needs the owner's approval of a
 // review item; so does a move from one finished stage to another when the card was never approved (the owner dragged it there). Only
 // Claude's own changes are held to it; the board's are not (its views show such a card as not verified).
-function gateDone(card, cfg, to) {
-  if (!stageFinished(cfg, to) || !hasCriteria(card) || reviewApproved(card, finishedStageIds(cfg))) return;
+function gateDone(state, card, cfg, to) {
+  pinLeftDone(state, card, cfg);
+  if (!stageFinished(cfg, to) || !gatedByCriteria(card) || reviewApproved(card, finishedStageIds(cfg))) return;
+  if (criteriaCut(card)) {
+    throw new Error(`${card.id} had acceptance criteria on this machine's board and the repo file now has ${hasCriteria(card) ? 'fewer' : 'none'}: that is a change from outside, and only the owner can accept it, by editing the criteria on the board. Until then the card needs an approval of a review item (wait_add, kind review) like any card with criteria.`);
+  }
   throw new Error(`${card.id} has acceptance criteria: raise a review item with wait_add (kind review) and move it to ${to} after the owner approves.`);
+}
+
+// A card of a repo-backed project keeps its own record of when it last left the finished stages (`localLeftDoneAt`, in the overlay, never in the
+// repo file), taken from the card as this write sees it: a file that a pull replaces cannot then drop the moves from its history and the
+// card's leftDoneAt to make an approval given before the card was reopened count again. Run inside the write, before the gate is asked. The
+// record also notices an exit that left no trace in the file at all (fields.watchFinished). A time a little ahead of now is pinned as now
+// (fields.pinLeftDone); one far ahead is no exit (fields.leftDoneAt).
+function pinLeftDone(state, card, cfg) {
+  if (state.repoBacked) pinExit(card, cfg, now());
 }
 
 // Claude may add acceptance criteria to a card but not take them away or reword them: they are the owner's test of the work.
 // The existing lines must stay as they are, in order; only the board (source user) may change them freely.
 function guardCriteria(card, next) {
-  if (next === undefined || !hasCriteria(card)) return;
+  if (next === undefined || !gatedByCriteria(card)) return;
+  if (criteriaCut(card)) throw new Error(`${card.id}'s acceptance criteria were cut or removed in the repo file: only the owner can accept that, by editing them on the board.`);
   const kept = Array.isArray(next) && next.length >= card.criteria.length && card.criteria.every((c, i) => c === next[i]);
   if (!kept) throw new Error(`${card.id}'s acceptance criteria can only be changed by the owner on the board; you may add lines.`);
 }
@@ -351,17 +462,19 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
   if (kind === 'thread') throw new Error('thread cards are created with thread_start');
   if (!KINDS.includes(kind)) throw new Error(`invalid kind "${kind}" (use ${KINDS.join(', ')})`);
   if (source !== 'claude' && source !== 'user') throw new Error(`invalid source "${source}"`);
-  const parentId = cleanParent(parent);
+  const parentId0 = cleanParent(parent);
   const laneName = cleanLane(lane);
   if (laneName) checkLaneKind(kind);
   const fields = cleanFields({ type, priority, labels, blockedBy, criteria });
   const by = cleanWorker(worker);
   return updateState(projectDirArg, (state) => {
+    const claude = source === 'claude';
+    const parentId = claude ? claudeId(state, parentId0) : parentId0;
+    if (claude && fields.blockedBy) fields.blockedBy = claudeIds(state, fields.blockedBy);
     if (parentId) checkParent(state, parentId, kind);
-    state.seq += 1;
     const ts = now();
     const card = {
-      id: `c${state.seq}`,
+      id: nextCardId(state),
       kind,
       title: t,
       note: note == null ? '' : String(note),
@@ -374,7 +487,7 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
     if (parentId) card.parent = parentId;
     if (laneName) card.lane = laneName;
     setFields(state, card, fields);
-    if (source === 'claude') gateDone(card, cfg, status);
+    if (source === 'claude') gateDone(state, card, cfg, status);
     addHistory(card, source, { type: 'created', to: status }, ts, by);
     state.cards.push(card);
     return card;
@@ -397,13 +510,16 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
   }
   // Chat-only has its own columns; a task card's stage is refused there (below) for the board being off, not for its name.
   if (status !== undefined && cfg.mode !== 'chat') checkStatus(cfg, status);
-  const parentId = cleanParent(parent);
+  const parentId0 = cleanParent(parent);
   const laneName = cleanLane(lane);
   const cleaned = cleanFields({ type, priority, labels, blockedBy, criteria });
   const by = cleanWorker(worker);
   return updateState(projectDirArg, (state) => {
-    const card = findCard(state, id);
+    const card = findCard(state, id, source === 'claude');
+    const parentId = source === 'claude' ? claudeId(state, parentId0) : parentId0;
+    if (source === 'claude' && cleaned.blockedBy) cleaned.blockedBy = claudeIds(state, cleaned.blockedBy);
     if (!isThread(card)) requireTasks(cfg);
+    pinLeftDone(state, card, cfg);
     // A thread card is shown in the stage for its run state when its stored one is gone; sending that back is no change.
     if (card.kind === 'thread' && status !== undefined && status !== card.status && status !== effectiveStatus(card, cfg)) {
       throw new Error('thread status follows the thread');
@@ -421,12 +537,17 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
     if (source === 'claude') guardCriteria(card, cleaned.criteria);
     const setNow = setFields(state, card, cleaned);
     if (setNow.length) { changed = true; fields.push(...setNow); }
+    // the owner changing the criteria on the board is what this machine's record of them follows (fields.criteriaCut); Claude's lines are
+    // recorded by the write itself
+    if (source === 'user' && state.repoBacked && cleaned.criteria !== undefined && card.kind !== 'milestone') {
+      if (hasCriteria(card)) card.localCriteria = { n: card.criteria.length, hash: criteriaHash(card) }; else delete card.localCriteria;
+    }
     if (title !== undefined && title.trim() !== card.title) { card.title = title.trim(); changed = true; fields.push('title'); }
     if (note !== undefined && String(note) !== card.note) { card.note = String(note ?? ''); changed = true; fields.push('note'); }
     const from = card.status;
     // A thread's stored stage is set by its run state only: a status it may be sent (its own, or the one it is shown in) is no change.
     if (status !== undefined && !isThread(card) && status !== card.status) {
-      if (source === 'claude') gateDone(card, cfg, status);   // after the fields above, so criteria set in the same call count
+      if (source === 'claude') gateDone(state, card, cfg, status);   // after the fields above, so criteria set in the same call count
       card.status = status;
       changed = true;
     }
@@ -439,11 +560,21 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
       const ts = now();
       card.updatedAt = ts;
       if (source === 'user') card.seenByClaude = false;
+      else if (card.newInRepo) card.seenByClaude = true;   // Claude changed it, so it has it
       // a thread's own page shows its turns, not this
       if (!isThread(card)) {
         // The card's own record of leaving the finished stages (a finished stage to an unfinished one; Done to Released is no exit):
         // the capped history cannot be trusted to keep the move (see leftDoneAt).
-        if (card.status !== from && stageFinished(cfg, from) && !stageFinished(cfg, card.status)) card.leftDoneAt = ts;
+        if (card.status !== from && stageFinished(cfg, from) && !stageFinished(cfg, card.status)) {
+          card.leftDoneAt = ts;
+          if (state.repoBacked) {
+            // this machine's own record, and the approvals it holds from before are over with it
+            card.localLeftDoneAt = ts;
+            if (isObject(card.approvals)) for (const k of Object.keys(card.approvals)) delete card.approvals[k];
+          }
+        }
+        // this machine saw the card in a finished stage (see fields.watchFinished)
+        if (state.repoBacked) watchFinished(card, cfg, ts);
         if (card.status !== from) addHistory(card, source, { type: 'moved', from, to: card.status }, ts, by);
         if (fields.length) addHistory(card, source, { type: 'edited', fields }, ts, by);
       }
@@ -452,49 +583,86 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
   });
 }
 
+/**
+ * Removes one card. In a repo-backed project a thread on this machine and a card from the repo can share an id (a card from another device
+ * that took a free thread number, or a file named by hand): both are shown, and the card tools take the card. Only the card that is found is
+ * removed, never the other; the board's delete cannot tell which one the owner means, so it is refused then. A thread that was started from
+ * a repo card stands for it (the card is hidden behind it), so that id is not shared. Removing such a thread removes the card's file too,
+ * unless the file changed since the thread was started: then the file stays, and the result says so.
+ * Resolves true, or { keptFile: true } when the card's file was kept.
+ */
 export async function removeCard(projectDirArg, id, { source = 'claude' } = {}) {
   const cfg = readConfig(projectDirArg);
-  await updateState(projectDirArg, (state) => {
-    const card = findCard(state, id);
+  const { removed, shared, keptFile } = await updateState(projectDirArg, (state) => {
+    const card = findCard(state, id, source === 'claude');
     if (!isThread(card)) requireTasks(cfg);
+    const shared = state.cards.some((c) => c !== card && c.id === card.id);
+    if (shared && source === 'user') {
+      throw new Error(`${card.id} is the id of a thread on this machine and of a card from the repo: the board cannot tell which of the two to delete. End and remove the thread with Claude's thread tools, or ask Claude to remove the card (board_remove takes the card), or delete the card's file in the repo.`);
+    }
     // Removing a card with acceptance criteria that is neither done nor approved would also remove the owner's test of it.
     // A thread can carry them too: 0.11.0 turned cards into threads without checking.
-    if (source === 'claude' && hasCriteria(card) && !isFinished(card, cfg) && !reviewApproved(card, finishedStageIds(cfg))) {
+    if (source === 'claude' && gatedByCriteria(card) && !isFinished(card, cfg) && !reviewApproved(card, finishedStageIds(cfg))) {
       throw new Error(`${card.id} has acceptance criteria and is not done or approved, so only the owner can remove it, on the board.`);
     }
-    if (isThread(card) && card.thread.runState === 'running' && isAlive(card.thread.pid)) {
-      throw new Error(`thread ${id} is still running; end it before removing the card`);
+    // the thread of that id, not the card the lookup preferred
+    const th = isThread(card) ? card : threadById(state.cards, card.id);
+    if (th && th.thread.runState === 'running' && isAlive(th.thread.pid)) {
+      throw new Error(`thread ${card.id} is still running; end it before removing the card`);
     }
-    // The cards under a milestone stay, without a parent.
-    if (card.kind === 'milestone') for (const c of state.cards) if (c.parent === id) delete c.parent;
-    state.cards = state.cards.filter((c) => c.id !== id);
-    return true;
+    let keptFile = false;
+    if (state.repoBacked && isThread(card) && card.fromRepo === card.id && state.base.shadowed.has(card.id)) {
+      const now = state.base.snap.get(card.id);
+      const rec = state.repo && state.repo.overlay && state.repo.overlay[card.id];
+      // the file as it was when the thread was started; a thread with no record of it leaves the file alone
+      if (now && !(isObject(rec) && rec.startedHash === now.hash)) { state.base.keepFiles.add(card.id); keptFile = true; }
+    }
+    // The cards under a milestone stay, without a parent (a thread is a card of this machine: it keeps what it has).
+    if (card.kind === 'milestone') for (const c of state.cards) if (c.parent === card.id && !isThread(c)) delete c.parent;
+    state.cards = state.cards.filter((c) => c !== card);
+    return { removed: card.id, shared, keptFile };
   });
-  // Logs and activity files would otherwise outlive the card. Best effort. The dot
+  // Logs and activity files would otherwise outlive the card; a thread that has this id keeps its own. Best effort. The dot
   // keeps c1 from matching the files of c10.
-  const { logs } = projectPaths(projectDirArg);
-  try {
-    for (const name of await readdir(logs)) {
-      if (name.startsWith(`${id}.`)) await rm(join(logs, name), { recursive: true, force: true });
-    }
-  } catch { /* no logs folder, or a file that cannot be removed */ }
-  await sweepOrphanLogs(projectDirArg).catch(() => {});
-  return true;
+  if (!shared) {
+    const { logs } = projectPaths(projectDirArg);
+    try {
+      for (const name of await readdir(logs)) {
+        if (name.startsWith(`${removed}.`)) await rm(join(logs, name), { recursive: true, force: true });
+      }
+    } catch { /* no logs folder, or a file that cannot be removed */ }
+    await sweepOrphanLogs(projectDirArg).catch(() => {});
+  }
+  return keptFile ? { keptFile: true } : true;
 }
 
-// Log files and folders of cards that are no longer in the state: an older plugin version deletes a card without a lane thread's folders.
-// Only entries named c<digits>.<anything> whose card id is not in the state are removed, under the state lock; a symlink is removed itself, never followed.
+// Log files and folders of cards that are no longer in the state: an older plugin version deletes a card without a lane thread's folders, and a
+// card of a repo-backed project is removed by a git pull, which this plugin does not see. Entries named c<digits>.<anything> whose card id is not
+// in the state are removed; in a repo-backed project so are those named by a random id (c8k2x1.<anything>), but only when the id is in no card
+// file, no card of this machine's stores and no copy record, and the entry is a week old (a card can be on another branch). All under the state
+// lock; a symlink is removed itself, never followed.
 const CARD_LOG_RE = /^(c[0-9]+)\./;
+const ANY_CARD_LOG_RE = new RegExp(`^(${CARD_ID_SRC})\\.`);
+export const ORPHAN_LOG_MIN_AGE_MS = 7 * 24 * 3600 * 1000;
 export async function sweepOrphanLogs(projectDirArg) {
   const { logs, state: stateFile } = projectPaths(projectDirArg);
   if (!existsSync(logs) || !existsSync(stateFile)) return 0;   // no state: nothing says which logs are orphans
   return withLock(projectDirArg, async () => {
     if (!existsSync(stateFile)) return 0;   // gone since the check above: readState would report no cards
-    const ids = new Set(readState(projectDirArg).cards.map((c) => c.id));
+    const state = readState(projectDirArg);
+    const backed = !!state.repoBacked;
+    // the ids of cards in files that could not be read, and of an older version's cards, still have their logs
+    const ids = new Set([...state.cards.map((c) => c.id), ...(state.takenIds || [])]);
+    if (backed && state.aliases) for (const id of state.aliases.values()) ids.add(id);
     let n = 0;
     for (const name of await readdir(logs)) {
-      const m = CARD_LOG_RE.exec(name);
+      const m = (backed ? ANY_CARD_LOG_RE : CARD_LOG_RE).exec(name);
       if (!m || ids.has(m[1])) continue;
+      if (!/^c[0-9]+$/.test(m[1])) {
+        let age = 0;
+        try { age = Date.now() - lstatSync(join(logs, name)).mtimeMs; } catch { continue; }
+        if (age < ORPHAN_LOG_MIN_AGE_MS) continue;
+      }
       await rm(join(logs, name), { recursive: true, force: true });
       n += 1;
     }
@@ -508,8 +676,9 @@ export async function markSeen(projectDirArg, sessionId) {
   return updateState(projectDirArg, (state) => {
     const unseen = [];
     for (const card of state.cards) {
-      if (card.seenByClaude === false) {
-        unseen.push(JSON.parse(JSON.stringify(card)));
+      // a card from a pull that this machine has not listed yet is listed (and marked `newInRepo` in the copy that is returned)
+      if (card.seenByClaude === false || card.newInRepo === true) {
+        unseen.push({ ...JSON.parse(JSON.stringify(card)), ...(card.newInRepo === true ? { newInRepo: true } : {}) });
         card.seenByClaude = true;
       }
       if (sessionId && notifyActive(card) && sameSession(card.notifySession, sessionId)) card.notifySeenFor = card.notifyId;
@@ -772,7 +941,7 @@ function childEnv() {
 function launchRunner(projectDirArg, card) {
   let child;
   try {
-    child = spawn(process.execPath, [RUNNER_PATH, projectDirArg, card.id], {
+    child = spawn(process.execPath, [RUNNER_PATH, projectDirArg, card.id, card.thread.store || storeKey(projectDirArg)], {
       detached: true,
       stdio: 'ignore',
       env: childEnv(),
@@ -786,7 +955,7 @@ function launchRunner(projectDirArg, card) {
   child.on('error', (e) => {
     // Async spawn failure: record it unless the runner already took over.
     updateState(projectDirArg, (state) => {
-      const c = state.cards.find((x) => x.id === card.id);
+      const c = threadById(state.cards, card.id);
       if (isThread(c) && c.thread.runState === 'running' && (c.thread.pid === pid || c.thread.pid == null)) {
         markFailed(projectDirArg, c, `could not start runner: ${tail(e.message, 300)}`);
       }
@@ -841,6 +1010,8 @@ async function launchOptions(projectDirArg, { sessionId, mode, extraDirs, contex
 // Gives `card` its thread and launches the first turn. Called inside updateState.
 function beginThread(projectDirArg, card, { sessionId, mode, prompt, ...opts }) {
   card.thread = {
+    // the store the thread lives in: its runner keeps working there if the folder's board moves into the repo meanwhile (see state.pinStore)
+    store: storeKey(projectDirArg),
     parentSessionId: sessionId.toLowerCase(),
     sessionId: null,
     ...opts,
@@ -863,13 +1034,13 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
   const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief, agent, model, effort, lane });
   if (!t) throw new Error('title must not be empty');
   if (!k) throw new Error('task must not be empty');
-  const parentId = cleanParent(parent);
+  const parentId0 = cleanParent(parent);
   return updateState(projectDirArg, (state) => {
+    const parentId = claudeId(state, parentId0);
     if (parentId) checkParent(state, parentId, 'thread');
-    state.seq += 1;
     const ts = now();
     const card = {
-      id: `c${state.seq}`,
+      id: nextCardId(state, { thread: true }),
       kind: 'thread',
       title: t,
       note: '',
@@ -890,7 +1061,7 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
 // Blocked by list counts whole, finished blockers included (a thread card cannot hold the field at all); only a blocker whose
 // card was removed is not counted, as the board does not show it either.
 function refuseThreadFields(card, cards) {
-  const has = [hasCriteria(card) ? 'acceptance criteria' : '', liveBlockers(card, cards).length ? 'a Blocked by list' : ''].filter(Boolean);
+  const has = [gatedByCriteria(card) ? 'acceptance criteria' : '', liveBlockers(card, cards).length ? 'a Blocked by list' : ''].filter(Boolean);
   if (has.length) throw new Error(`A card with acceptance criteria or a Blocked by list cannot be started as a thread; clear them first (${card.id} has ${has.join(' and ')}).`);
 }
 
@@ -900,7 +1071,7 @@ function refuseThreadFields(card, cards) {
 export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mode = 'read', extraDirs, context, agent } = {}) {
   refuseInsideThread('start');
   requireTasks(readConfig(projectDirArg));
-  const existing = readState(projectDirArg).cards.find((c) => c.id === cardId);
+  const existing = cardById(readState(projectDirArg).cards, cardId);
   if (existing && existing.kind !== 'thread' && existing.kind !== 'milestone') refuseThreadFields(existing, readState(projectDirArg).cards);
   const cardLane = existing && existing.kind !== 'thread' && existing.kind !== 'milestone' && typeof existing.lane === 'string' ? existing.lane : '';
   const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief: existing && existing.note, agent, lane: cardLane });
@@ -911,6 +1082,11 @@ export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mo
     if ((typeof card.lane === 'string' ? card.lane : '') !== cardLane) throw new Error(`card ${cardId} changed while it was starting; try again`);
     refuseThreadFields(card, state.cards);
     const text = typeof card.note === 'string' ? card.note.trim() : '';
+    // A card from a file in the repo: the thread stands for it on this machine, hides it, and only it may delete the file when it is removed.
+    if (state.repoBacked && state.base.shared.has(card.id)) {
+      card.fromRepo = card.id;
+      card.fromRepoHash = (state.base.snap.get(card.id) || {}).hash;   // the file as it is now; commitState moves it into the overlay
+    }
     card.kind = 'thread';
     // In brief mode the note already travels as the brief, so the task is the title alone.
     const prompt = text && opts.context === 'full' ? `${card.title}\n\n${text}` : card.title;
@@ -926,7 +1102,7 @@ export async function continueThread(projectDirArg, id, message, { sessionId } =
   if (!m) throw new Error('message must not be empty');
   // A lane thread is checked against the lanes as they are now, before the lock is taken (loading them can take seconds).
   let fresh = null;
-  const before = readState(projectDirArg).cards.find((c) => c.id === id);
+  const before = threadById(readState(projectDirArg).cards, id);
   if (isThread(before) && before.thread.lane != null && (before.thread.runState === 'idle' || before.thread.runState === 'failed')) {
     const l = before.thread.lane;
     const bad = unusableLane(l);
@@ -1066,7 +1242,7 @@ export async function cancelReportRequest(projectDirArg, id) {
 
 // Read-only: the request stays until the report is made, so the hook repeats it on each prompt.
 export async function pendingReportRequests(projectDirArg, sessionId) {
-  return readState(projectDirArg).cards.filter((c) => {
+  return readLocalState(projectDirArg).cards.filter((c) => {
     const th = isThread(c) && c.thread;
     return th && th.reportRequestedAt && th.lastResult != null && !th.reported && sameSession(th.parentSessionId, sessionId);
   });
@@ -1075,7 +1251,7 @@ export async function pendingReportRequests(projectDirArg, sessionId) {
 // Finished threads with a result nobody has pulled yet, split by whether the
 // given session started them.
 export async function pickReportable(projectDirArg, sessionId) {
-  const state = readState(projectDirArg);
+  const state = readLocalState(projectDirArg);
   const mine = [];
   const others = [];
   for (const card of state.cards) {
@@ -1087,20 +1263,33 @@ export async function pickReportable(projectDirArg, sessionId) {
   return { mine, others };
 }
 
+/**
+ * A repo-backed project's first write makes the one-time copy of this machine's cards (and finishes one that was interrupted). This makes it
+ * when there is nothing else to write: a no-op update. Does nothing for a project that is not repo-backed, or whose copy is done.
+ */
+export async function startRepo(projectDirArg) {
+  const root = storePinned() ? null : repoRootOf(projectDirArg);
+  if (!root) return;
+  const mark = readRepoMark(root);
+  if (typeof mark.importedAt !== 'string' || mark.copy) await updateState(projectDirArg, () => {});
+}
+
+// Threads whose runner is gone are marked failed; this only touches the local state. Returns the project's state (with the repo's cards).
 export async function reconcile(projectDirArg) {
-  return updateState(projectDirArg, (state) => {
+  await startRepo(projectDirArg);
+  await updateLocalState(projectDirArg, (state) => {
     for (const card of state.cards) {
       if (!isThread(card)) continue;
       if (card.thread.runState === 'running' && !runnerAlive(projectDirArg, card)) {
         markFailed(projectDirArg, card, 'runner exited without a result');
       }
     }
-    return state;
   });
+  return readState(projectDirArg);
 }
 
 export async function pendingAnnouncements(projectDirArg, sessionId) {
-  return updateState(projectDirArg, (state) => {
+  return updateLocalState(projectDirArg, (state) => {
     const out = [];
     for (const card of state.cards) {
       if (!isThread(card)) continue;

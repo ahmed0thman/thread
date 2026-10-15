@@ -1025,6 +1025,7 @@ function runsBlock() {
 test('a run is titled by its description without the [cN] marker, and shows as Running or Finished', () => {
   const { runTitle, runPillState } = runsBlock();
   assert.equal(runTitle({ description: '[c24] fix the tax rounding', agentType: 'worker' }), 'fix the tax rounding');
+  assert.equal(runTitle({ description: '[c8k2x1] fix the tax rounding', agentType: 'worker' }), 'fix the tax rounding', 'a repo-backed project\'s card id');
   assert.equal(runTitle({ description: '  [c7]fix it' }), 'fix it');
   assert.equal(runTitle({ description: '[c7]', agentType: 'worker' }), 'worker', 'no text after the marker: the agent type');
   assert.equal(runTitle({}), 'Sub-agent');

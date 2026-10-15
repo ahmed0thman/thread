@@ -231,6 +231,34 @@
     verifyNote.hidden = true;
     verifyNote.append(h('span', 'tag attn', 'Done, not verified'), h('span', 'grow', 'Claude may not move it to done or a later stage until you approve a review item; you moved it yourself.'));
     if (!create) body.appendChild(verifyNote);
+    // the repo file says a review was approved, but this machine does not count it: it came from another device (no record here), or the criteria
+    // changed after the approval given here. Confirming records the approval on this machine, for the criteria shown.
+    const approveNote = h('div', 'callout warn verify-note');
+    approveNote.hidden = true;
+    const approveTag = h('span', 'tag attn', 'Approved on another device');
+    const approveText = h('span', 'grow', 'Confirm here, on this computer, for Claude to count the approval: until you do, it counts this card as not approved.');
+    const approveCrit = h('ul', 'blk-list ap-crit');
+    const confirmBtn = h('button', 'btn small', 'Confirm approval');
+    confirmBtn.type = 'button';
+    approveNote.append(approveTag, approveText, approveCrit, confirmBtn);
+    // what the card showed when Confirm was offered (the review, when it was answered, the criteria): the click confirms that and nothing else,
+    // and the server refuses (409) when the repo file has changed since; the card is then loaded again below
+    let approvalOf = null;
+    confirmBtn.addEventListener('click', async () => {
+      clearError();
+      const pk = selKey;
+      await runAction('approval:' + pk + ':' + card.id, async () => {
+        try { applyCard(await api('POST', pp(pk, 'cards/' + encodeURIComponent(card.id) + '/approval'), approvalOf), pk); wrote(); }
+        catch (e) { showError(e.message); }
+      });
+      poll();
+    });
+    if (!create) body.appendChild(approveNote);
+    // a pull cut or dropped criteria this board had: the server still holds the card to them until the owner edits the criteria here
+    const cutNote = h('div', 'callout warn verify-note');
+    cutNote.hidden = true;
+    cutNote.append(h('span', 'tag attn', 'Criteria cut in the repo file'), h('span', 'grow', 'This board had more acceptance criteria on this card. A pull cut or removed them, and Claude still holds the card to them. To accept what the file has now, change the criteria here: add a line and save, then remove it and save again.'));
+    if (!create) body.appendChild(cutNote);
     if (msField) body.appendChild(msField);
     syncMsField();
     // the fields of a task or idea: type, priority, labels, blockers and criteria; a new card offers the first three, a milestone none
@@ -642,6 +670,18 @@
         FX.refresh();
       }
       verifyNote.hidden = c.verified !== false;
+      cutNote.hidden = c.criteriaCut !== true;
+      const changed = c.approvalCriteriaChanged === true;
+      const reviewed = c.approvalReviewChanged === true;
+      approveNote.hidden = c.approvalElsewhere !== true && !changed && !reviewed;
+      approvalOf = c.approvalOf || null;
+      approveTag.textContent = reviewed ? 'Review changed in the repo file' : changed ? 'Criteria changed since your approval' : 'Approved on another device';
+      approveText.textContent = reviewed
+        ? 'A review you answered here was changed or removed in the repo file, so an older approval is the latest one again. Confirm that the approval still holds, or ask for a new review: until you do, Claude counts this card as not approved.'
+        : changed
+          ? 'The acceptance criteria are not the ones you approved. Confirm that the approval holds for the criteria below, or ask for a new review: until you do, Claude counts this card as not approved.'
+          : 'Confirm here, on this computer, for Claude to count the approval: until you do, it counts this card as not approved.';
+      approveCrit.replaceChildren(...(changed && Array.isArray(c.criteria) ? c.criteria.map((t) => h('li', null, String(t))) : []));
       const wc = workerChips(c.workedBy);
       metaWorked.replaceChildren(...(wc ? [wc] : []));
       if (workedDt) workedDt.hidden = metaWorked.hidden = !wc;

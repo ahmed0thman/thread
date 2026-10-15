@@ -1,6 +1,13 @@
   // ---------- the List view: a sortable, filterable table of the project's cards ----------
 
   // ---- list model (list-page.test.mjs runs this block on its own, with the "milestones and stages" block) ----
+  // The number a card is ordered by: its count (c37 is 37) or, for a repo-backed project's random id (c8k2x1), its creation time, which is
+  // greater than any count, so the older numbered cards come first and the others in the order they were made.
+  function cardNum(c) {
+    const m = /^c(\d+)$/.exec(String(c.id));
+    return m ? Number(m[1]) : Date.parse(c.createdAt) || 0;
+  }
+
   const PRIORITY_RANK = { high: 3, normal: 2, low: 1 };
   const PRIORITY_LABEL = { high: 'High', normal: 'Normal', low: 'Low' };
   const TYPE_ORDER = ['task', 'bug', 'idea', 'thread', 'milestone'];
@@ -28,7 +35,7 @@
       const updatedMs = Date.parse(c.updatedAt);
       return {
         id: c.id,
-        num: parseInt(String(c.id).replace(/\D/g, ''), 10) || 0,
+        num: cardNum(c),
         card: c,
         type: rowType(c),
         bug: c.kind !== 'milestone' && c.type === 'bug',   // an idea or a thread keeps its bug mark beside its own type

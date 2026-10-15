@@ -73,3 +73,5 @@
 .crit-row .crit-rm { flex: none; width: 32px; padding: 0; font-size: 16px; line-height: 1; }
 .crit-add { display: flex; }
 .verify-note .tag { flex: none; }
+.verify-note .ap-crit { flex: 1 1 100%; font-size: 12.5px; }
+.verify-note .ap-crit li { overflow-wrap: anywhere; }

@@ -2,7 +2,7 @@
 
   // ---- routes (shell-page.test.mjs runs this block on its own) ----
   // Every address is a hash. '#/' is the projects home, '#/<project>' a project's default view, '#/<project>/<view>' one of its views
-  // and '#/<project>/<card>' a card's page. A view is a word and a card id is 'c' and digits (or 'new'), so the two never collide.
+  // and '#/<project>/<card>' a card's page. A view is a word and a card id is 'c' with letters and digits and at least one digit, such as c37 or c8k2x1 (or 'new'), so the two never collide.
   // The old '#<card>' form has no project part and opens the card in the selected project.
   const VIEWS = ['summary', 'board', 'list', 'milestones', 'waiting'];
   const VIEW_LABEL = { summary: 'Summary', board: 'Board', list: 'List', milestones: 'Milestones', waiting: 'Waiting' };
