@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { setupThreadEnv, cleanAmbientEnv, waitFor, McpClient, PARENT_SESSION } from './helpers.mjs';
+import { setupThreadEnv, cleanAmbientEnv, waitFor, McpClient, PARENT_SESSION, TEST_DIR, runNode } from './helpers.mjs';
 import * as core from '../server/core.mjs';
 
 cleanAmbientEnv();
@@ -116,6 +116,44 @@ test('tightenDataDir with no data folder yet does nothing and does not throw', P
   e.setEnv('THREAD_DATA_DIR', path.join(e.base, 'not-there'));
   core.tightenDataDir();
   assert.equal(fs.existsSync(path.join(e.base, 'not-there')), false);
+});
+
+// Each MCP start is its own process, so the "no second walk" proofs run test/fixtures/tighten-once.mjs
+// as a child with THREAD_DATA_DIR already set.
+test('the walk of the projects tree runs once per data directory, remembered in a marker file, and again after it is deleted', POSIX, async (t) => {
+  const e = setupThreadEnv(t);
+  const data = freshDataDir(t, e);
+  fs.mkdirSync(data);
+  const logs = path.join(data, 'projects', 'abc123', 'logs');
+  fs.mkdirSync(logs, { recursive: true });
+  const looseBefore = path.join(logs, 'c1.out');
+  fs.writeFileSync(looseBefore, 'x');
+  fs.chmodSync(looseBefore, 0o644);
+
+  core.tightenDataDir();
+
+  const marker = path.join(data, '.tightened-v1');
+  assert.equal(octal(looseBefore), '600', 'the first call walks the projects tree');
+  assert.equal(octal(path.join(data, 'projects', 'abc123')), '700');
+  assert.equal(fs.existsSync(marker), true, 'the pass left its marker');
+  assert.equal(octal(marker), '600', 'the marker is owner-only');
+
+  const looseAfter = path.join(logs, 'c2.out');
+  fs.writeFileSync(looseAfter, 'x');
+  fs.chmodSync(looseAfter, 0o644);
+  const skipped = await runNode([path.join(TEST_DIR, 'fixtures', 'tighten-once.mjs'), data], { env: { ...process.env, THREAD_DATA_DIR: data } });
+  assert.equal(skipped.code, 0, skipped.stderr);
+  assert.equal(fs.existsSync(marker), true, 'the marker survives');
+  assert.equal(octal(looseAfter), '644', 'a start after the marker skips the walk');
+
+  const looseAgain = path.join(logs, 'c3.out');
+  fs.writeFileSync(looseAgain, 'x');
+  fs.chmodSync(looseAgain, 0o644);
+  fs.rmSync(marker);
+  const walked = await runNode([path.join(TEST_DIR, 'fixtures', 'tighten-once.mjs'), data], { env: { ...process.env, THREAD_DATA_DIR: data } });
+  assert.equal(walked.code, 0, walked.stderr);
+  assert.equal(octal(looseAgain), '600', 'the marker deleted, the next start walks again');
+  assert.equal(fs.existsSync(marker), true, 'the new pass wrote the marker again');
 });
 
 test('the MCP server tightens an existing data folder when it starts, and state written by an older version stays readable', POSIX, async (t) => {

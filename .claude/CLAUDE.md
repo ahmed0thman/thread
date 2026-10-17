@@ -14,7 +14,7 @@ skills/             the slash commands; each SKILL.md tells Claude which tool to
 server/
   state.mjs         paths, the state file and its lock; the read and write of a repo-backed project (it joins repo.mjs in)
   repo.mjs          the board kept in the repo (.claude/thread/): the main checkout, card files, the join with this machine's overlay, the one-time copy, drift; imports only fields.mjs
-  config.mjs        settings: mode, stages and roles, global and per-project files
+  config.mjs        settings: mode, wake, codeMap, stages and roles, global and per-project files
   sessions.mjs      session names, and the model a session runs on
   core.mjs          cards, milestones, threads, the wrong-session guard, project listing
   lanes.mjs         delegation lanes: reads the lane settings from the delegate skills (never writes them)
@@ -24,6 +24,7 @@ server/
   notify.mjs        "Notify Claude" requests on cards Claude has not seen: which are open, and the line the prompt hook adds
   fields.mjs        card fields (type, priority, labels, blockedBy, criteria), history workers, workedBy; no imports
   runner.mjs        the detached process that runs one thread turn
+  codemap.mjs       the note a new thread gets when `codeMap` is on and the project has a Graphify map (graphify-out/GRAPH_REPORT.md); only checks the file exists
   mcp.mjs           the MCP server and its tools
   http.mjs          the board server (loopback only, token, Host and Origin checks); also the remote policy and allowlist of the tunnel's listener
   tunnel.mjs        the opt-in Cloudflare tunnel: finds and runs cloudflared, the pid file, the manager (token, lifetime, listener)

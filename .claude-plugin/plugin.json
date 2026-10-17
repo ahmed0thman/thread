@@ -1,21 +1,21 @@
 {
   "name": "thread",
-  "version": "0.17.1",
-  "description": "Side threads that start from a short brief of the session (or a full copy), report back on demand, and can run as a sub-agent or on another coding CLI through your delegation lanes, plus a project board of tasks, ideas and milestones (summary, kanban, list, your own stages, a done gate) that can live in your repo to follow you across devices, wake the session when you answer on it, and open on your phone through a tunnel you turn on.",
+  "version": "0.18.0",
+  "description": "Manage AI agents and project tasks from a local board in Claude Code. See active workers, track task states and milestone progress, answer questions and approve work across sub-agents, side threads and delegation lanes.",
   "author": {
     "name": "Ahmed Hisham"
   },
   "license": "MIT",
   "keywords": [
-    "claude-code",
-    "side-threads",
-    "background-agents",
-    "subagents",
-    "kanban",
     "project-management",
-    "task-board",
+    "agent-management",
+    "task-management",
+    "claude-code",
+    "ai-agents",
+    "kanban",
     "milestones",
     "human-in-the-loop",
+    "side-threads",
     "delegation",
     "codex",
     "mcp"

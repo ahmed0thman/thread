@@ -38,3 +38,15 @@
   .s-pulse { opacity: 1; }
   .btn.busy::after { border-top-color: var(--muted); }
 }
+
+/* Printing: on screen html, body and the main panes clip (each pane scrolls itself), so a print stops
+   after one screen. Let everything flow again; the screen look is untouched, this only applies to print. */
+@media print {
+  html, body { overflow: visible; height: auto; }
+  #app { height: auto; max-height: none; }
+  .board, .pane { overflow: visible; }
+  .col-body, .list-scroll, .scroller, .dr-body, .dr-foot { overflow: visible; }
+  .ws, .drawer { position: static; width: auto; border-left: 0; box-shadow: none; }
+  .overlay, .scrim, .wp-scrim, .send-bar, .banner { display: none; }   /* fixed interactive overlays would sit on every page */
+  .toolbar .btn, #theme-btn { display: none; }   /* toolbar buttons (New card, the chips, the theme switch) are screen-only controls */
+}

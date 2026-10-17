@@ -74,3 +74,15 @@
 .kindmark .shape { width: 9px; height: 9px; }
 .muted { color: var(--muted); }
 
+/* In a forced-colour mode (Windows High Contrast) element backgrounds and borders are replaced with the
+   scheme's own colours, so the filled shapes would sit in the page's Canvas and read as empty. Take the
+   shapes out of the forcing and paint them in the scheme's text colour: it always contrasts with the
+   scheme's canvas (which is what sits behind them), so every shape stays visible. The normal look is
+   untouched; this only applies while forcing is on. */
+@media (forced-colors: active) {
+  .shape, .shape::before, .shape::after {
+    forced-color-adjust: none;
+    color: CanvasText !important;
+  }
+}
+

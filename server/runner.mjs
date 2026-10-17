@@ -392,7 +392,7 @@ async function main() {
     errStream.write(header);
   } catch { /* logging is best effort */ }
 
-  const prompt = buildPrompt(card);
+  const prompt = buildPrompt(card, projectDir);
   // A lane record that is present but unusable must never fall through to running claude.
   const tl = card.thread.lane;
   if (tl != null) {

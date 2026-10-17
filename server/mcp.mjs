@@ -266,6 +266,7 @@ const TOOLS = [
         scope: { type: 'string', enum: CONFIG_SCOPES, description: '"global" applies to every project that has no setting of its own; "project" only to this one.' },
         mode: { type: ['string', 'null'], enum: [...CONFIG_MODES, null], description: '"tasks" (threads and the task board) or "chat" (threads only). null removes it from this scope.' },
         wake: { type: ['boolean', 'null'], description: 'true lets an answer, a "Report to main session" click or a "Notify Claude" click on the board wake an idle session within a few seconds, instead of waiting for the next message; false is the default. null removes it from this scope. true needs the user\'s agreement: see confirm_code.' },
+        codeMap: { type: ['boolean', 'null'], description: 'true tells every new thread in the project to use its Graphify code map (graphify-out/GRAPH_REPORT.md) when one exists, to find where to look; false is the default. The map can be out of date, so the thread is also told to confirm in the code. thread only checks that the file exists: the user installs Graphify and builds the map. null removes it from this scope. No confirmation needed.' },
         confirm_code: CONFIRM_PROP,
         stages: {
           type: ['array', 'null'],
@@ -554,6 +555,7 @@ function configText(cfg, info) {
   return [
     `Set up: ${cfg.configured ? 'yes' : 'no (no config file exists; the defaults are in use)'}`,
     `Mode: ${chat ? 'chat (threads only; the task board is off)' : 'tasks (threads and the task board)'} — from ${from(cfg.source.mode)}`,
+    `Code map (Graphify) note for new threads: ${cfg.codeMap ? 'on' : 'off (default)'} — from ${from(cfg.source.codeMap)}`,
     `Wake the session from the board: ${cfg.wake ? 'on (an answer or a click on the board wakes an idle session)' : 'off (they reach the session with the next message)'} — from ${from(cfg.source.wake)}`,
     ...board,
     `Global config file: ${file('global')}`,
@@ -1032,8 +1034,9 @@ const HANDLERS = {
     if (!scope) throw new ToolError('argument "scope" is required (global or project)');
     if (process.env.THREAD_DEPTH) throw new ToolError('a side thread cannot change the plugin settings');
     const mode = args.mode === null ? null : optEnum(args, 'mode', CONFIG_MODES);
-    const { stages, roles, reset, wake, repo } = args;
+    const { stages, roles, reset, wake, repo, codeMap } = args;
     if (wake !== undefined && wake !== null && typeof wake !== 'boolean') throw new ToolError('argument "wake" must be true, false or null');
+    if (codeMap !== undefined && codeMap !== null && typeof codeMap !== 'boolean') throw new ToolError('argument "codeMap" must be true, false or null');
     if (repo !== undefined && typeof repo !== 'boolean') throw new ToolError('argument "repo" must be true or false');
     if (repo === false) throw new ToolError('keeping the board in the repo is turned off by deleting the .claude/thread/ folder by hand (the cards in it go with it: commit them or copy them first)');
     if (repo === true && scope !== 'project') throw new ToolError('repo: true belongs to scope "project": it is this project\'s board that is kept in its repo');
@@ -1046,21 +1049,21 @@ const HANDLERS = {
       await core.startRepo(pd);
     }
     if (reset === true) {
-      if (mode !== undefined || wake !== undefined || stages !== undefined || roles !== undefined) throw new ToolError('reset deletes the config file; give no other setting with it');
+      if (mode !== undefined || wake !== undefined || codeMap !== undefined || stages !== undefined || roles !== undefined) throw new ToolError('reset deletes the config file; give no other setting with it');
       cfg = await core.resetConfig(pd, scope);
     } else {
-      if (mode === undefined && wake === undefined && stages === undefined && roles === undefined && repo !== true) throw new ToolError('nothing to change: give mode, wake, stages, roles, repo or reset');
+      if (mode === undefined && wake === undefined && codeMap === undefined && stages === undefined && roles === undefined && repo !== true) throw new ToolError('nothing to change: give mode, wake, codeMap, stages, roles, repo or reset');
       if (wake === true) {
         const ask = wakeGuard(scope, optStr(args, 'confirm_code'));
         if (ask) return ask;
       }
-      cfg = await core.saveConfig(pd, scope, { mode, wake, stages, roles });
+      cfg = await core.saveConfig(pd, scope, { mode, wake, codeMap, stages, roles });
     }
     const gone = core.readState(pd).cards.filter((c) => c.kind !== 'thread' && !cfg.taskStages.some((st) => st.id === c.status)).length;
     const cards = gone
       ? `In this project, ${gone} card(s) have a status that is no longer a stage; they show in the start stage (${cfg.taskRoles.start}). Threads follow their state.`
       : 'In this project, every card is in a current stage. Threads follow their state.';
-    const saved = reset === true ? `The ${scope} config file was deleted.` : mode === undefined && wake === undefined && stages === undefined && roles === undefined ? 'The board of this project is now kept in the repo.' : `Saved to the ${scope} config file.`;
+    const saved = reset === true ? `The ${scope} config file was deleted.` : mode === undefined && wake === undefined && codeMap === undefined && stages === undefined && roles === undefined ? 'The board of this project is now kept in the repo.' : `Saved to the ${scope} config file.`;
     return `${saved}\n\n${configText(cfg, core.repoInfo(pd))}\n\n${cards}`;
   },
 

@@ -2,7 +2,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdir, rename, rm, rmdir, stat, writeFile, unlink } from 'node:fs/promises';
-import { closeSync, constants, copyFileSync, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, constants, copyFileSync, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { cardsSignature, commitState, driftOf, ensureGitignore, importDrift, importOnce, mainCheckout, mergeState, newCardId, repoRootOf, resumeCopy, runCopy, storeRoot, worktreesOf } from './repo.mjs';
@@ -66,7 +66,7 @@ export function projectPaths(projectDirArg) {
 
 // Everything the plugin keeps (the state, logs, briefs, run reports) is for its owner only: folders 0700, files 0600. A folder the
 // plugin creates and a file it writes get these modes at once; tightenDataDir() fixes what an older version made with the default
-// modes, once per process. A mode is a POSIX idea, so on Windows none of this does anything.
+// modes, walking the projects tree once per data directory. A mode is a POSIX idea, so on Windows none of this does anything.
 export const PRIVATE_DIR = 0o700;
 export const PRIVATE_FILE = 0o600;
 const POSIX = process.platform !== 'win32';
@@ -96,20 +96,29 @@ function tightenOne(path, isDir) {
 
 function tightenTree(dir) {
   let entries;
-  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+  let all = true;   // false when some folder below could not be read: the pass is not complete
   for (const e of entries) {
     const full = join(dir, e.name);
     if (e.isSymbolicLink()) continue;
-    if (e.isDirectory()) { if (tightenOne(full, true)) tightenTree(full); } else if (e.isFile()) tightenOne(full, false);
+    if (e.isDirectory()) { if (tightenOne(full, true) && !tightenTree(full)) all = false; } else if (e.isFile()) tightenOne(full, false);
   }
+  return all;
 }
 
 const tightened = new Set();
 // The plugin's own entries at the top of the data directory. THREAD_DATA_DIR may name a folder that holds other things too,
 // so only these and the projects tree are touched, and the folder itself only when it is the plugin's own default.
 const OWN_TOP_FILES = ['config.json', 'board.token', 'board.stopped', 'setup-hint'];
+// The mark a full pass leaves: it records that the projects tree has had its walk, so the next start does only the cheap part. The
+// name carries the version, so a future change that must walk again bumps it; an older version of the plugin knows nothing of the
+// file and walks as it always did. Written with flag 'wx': two starts at once walk twice but the marker is created once.
+const TIGHTENED_MARKER = '.tightened-v1';
 // Makes the plugin's data owner-only. Only what the current user owns, is not a symlink and is not hard-linked is touched,
-// and nothing outside the data directory. Never throws; a filesystem that ignores modes just keeps what it has.
+// and nothing outside the data directory. Never throws; a filesystem that ignores modes just keeps what it has. The data dir itself
+// and the plugin's own top files are tightened at every start (cheap); the walk of the projects tree runs once per data directory,
+// and a start that finds the marker skips it — files written since carry their modes at creation. The walk has to get all the way
+// through before the marker is written: a pass cut short is done again at the next start.
 export function tightenDataDir() {
   if (!POSIX) return;
   const root = dataDir();
@@ -119,8 +128,13 @@ export function tightenDataDir() {
     if (!lstatSync(root).isDirectory()) return;   // missing, or a symlink: left alone
     if (!envValue('THREAD_DATA_DIR')) tightenOne(root, true);
     for (const name of OWN_TOP_FILES) tightenOne(join(root, name), false);
+    let walked = false;
+    try { walked = lstatSync(join(root, TIGHTENED_MARKER)).isFile(); } catch { /* not there yet */ }
+    if (walked) return;
     const projects = join(root, 'projects');
-    if (tightenOne(projects, true)) tightenTree(projects);
+    if (tightenOne(projects, true) && tightenTree(projects)) {
+      try { writeFileSync(join(root, TIGHTENED_MARKER), '', { flag: 'wx', mode: PRIVATE_FILE }); } catch { /* another process wrote it, or it cannot be written */ }
+    }
   } catch { /* best effort */ }
 }
 

@@ -14,6 +14,7 @@ import { ChatOnlyError, DEFAULT_STAGES, readConfig } from './config.mjs';
 import { openWaits, reviewApproved } from './waits.mjs';
 import { notifyActive } from './notify.mjs';
 import { CARD_ID_RE, CARD_ID_SRC, FIELD_NAMES, addHistory, cardById, claudeCard, cleanFields, cleanWorker, criteriaCut, criteriaHash, finishedStageIds, gatedByCriteria, hasCriteria, leftDoneAt, liveBlockers, pinLeftDone as pinExit, threadById, watchFinished } from './fields.mjs';
+import { codeMapNote } from './codemap.mjs';
 import { RESUME, laneSnapshot, requireRunnableLane, unusableLane } from './lanes.mjs';
 
 export * from './state.mjs';
@@ -913,7 +914,8 @@ export function readActivity(projectDirArg, cardId, turnNumber) {
   return events;
 }
 
-export function buildPrompt(card) {
+// projectDirArg (the folder the thread runs in) is given by the runner. Without it, or with the codeMap setting off (the default), there is no code map note.
+export function buildPrompt(card, projectDirArg) {
   const t = card.thread;
   const turn = t.turns[t.turns.length - 1];
   const text = turn ? turn.prompt : '';
@@ -921,6 +923,7 @@ export function buildPrompt(card) {
   const laneRead = t.lane != null && t.mode !== 'write' ? [LANE_READ_NOTE] : [];
   if (!t.sessionId && !(t.lane && t.lane.session)) {
     const brief = threadContext(t) === 'brief';
+    const mapNote = projectDirArg && readConfig(projectDirArg).codeMap ? codeMapNote(projectDirArg) : '';
     const context = brief && typeof t.brief === 'string' && t.brief.trim() ? ['## Context', t.brief.trim()] : [];
     return [
       `[side thread ${card.id}: ${card.title}]`,
@@ -933,6 +936,7 @@ export function buildPrompt(card) {
         ? 'You may edit files. Keep changes limited to this task.'
         : 'Do not modify any files. Read, search and analyse only.',
       ...laneRead,
+      ...(mapNote ? [mapNote] : []),
       'End your reply with a hand-back digest using exactly these headings: "## Happened", "## Decided", "## Changed", "## Open".',
       MAP_INSTRUCTION,
     ].join('\n');

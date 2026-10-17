@@ -1,6 +1,6 @@
-# thread
+# thread — Project management for AI agents
 
-**Side threads and a project board for Claude Code.** Hand a question or a task to a background Claude session without derailing the one you are in, keep the work on a local kanban board, and answer Claude's questions there instead of in the chat.
+**Manage your AI workers from one project board in Claude Code.** See who is working, where each task stands, how much is left before a milestone, and what needs your decision.
 
 [![Release](https://img.shields.io/github/v/release/ahmed0thman/thread)](https://github.com/ahmed0thman/thread/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -13,33 +13,34 @@ claude plugin marketplace add ahmed0thman/thread
 claude plugin install thread@thread-marketplace
 ```
 
-While Claude is busy on one task, you often think of something else: a question that needs real digging, a doubt about the plan, an idea for later. Asking it in the same session derails the work. Opening a new session loses the context you have built up.
+You manage the project. Claude, its sub-agents, side threads and agents on your delegation lanes do the work. `thread` gives that work a local board: tasks with workers, stages and milestones, with questions and reviews on the cards they belong to.
 
-`thread` gives you a third option. A **thread** is a background Claude session with its own tools that works on one task while the main session carries on. Claude gives it a short **brief** of what it needs from your conversation, so it starts cheap, and picks a sub-agent or model that suits how hard the task is. If the task needs everything said so far, a thread can instead be a **full copy** of the session. Nothing it does enters the main session until you ask for its report.
+Open a project to see its progress. Find the cards being worked on now. Check a worker's prompt, steps and report. Answer questions, choose a direction, or request changes. You can steer the work from the board while the agents carry on.
 
 ## What you get
 
-- **Side threads.** `/thread:new <task>` starts a background session from a short brief; `/thread:report` pulls its digest (what happened, what was decided, what changed, what is still open) into the main session only when you want it. Send follow-ups from the board or the chat.
-- **A board for every project.** A local web page with a Summary, a kanban Board, a List, Milestones and a Waiting view: tasks, ideas, bugs, priorities, labels, blockers, acceptance criteria, and every sub-agent run on a card with its prompt, steps and report. Your own stages, or threads only.
-- **Waiting for you.** Claude raises questions, choices, to-dos and reviews on the card they belong to. You answer them on the board, all at once, and the answers reach the session that asked.
-- **Wake the session.** Optionally, an answer, a "Report to main session" click or a "Notify Claude" click on the board starts Claude working right away, without typing in the chat.
-- **A done gate.** A card with acceptance criteria cannot be marked done until you approve a review of it.
-- **Delegation lanes.** A thread can run on another coding CLI, such as OpenAI Codex, Google Antigravity, OpenCode or a separate Claude session, with its own model and effort, through the [delegate skills](https://github.com/amElnagdy/delegate-skills) by Ahmed Nagdy.
-- **The board in your repo.** Optionally keep a project's cards as files in `.claude/thread/`, so the board follows the repository to every device and worktree.
-- **On your phone.** `/thread:board --tunnel` opens the board through a temporary, token-protected Cloudflare link.
-- **Local and small.** Plain Node, no dependencies, no build step. The board listens on `127.0.0.1` only and makes no network calls.
+- **See who is working now.** A pulse marks cards with a running sub-agent or thread. The card's **Worker** field shows who is working now, its saved worker or the last one used. A searchable picker lets you choose a sub-agent or delegation lane. **Worked by** records who did the work.
+- **Know where the project stands.** The Summary shows open work, cards created and done per week, work by worker with token use, the oldest waiting items and milestones. The Milestones view shows progress such as **7 of 15 done**.
+- **Plan and track the tasks.** Keep tasks, ideas and bugs on a kanban Board with your own stages, or in a List. Set priorities, labels, blockers and acceptance criteria. Sub-agent runs linked to a card keep their prompt, steps and report there.
+- **Make the decisions and approve the work.** Questions, choices, to-dos and reviews stay on their cards. Answer across the board, then send the answers together. Claude cannot mark a card with acceptance criteria done until you approve a review.
+- **Give a task its own thread.** `/thread:new <task>` starts a background Claude session from a short brief. Continue it from the board or chat. `/thread:report` brings its digest into the main session only when you ask: Happened, Decided, Changed and Open.
+- **Choose the workers for the job.** Delegation lanes run threads on Codex, OpenCode, Antigravity or another Claude session, with their own model and effort. Lanes use the [delegate skills](https://github.com/amElnagdy/delegate-skills) by Ahmed Nagdy.
+- **Keep work moving from the board.** With optional waking turned on, an answer, a **Report to main session** click or a **Notify Claude** click wakes the idle session to act.
+- **Keep the board with the project.** Optionally store task, idea and milestone cards as files in `.claude/thread/`, so they follow the repository to every device and worktree.
+- **Check in from your phone.** `/thread:board --tunnel` opens the board through a temporary, token-protected Cloudflare link.
+- **Local and small.** Plain Node, no dependencies, no build step. The local board listens on `127.0.0.1`, requires an access token and makes no network calls.
 
 A short tour. Every screenshot in this README shows an invented shop, `acme-shop`.
 
-**The Summary** is where a project opens: what is open, in progress, done this week, what bugs are open, what waits for you, who did the work and at what token cost.
+**The Summary** gives you the project view: open work, weekly progress, work by worker with token use, decisions waiting for you and milestone progress.
 
 ![The Summary of a project: five count tiles, cards created and done per week, work by worker with tokens, the items waiting for you and the milestones](docs/summary.png)
 
-**The Board** shows the cards in columns. Each card carries its type, priority, labels, milestone and, when it has them, blocked, acceptance criteria and waiting marks.
+**The Board** shows where each task stands. Cards carry their type, priority, labels and milestone, with marks for blockers, acceptance criteria and items waiting for you.
 
 ![The Board with the columns Idea, New, In progress, Review, Blocked and Done; cards show a bug icon, priority arrows, label chips, a milestone tag, blocked and criteria marks, waiting tags, and a finished thread](docs/board.png)
 
-**A thread** opens full-window: its details and brief on the left, the conversation in the centre, the step-by-step trace on the right.
+**A thread** lets you inspect a worker's task: details and brief on the left, conversation in the centre, trace on the right.
 
 ![A finished thread opened full-window: its session and details on the left, the conversation with its Happened, Decided and Open digest in the centre, and the trace on the right](docs/thread.png)
 
@@ -54,6 +55,7 @@ More screens are in [The board](#the-board) and in the [use cases](#use-cases).
 - [Commands](#commands)
 - [Tools Claude uses](#tools-claude-uses)
 - [Choosing the agent and model](#choosing-the-agent-and-model)
+- [Code maps (Graphify)](#code-maps-graphify)
 - [Waiting for you](#waiting-for-you)
   - [Waking the session](#waking-the-session)
 - [Milestones](#milestones)
@@ -302,7 +304,7 @@ Your team does not use "Idea, New, In progress, Review, Blocked, Done". You use 
 /thread:setup
 ```
 
-Claude asks whether the setting is for every project or this one, whether you want threads only or threads plus the task board, for the task board how you work, and whether the board may wake an idle session. You describe it in your own words ("I write a task, start it, someone reviews it, then it's finished"). Claude proposes the stages and says which one each part of the plugin will use ("a running thread sits in Doing"). You change the list until you agree, and Claude saves it. See [Setup](#setup) and [Custom stages](#custom-stages).
+Claude asks whether the setting is for every project or this one, whether you want threads only or threads plus the task board, for the task board how you work, whether the board may wake an idle session, and whether new threads should use a project's Graphify code map. You describe it in your own words ("I write a task, start it, someone reviews it, then it's finished"). Claude proposes the stages and says which one each part of the plugin will use ("a running thread sits in Doing"). You change the list until you agree, and Claude saves it. See [Setup](#setup) and [Custom stages](#custom-stages).
 
 ### 12. Threads only, no task board
 
@@ -396,7 +398,7 @@ See [Milestones](#milestones) and [Card fields, workers and the done gate](#card
 | `/thread:end <id>` | End a thread, stopping it if it is running, and mark its card done. |
 | `/thread:board [--stop] [--parent <id>] [--tunnel [stop]]` | List the cards by stage (a card with items waiting for you shows `(2 waiting)`) and print the board link, which opens the project on its Summary. `--parent <id>` shows the report for one milestone instead. Milestones are listed in their own section, with their state. `--stop` stops the board web page (and a tunnel). `--tunnel` also prints a remote link for your phone, through a Cloudflare tunnel that lasts 12 hours, after asking you first; `--tunnel stop` closes it. See [Opening the board from your phone](#opening-the-board-from-your-phone-tunnel). |
 | `/thread:add [--milestone] [--parent <id>] [--lane <name>] <task or idea>` | Add a card without acting on it. `--milestone` makes the card a milestone. `--parent` puts the card under a milestone. `--lane` labels a task or idea with a [delegation lane](#delegation-lanes). |
-| `/thread:setup [--show] [--reset]` | Choose chat-only or the task board, your own stages, whether an answer or report click on the board [wakes an idle session](#waking-the-session), whether this project's cards are [kept in the repo](#keeping-the-board-in-your-repo-claudethread), and whether that applies to every project or this one. `--show` prints the current settings. `--reset` deletes a settings file. |
+| `/thread:setup [--show] [--reset]` | Choose chat-only or the task board, your own stages, whether an answer or report click on the board [wakes an idle session](#waking-the-session), whether new threads use a [Graphify code map](#code-maps-graphify), whether this project's cards are [kept in the repo](#keeping-the-board-in-your-repo-claudethread), and whether that applies to every project or this one. `--show` prints the current settings. `--reset` deletes a settings file. |
 | `/thread:track` | Claude loads this itself, so that an instruction you give mid-task becomes a card, cards move as the work moves, and anything Claude needs from you is put on the card as a [waiting item](#waiting-for-you). You can also invoke it by hand. |
 
 ```text
@@ -480,6 +482,20 @@ You find and list things in the codebase. Report facts with file paths. Do not s
 ```
 
 An agent whose description is vague gets picked for the wrong jobs, or never. An agent that should only run when you ask for it should say so in its description.
+
+## Code maps (Graphify)
+
+If your project has a [Graphify](https://github.com/Graphify-Labs/graphify) code map, thread can tell a new thread to use it to find where to look instead of opening many files. **It is off by default**, because a map built before recent changes can be out of date. Turn it on with `/thread:setup` (the last question: should new threads use a code map when the project has one) or by asking Claude to call `config_set` with `codeMap: true` (`scope: "global"` for every project, `"project"` for one; `null` removes it from that scope; `config_get` shows the value and where it came from).
+
+With it on, when a thread starts (from `/thread:new`, from a card with **Start as thread**, or on a [delegation lane](#delegation-lanes)), thread checks whether `graphify-out/GRAPH_REPORT.md` exists in the folder the thread runs in, or else at the root of that folder's git repository, and if it does, adds a short note to the thread's first prompt. A follow-up turn does not repeat it. With the setting off, or with no map, the prompt is exactly what it was before, even if a map exists.
+
+The note says the project has a code map in `graphify-out/`, to start with `GRAPH_REPORT.md` (and the `/graphify` skill, if installed), and to use the map to decide which files matter. It also says the map is an index and not the source of truth: the thread must read the actual code before deciding or changing anything, the code wins when they disagree, and a result missing from the map does not prove something does not exist, so it should confirm with a text search. When `GRAPH_REPORT.md` is older than the project's last commit (`git log -1`), the note adds that the map may be out of date.
+
+**What thread does and does not do.** It only looks for a file that already exists (a regular file; a symlinked `graphify-out/` or `GRAPH_REPORT.md` is ignored). It does not install, run or build Graphify, does not read the map itself and sends nothing anywhere new.
+
+**Getting a map.** Install Graphify yourself: `uv tool install graphifyy`, then `graphify install`, then build the map by running its `/graphify` skill in the project. Rebuild it when the code has changed a lot. A map can be wrong or incomplete, which is why the note tells the thread to check the code.
+
+**The setting and older versions.** `codeMap` is shared like the mode: for a project [kept in the repo](#keeping-the-board-in-your-repo-claudethread) it goes in `.claude/thread/config.json` (it only adds a note to a prompt, unlike `wake`). An older plugin version ignores it, and if an older version rewrites that file it drops the field.
 
 ## Waiting for you
 
@@ -706,6 +722,7 @@ Claude runs it as a short conversation, one question at a time, using Claude Cod
 
 4. **Waking.** Whether an answer, a report click or a Notify Claude click on the board should wake an idle session (default: no). See [Waking the session](#waking-the-session) before you say yes: a woken session acts without you. If you say yes, Claude shows you what it does once more and saves only after you agree again.
 5. **Where this project's cards are kept.** On this machine (the default), or [in the repo](#keeping-the-board-in-your-repo-claudethread), as files in a `.claude/thread/` folder that you commit. Claude says what that means before it turns it on, and it is a per-project choice. Skipped when the project already keeps its board in the repo.
+6. **Code map.** Whether new threads should use a [Graphify code map](#code-maps-graphify) when the project has one (default: no). Claude says in one sentence what it does and the risk (a map built before recent changes can miss code, so the thread is told to confirm in the files), and that you install Graphify yourself.
 
 Then Claude saves the settings, reports the result in a few lines, and tells you that `/thread:setup` can be run again at any time. Setup never changes a card; moving the cards into the repo copies them (the first time only) and leaves the originals where they were.
 
@@ -727,11 +744,11 @@ Two optional JSON files, with the same shape:
 |---|---|
 | `<data dir>/config.json` | Every project that has no setting of its own for that field. |
 | `<data dir>/projects/<key>/config.json` | That project only. |
-| `<repo>/.claude/thread/config.json` | That project only, when its board is [kept in the repo](#keeping-the-board-in-your-repo-claudethread): the `mode`, `stages` and `roles` (the repo file wins over the project file in the data directory, which keeps working for a project that was set up before it moved). `wake` is never read from it. |
+| `<repo>/.claude/thread/config.json` | That project only, when its board is [kept in the repo](#keeping-the-board-in-your-repo-claudethread): the `mode`, `codeMap`, `stages` and `roles` (the repo file wins over the project file in the data directory, which keeps working for a project that was set up before it moved). `wake` is never read from it. |
 
 `<data dir>` is the plugin's data directory, otherwise `~/.claude/thread-data` (see [Configuration](#configuration)). `/thread:setup --show` prints both paths, so you do not have to work out `<key>`.
 
-The effective settings for a project are the defaults, then the global file, then the project file. A field in a later file replaces the same field from an earlier one. The `mode` and `wake` are each chosen on their own. `stages` and `roles` always come together from one file, never mixed from two. A file that cannot be read, or that fails the checks below, is ignored, with a line on the plugin's stderr log; it does not stop anything.
+The effective settings for a project are the defaults, then the global file, then the project file. A field in a later file replaces the same field from an earlier one. The `mode`, `wake` and `codeMap` are each chosen on their own. `stages` and `roles` always come together from one file, never mixed from two. A file that cannot be read, or that fails the checks below, is ignored, with a line on the plugin's stderr log; it does not stop anything.
 
 Every field is optional. Here is a complete file:
 
@@ -739,6 +756,7 @@ Every field is optional. Here is a complete file:
 {
   "mode": "tasks",
   "wake": false,
+  "codeMap": false,
   "stages": [
     { "id": "todo", "label": "To do" },
     { "id": "doing", "label": "Doing" },
@@ -1091,7 +1109,7 @@ By default a project's cards live in the plugin's data directory, on one machine
 In the repo, under `.claude/thread/`:
 
 - `cards/<id>.json`, one file per task, idea or milestone: its title, note, stage, kind, milestone, lane or agent (its worker), type, priority, labels, blocked-by list, acceptance criteria and history, its [waiting items](#waiting-for-you) with their answers (the done gate depends on them), and the times it was created and last changed. A file is written atomically (a temporary file, then a rename), with the keys in a fixed order and a newline at the end, so `git diff` stays small; a field this version does not know is kept when the card is rewritten. A call that changes nothing writes nothing.
-- `config.json`, the project's `mode`, `stages` and `roles` (see [Setup](#where-the-settings-live)). It never holds `wake`: whether the board may wake a session is a choice of each machine, and a `wake` that someone commits there is ignored.
+- `config.json`, the project's `mode`, `codeMap`, `stages` and `roles` (see [Setup](#where-the-settings-live)); `codeMap` only adds a note to a thread's prompt, so it is shared like the mode. It never holds `wake`: whether the board may wake a session is a choice of each machine, and a `wake` that someone commits there is ignored.
 - `.gitignore`, holding `*.tmp`, so that a temporary file left by an interrupted write is never committed. It (and `cards/.gitkeep`, which keeps an empty folder in a commit) is only ever created when nothing is there: a symbolic link in its place, even a dangling one that a cloned repository can carry, is left alone and never written through.
 
 Staying in the plugin's data directory, per machine: thread cards and their run state, the sub-agent runs recorded on a card, logs, locks, waiter files, the board token, the global settings, the `wake` setting, which cards Claude has seen, [Notify Claude](#notify-claude) requests, and which session asked a waiting item, with a fingerprint of the question (so that an answer reaches the session that asked, on the device that asked, and an item id that another device reused for a different question is not ours). The answers given on this machine's board are recorded too (their time and a hash of the answer); the record of an answer to a review item is kept even when the item has gone from the file (the newest 20 per card). Approvals count only from this machine's own record (see [the done gate](#card-fields-workers-and-the-done-gate)). The record of a card whose file has gone from the folder (a pull, another branch checked out) is kept for 30 days in case the file comes back and then dropped; the approvals in it are dropped at once. The record of a card whose file cannot be read for a while (a merge conflict, invalid JSON) is not a card that went away: it is kept as it is, and is all there when the file is fixed. Nothing that holds an absolute path, a session id or a process id is ever written to a repo file. The data directory's `projects/<key>/repo.json` records the copy described below and holds the machine's side of each card.
@@ -1173,7 +1191,7 @@ What the plugin runs, sends and stores:
 
 - **Runs on your machine:** a local MCP server and five hooks (at session start, on each prompt, when a turn ends, and when a sub-agent starts or stops), all plain Node scripts in this repository. The turn-end hook starts a tiny Node process after every turn, whatever the setting; it exits at once when [waking](#waking-the-session) is off, when the session is a headless run, or in a side thread, having read at most the project's settings. Only when waking is on and someone is at the session does it stay, watch the project's settings and state file, and write one small `waiter-<session>.json` file; it makes no network request. The two sub-agent hooks run in every session. `SubagentStart` reads the project's `state.json` and settings and, only if the project has a task or idea and is not chat-only, starts a short background Node process and returns at once (Claude Code writes the agent's `agent-<id>.meta.json` file, which holds the description, only after the start hooks have returned, so the hook cannot wait for it). That process waits up to 5 s for the meta file and, when the description starts with `[cN]` for a task or idea of the project, writes the run into `state.json`, plus the prompt file in the logs folder. `SubagentStop` always reads `state.json` to see whether the agent has a run, and reads the meta file when it has none; for a tracked agent it also reads the agent's transcript, then writes the run, the snapshot and the report file. Without a marker they write nothing and print nothing. For each thread turn it starts the `claude` CLI in the background, in your project folder, or, for a thread on a [delegation lane](#delegation-lanes), the provider's relay script from the delegate skills, which starts that provider's CLI. To list [delegation lanes](#delegation-lanes) it runs the `delegate-setup` skill's `config.mjs load` script with Node, without a shell and with a time limit, at most once every 30 seconds per project; the script only reads, and the plugin never writes the lane config or its approval.
 - **Flags it passes to a thread:** read mode passes `--permission-mode dontAsk` and `--disallowedTools Edit Write NotebookEdit`, so a read thread stays read-only even when your own Claude Code settings skip permission prompts; write mode passes `--permission-mode acceptEdits`. It never passes a flag that skips permissions. Every thread gets `--allowedTools WebSearch WebFetch` (see `THREAD_ALLOW_TOOLS`), and `--add-dir` for folders you named. It never edits your Claude Code settings.
-- **Reads:** the end of the main session's transcript, to get the session's title and its model and effort; for a sub-agent run recorded on a card, that agent's transcript and meta file under `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`) (read-only, only the file recorded on the run, never a symlink or a path from the board page); the agent files in `.claude/agents/`; the two `config.json` settings files; and the output of the delegate script (lane names, providers, models, efforts and whether a project's lane config is approved).
+- **Reads:** the end of the main session's transcript, to get the session's title and its model and effort; for a sub-agent run recorded on a card, that agent's transcript and meta file under `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`) (read-only, only the file recorded on the run, never a symlink or a path from the board page); the agent files in `.claude/agents/`; the two `config.json` settings files; only when the `codeMap` setting is on, whether `graphify-out/GRAPH_REPORT.md` exists in the project and its modification time, compared with the last commit from `git log -1` (run without a shell and with a time limit), to decide if a thread's first prompt gets the [code map](#code-maps-graphify) note (the map itself is never read); and the output of the delegate script (lane names, providers, models, efforts and whether a project's lane config is approved).
 - **A lane run sends your work to another company.** A thread on a lane runs `codex` (OpenAI), `agy` (Google Antigravity), `opencode` (whatever provider its model uses) or a separate `claude` session, through the delegate skills' relay. That CLI sends the brief, your task and whatever files it reads to its own provider, under that provider's terms; the plugin does not control or see this. A write-mode lane lets that provider's CLI edit files in your project and, for `codex` and `claude` lanes, run shell commands there, under that CLI's own sandbox and permission rules and not Claude Code's; a write-mode `opencode` run approves its own actions without asking, and a codex lane whose sandbox is `danger-full-access` has no sandbox at all. The board can start such a run: **Start as thread** on a card that has a lane runs on that lane, in write mode if you choose it in the start step (the lane is the card's: the start step saves a lane you choose there on the card first, and the tunnel cannot set one). Use read mode for a lane unless you want edits, and do not give a lane to a card whose note should not leave your machine.
 - **Sends nothing itself, unless you turn on the tunnel.** The plugin makes no network requests and has no telemetry. Its only listener is the board on `127.0.0.1`, and the board page loads nothing from the internet. The exception is [the tunnel](#opening-the-board-from-your-phone-tunnel), which you start yourself with `/thread:board --tunnel`: it runs `cloudflared`, which connects to Cloudflare, and a second listener on `127.0.0.1` that only that tunnel reaches. Threads are ordinary Claude Code sessions, so they talk to Anthropic as any session does and can search and fetch the web.
 - **Stores,** all in the data directory on your machine:
@@ -1193,7 +1211,7 @@ What the plugin runs, sends and stores:
 
 ## Configuration
 
-Behaviour of the board, the stages and [waking the session](#waking-the-session) (the `wake` setting, off by default) is set with [`/thread:setup`](#setup). Everything else is set with environment variables, in your shell or under `env` in `~/.claude/settings.json`.
+Behaviour of the board, the stages and [waking the session](#waking-the-session) (the `wake` setting, off by default) and the [Graphify code map note](#code-maps-graphify) for new threads (the `codeMap` setting, off by default) are set with [`/thread:setup`](#setup). Everything else is set with environment variables, in your shell or under `env` in `~/.claude/settings.json`.
 
 | Variable | Meaning |
 |---|---|
@@ -1310,6 +1328,7 @@ Files in the data directory:
 
 ## What's new
 
+- **0.18.0** thread now describes itself as project management for AI agents: you manage the project, and Claude, its sub-agents, side threads and lane agents do the work (README, plugin and marketplace descriptions and keywords). Also opt-in, off by default: a new `codeMap` setting (`/thread:setup` asks, or `config_set` with `codeMap: true`) makes a thread's first prompt tell it to use the project's [Graphify code map](#code-maps-graphify), when `graphify-out/GRAPH_REPORT.md` exists, as an index to find where to look, with a note that the code wins over the map and that an older map may be out of date. With the setting off, prompts are unchanged; thread does not run or read Graphify. The board's status shapes stay visible in high-contrast (forced colours) mode, and printing a view prints all of it instead of one screen. The plugin's permission check on its data folder walks the files once instead of at every start.
 - **0.17.1** The card page's **Worker** field shows who works on the card, not only the saved worker: the sub-agent running now (`deep-analyst · working now`, or `3 agents working`), else the saved worker, else the last one Claude used (`deep-analyst · last used`), else Claude (default), with a caption for what **Start as thread** uses. The picker marks **Working now** and **Last used** rows, and the start step preselects the last worker used when no worker is saved and a thread can run as it.
 - **0.17.0** The card's **Lane** select and the start step's separate **Agent** select are replaced by one **Worker** field: a button that shows the card's worker (`Claude (default)`, `agent: reviewer` or a lane) and opens a dialog, **Choose a worker**, with Claude (default) pinned on top, tabs for **Sub-agents**, **Project lanes** and **Global lanes**, one search over name, provider and model, badges for read-only, not approved, relay not installed and "overrides global", and full keyboard use. A card now holds a lane **or a sub-agent** (the new `agent` field, which an older version ignores; setting one takes the other off), and **Start as thread** runs the thread on the card's worker. Claude can set it with `agent` in `board_add` and `board_update`, and `board_list` shows `{agent: name}`. The start step tells the server which lane and agent it showed (`expectLane`, `expectAgent`), and the tunnel cannot set an agent, as it cannot a lane.
 - **0.16.0** In a project kept in the repo, a **Notify Claude** click now wakes the session when waking is on. The click is written only to this machine's record of the repo's cards, which the waiter did not watch, so it reached the session only with your next message. You can now pick a card's lane on the board: a task or idea's page has a **Lane** select (None and the approved lanes, each with its provider and model; Save stores it), and the **Start as thread** step has a lane choice (**Claude (no lane)** or a lane) that is saved on the card when you press Start. A lane that is gone or not approved no longer blocks opening the step, so you can switch it there. The remote (tunnel) page cannot set, change or remove a lane; a save that carries one is refused.
@@ -1341,7 +1360,7 @@ skills/             the slash commands
 server/
   state.mjs         paths, the state file and its lock; the read and write of a project kept in the repo
   repo.mjs          the board kept in the repo: finding the main checkout, the card files, the join with the machine's side, the copy and the old-version hint
-  config.mjs        settings: mode, wake, stages and roles, and the two config files
+  config.mjs        settings: mode, wake, codeMap, stages and roles, and the two config files
   sessions.mjs      session names, and the model a session runs on
   core.mjs          cards, milestones, threads, the wrong-session guard, project listing
   fields.mjs        the optional card fields (type, priority, labels, blocked-by, criteria), workers and card history
