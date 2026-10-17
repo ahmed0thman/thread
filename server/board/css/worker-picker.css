@@ -2,6 +2,10 @@
 .wk-btn { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); text-align: left; cursor: pointer; font: inherit; color: var(--text); }
 .wk-btn:disabled { cursor: not-allowed; }
 .wk-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-main { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+.wk-dot { flex: none; }
+.wk-muted { color: var(--muted); }
+.wk-caption { display: block; margin-top: 4px; }
 .wk-caret { flex: none; width: 7px; height: 7px; margin-right: 2px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: translateY(-2px) rotate(45deg); }
 
 .wp-scrim { position: fixed; inset: 0; z-index: 70; display: flex; align-items: flex-start; justify-content: center; padding: 8vh var(--s4) var(--s4); background: var(--scrim); animation: fade-in 0.15s ease-out; }
@@ -39,6 +43,7 @@
 .wp-badge { padding: 0 6px; font-size: 11.5px; font-weight: 500; color: var(--muted); background: var(--surface-2); }
 .wp-row[aria-selected="true"] .wp-badge { background: var(--surface); }
 .wp-badge.wp-cur { color: var(--accent); font-weight: 600; }
+.wp-badge.wp-now { color: var(--run); font-weight: 600; }
 .wp-badge.attn { color: var(--warn); background: var(--warn-bg); }
 .wp-desc { margin: 0; font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wp-hint { margin: 0; font-size: 12.5px; color: var(--warn); }

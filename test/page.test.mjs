@@ -1191,7 +1191,7 @@ test('the start step has one Worker field in place of the lane and agent selects
   assert.match(html, /step\.appendChild\(field\('Worker', workerBtn, 'f-start-worker'\)\);/);
   assert.match(html, /const \{ lp, ap \} = startPlans\(wkKey\(\)\);/);
   assert.match(html, /lp && lp\.readOnly \? \[\['read', 'Read-only'\]\]/);
-  assert.match(html, /const why = open \|\| workerStartBlocked\(savedCard, P\.startWorker\);/);
+  assert.match(html, /const why = open \|\| workerStartBlocked\(savedCard, P\.startWorker !== undefined \? P\.startWorker : P\.starting \? effectiveWorker\(savedCard, NaN\)\.startKey : undefined\);/, 'the worker chosen in the step, else the one it preselects');
   assert.match(html, /if \(P\.starting\) renderFoot\(\); else syncStart\(\); \}/, 'a worker that loads or changes enables or disables the Start as thread button');
   assert.match(html, /if \(t\.lane\) \{ const f = laneFollowUp\(card\); return f\.ok \? '' : 'This thread cannot take a follow-up\. ' \+ f\.why; \}/);
   assert.match(html, /const laneNote = laneTraceNote\(c\);/);

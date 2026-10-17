@@ -302,6 +302,75 @@
     return el;
   }
   // ---- end working now ----
+  // ---- effective worker (worker-effective.test.mjs runs this block, with the tokens and agents, delegation lanes, workers and working now ones) ----
+  // The Worker field of a task or idea shows who works on the card, not only the worker saved on it (the one Start as thread uses). In this
+  // order: what runs on it now, the saved worker, the last worker Claude used on it, Claude (default). The last one used is the newest of the
+  // card's runs (their agent type) and of the history entries that name a sub-agent or a lane; 'main' and threads are nobody to show.
+  // { key, at }: `key` is 'agent:<type>' or 'lane:<name>', `at` the time in ms (-Infinity when the entry has none); null when there is none.
+  function lastWorkerOf(card) {
+    if (!card || typeof card !== 'object') return null;
+    let best = null;
+    const add = (key, iso) => {
+      const ms = Date.parse(iso);
+      const at = Number.isFinite(ms) ? ms : -Infinity;
+      if (!best || at >= best.at) best = { key, at };   // a tie goes to the later entry
+    };
+    (Array.isArray(card.runs) ? card.runs : []).forEach((r) => {
+      const type = r && typeof r === 'object' && typeof r.agentType === 'string' ? r.agentType.replace(/…$/, '') : '';   // a run keeps a long type cut with …
+      if (type) add('agent:' + type, r.startedAt);
+    });
+    (Array.isArray(card.history) ? card.history : []).forEach((e) => {
+      if (e && typeof e === 'object' && typeof e.worker === 'string' && /^(agent|lane):./.test(e.worker)) add(e.worker, e.at);
+    });
+    return best;
+  }
+  // Whether a thread can run as this worker: a lane that is listed and can be picked, or a sub-agent that is listed (a built-in one such as
+  // general-purpose or Explore is not a file in .claude/agents, so a thread cannot run as it).
+  function workerRunnable(key) {
+    const rows = workerRows();
+    return [].concat(rows.agents, rows.project, rows.global).some((r) => r.key === key && !r.why);
+  }
+  // { state, text, title, caption, startKey, work, last, running }: `state` is now, quiet, saved, last or default; `text` is for the button;
+  // `startKey` what the start step preselects (the saved worker, else the last one used when a thread can run as it, else Claude);
+  // `caption` says what Start as thread uses when the button shows something else ('' otherwise); `running` the keys that are working now.
+  function effectiveWorker(card, nowMs) {
+    const saved = workerOf(card);
+    const work = workState(card);
+    const last = lastWorkerOf(card);
+    const startKey = saved || (last && workerRunnable(last.key) ? last.key : '');
+    const startText = 'Start as thread uses: ' + workerLabel(startKey);
+    const savedText = 'Saved worker: ' + (saved ? workerLabel(saved) : 'none (Claude (default))');
+    const age = (at) => (Number.isFinite(at) && Number.isFinite(nowMs) && nowMs >= at ? ', ' + fmtMs(nowMs - at) + ' ago' : '');
+    const out = { state: 'default', text: workerLabel(''), title: '', caption: '', startKey, work, last: last ? last.key : '', running: [] };
+    if (work) {
+      const shown = work.kind === 'runs' ? work.runs.filter((r) => r.quiet === !work.live) : [];
+      const names = work.kind === 'thread' ? [work.lane || 'thread'] : shown.map((r) => r.type).filter((x, i, a) => a.indexOf(x) === i);
+      out.state = work.live ? 'now' : 'quiet';
+      out.text = work.kind === 'thread' ? names[0] + ' · working now' : shown.length === 1 ? shown[0].type + (work.live ? ' · working now' : ' · quiet') : shown.length + ' agents ' + (work.live ? 'working' : 'quiet');
+      if (work.live) out.running = work.kind === 'thread' ? (work.lane ? ['lane:' + work.lane] : []) : names.map((n) => 'agent:' + n);
+      const same = work.kind === 'runs' && workerKind(saved) === 'agent' && names.every((n) => 'agent:' + n === saved);
+      out.caption = same ? '' : startText;
+      out.title = workTitle(work, nowMs) + '\n' + savedText + '\n' + startText;
+    } else if (saved) {
+      out.state = 'saved';
+      out.text = workerLabel(saved);
+    } else if (last) {
+      out.state = 'last';
+      out.text = workerName(last.key) + ' · last used';
+      out.caption = startText;
+      out.title = 'Last used on this card: ' + workerName(last.key) + ' (' + (workerKind(last.key) === 'lane' ? 'lane' : 'sub-agent') + age(last.at) + ')\n' + savedText + '\n' + startText;
+    }
+    return out;
+  }
+  // The badge each listed worker gets in the picker: 'now' when it is working on the card, 'last' for the last one used.
+  function workerMarks(card) {
+    const e = effectiveWorker(card, NaN);
+    const out = {};
+    e.running.forEach((k) => { out[k] = 'now'; });
+    if (e.last && !out[e.last]) out[e.last] = 'last';
+    return out;
+  }
+  // ---- end effective worker ----
   // ---- milestones and stages (page.test.mjs runs this block on its own) ----
   const NO_MS = ':none';     // the Milestone filter's "No milestone"; a colon is not valid in a card id
   const CHAT_ROLES = ['working', 'review', 'blocked', 'done'];

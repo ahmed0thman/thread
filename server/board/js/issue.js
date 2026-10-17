@@ -286,16 +286,34 @@
     const fWorker = !create && !isMs ? h('button', 'input wk-btn') : null;
     const workerField = fWorker ? field('Worker', fWorker, 'f-worker') : null;
     const WE = fWorker ? workerEditor() : null;
+    let workerCard = card;   // the card as last drawn: the field shows who works on it, not only its saved worker
+    const workerCaption = fWorker ? h('span', 'foot-note wk-caption') : null;
     if (fWorker) {
       fWorker.type = 'button';
       fWorker.setAttribute('aria-haspopup', 'dialog');
-      workerField.append(h('span', 'foot-note', 'Starting this card as a thread runs it as this worker. A lane’s CLI sends the card and the files it reads to its provider. Only approved lanes can be picked.'));
+      workerField.append(workerCaption, h('span', 'foot-note', 'Starting this card as a thread runs it as this worker. A lane’s CLI sends the card and the files it reads to its provider. Only approved lanes can be picked.'));
       body.appendChild(workerField);
-      fWorker.addEventListener('click', () => openWorkerPicker({ value: WE.value, opener: fWorker, onPick: (key) => { WE.pick(key); showWorker(); onTouched(); } }));
+      fWorker.addEventListener('click', () => openWorkerPicker({ value: WE.value, opener: fWorker, onPick: (key) => { WE.pick(key); showWorker(); onTouched(); }, marks: () => workerMarks(workerCard) }));
+      fWorker.addEventListener('mouseenter', () => { if (!fWorker.disabled && !WE.dirty()) fWorker.title = effectiveWorker(workerCard, Date.now()).title; });   // the running time moves on between two drawings
     }
-    function showWorker() { fWorker.replaceChildren(...workerButtonContent(WE.value)); }
+    // A worker picked and not saved yet is shown as picked. Otherwise: what works on the card now, the saved worker, the last one used.
+    function showWorker() {
+      if (WE.dirty()) {
+        fWorker.replaceChildren(...workerButtonContent(WE.value));
+        workerCaption.textContent = '';
+        workerCaption.hidden = true;
+        if (!fWorker.disabled) fWorker.title = '';
+        return;
+      }
+      const eff = effectiveWorker(workerCard, Date.now());
+      fWorker.replaceChildren(...workerFieldContent(eff));
+      workerCaption.textContent = eff.caption;
+      workerCaption.hidden = !eff.caption;
+      if (!fWorker.disabled) fWorker.title = eff.title;
+    }
     function syncWorkerField(c) {
       if (!WE) return;
+      workerCard = c;
       WE.sync(c);
       showWorker();
       workerField.hidden = isRemote() || !workerOffered(c);
@@ -416,7 +434,7 @@
             wrote();
             P.base = { title: saved.title, note: saved.note || '', status: saved.status, kind: saved.kind, type: fieldValues(saved).type, parent: saved.parent || '', fields: isMs ? fieldValues(saved) : cardValues(saved) };
             if (FX) FX.set(P.base.fields);
-            if (WE) { WE.saved(saved); showWorker(); workerField.hidden = isRemote() || !workerOffered(saved); }
+            if (WE) { WE.saved(saved); workerCard = saved; showWorker(); workerField.hidden = isRemote() || !workerOffered(saved); }
             P.baseUpdatedAt = saved.updatedAt;
             P.latestUpdatedAt = saved.updatedAt;
             if (fTitle.value === saved.title) fTitle.value = saved.title; else if (fTitle.value.trim() === saved.title) fTitle.value = saved.title;
@@ -453,7 +471,7 @@
       const cardWhy = cardThreadStartWhy(savedCard);
       // A worker that cannot run stops the step's own Start button, not the one that opens the step: there the worker can be changed.
       const open = isRO() ? READONLY_WHY : P.isDirty() ? 'Save or discard your changes first' : cardWhy;
-      const why = open || workerStartBlocked(savedCard, P.startWorker);   // the worker chosen in the start step, else the card's
+      const why = open || workerStartBlocked(savedCard, P.startWorker !== undefined ? P.startWorker : P.starting ? effectiveWorker(savedCard, NaN).startKey : undefined);   // the worker chosen in the start step, else the card's
       if (startBtn) { startBtn.disabled = !!open; startBtn.title = open; }
       if (startWhyEl) { startWhyEl.textContent = cardWhy; startWhyEl.hidden = !cardWhy; }
       if (goBtn) { setOff(goBtn, !!why); whyEl.textContent = why; }
@@ -509,7 +527,7 @@
         const list = startSessions();
         const cancel = plainBtn('Cancel', null, () => { P.starting = false; P.startWorker = undefined; renderFoot(); startBtn.focus(); });
         if (!list.length) {
-          { const pl = startPlans(P.startWorker !== undefined ? P.startWorker : workerOf(findCard(P.target) || card)); intro.textContent = startIntro(pl.lp, pl.ap); }
+          { const pl = startPlans(P.startWorker !== undefined ? P.startWorker : effectiveWorker(findCard(P.target) || card, NaN).startKey); intro.textContent = startIntro(pl.lp, pl.ap); }
           step.appendChild(h('p', 'muted', 'No Claude session has been seen in this project yet. Open the project in Claude Code and send one message, then try again.'));
           step.appendChild(h('div', 'start-btns')).appendChild(cancel);
           if (focusFirst) cancel.focus();
@@ -528,7 +546,9 @@
           // `shown` is the card's worker as this step was drawn: Start tells the server which one the person saw (expectLane, expectAgent).
           const cardNow = findCard(P.target) || card;
           const shown = workerOf(cardNow);
-          const wkKey = () => (P.startWorker !== undefined ? P.startWorker : shown);
+          // preselected: the card's worker, else the last one used on it when a thread can run as it (see effectiveWorker), else Claude
+          const preset = effectiveWorker(cardNow, NaN).startKey;
+          const wkKey = () => (P.startWorker !== undefined ? P.startWorker : preset);
           if (workerOffered(cardNow) || P.startWorker !== undefined) {   // a worker picked here stays on show even when the lists can no longer be read
             const workerBtn = h('button', 'input wk-btn');
             workerBtn.type = 'button';
@@ -536,7 +556,7 @@
             workerBtn.replaceChildren(...workerButtonContent(wkKey()));
             step.appendChild(field('Worker', workerBtn, 'f-start-worker'));
             // the step is drawn again for the choice (its session, mode and context carry over), then the focus goes back to the button
-            workerBtn.addEventListener('click', () => openWorkerPicker({ value: wkKey(), opener: workerBtn, onPick: (key) => { P.startWorker = key; renderFoot(); const b = foot.querySelector('.wk-btn'); if (b) b.focus(); }, findOpener: () => foot.querySelector('.wk-btn') }));
+            workerBtn.addEventListener('click', () => openWorkerPicker({ value: wkKey(), opener: workerBtn, onPick: (key) => { P.startWorker = key; renderFoot(); const b = foot.querySelector('.wk-btn'); if (b) b.focus(); }, marks: () => workerMarks(findCard(P.target) || card), findOpener: () => foot.querySelector('.wk-btn') }));
           }
           const dyn = h('div', 'start-dyn');
           step.appendChild(dyn);
@@ -579,7 +599,7 @@
           }
           P.startState = () => ({ session: sel.value, ...pick() });
 
-          goBtn = actionBtn('Start', 'primary', 'start:' + selKey + ':' + card.id, () => doStart({ sessionId: sel.value, ...pick(), shown, picked: P.startWorker }));
+          goBtn = actionBtn('Start', 'primary', 'start:' + selKey + ':' + card.id, () => doStart({ sessionId: sel.value, ...pick(), shown, picked: P.startWorker !== undefined ? P.startWorker : preset !== shown ? preset : undefined }));
           whyEl = h('span', 'foot-note');
           whyEl.setAttribute('role', 'status');
           step.appendChild(h('div', 'start-btns')).append(goBtn, cancel, whyEl);
@@ -719,6 +739,7 @@
       roShown = ro;
       roNote.hidden = !ro;
       [fTitle, fNote, fStatus, fMs, fWorker, fKind].forEach((f) => { if (f) { f.disabled = ro; f.title = ro ? READONLY_WHY : ''; } });
+      if (WE) showWorker();   // the field's own tooltip again when the board is not read-only
       noteEdit.disabled = ro; noteEdit.title = ro ? READONLY_WHY : '';
       if (FX) FX.setDisabled(ro, READONLY_WHY);
       if (ro) P.confirmDelete = P.starting = P.notifying = false;
@@ -793,7 +814,7 @@
       metaCreated.replaceChildren(timeEl(c.createdAt));
       metaUpdated.replaceChildren(timeEl(c.updatedAt));
       if (metaDl) laneNodes = showLaneRows(metaDl, laneNodes, c);
-      const ls = laneSig(c) + JSON.stringify([workerRows(), workerOf(c), !!agents]);   // the start step's worker choice follows the lanes and the sub-agents too
+      const ls = laneSig(c) + JSON.stringify([workerRows(), workerOf(c), effectiveWorker(c, NaN).startKey, !!agents]);   // the start step's worker choice follows the lanes and the sub-agents too
       if (P.laneSig !== undefined && P.laneSig !== ls) { if (P.starting) renderFoot(); else syncStart(); }   // the worker changed: the start step, or the button, follows
       P.laneSig = ls;
       // Notify Claude comes and goes with the card (Claude lists it, or it is edited again), and its label with the request

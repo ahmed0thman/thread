@@ -11,18 +11,35 @@
     return [h('span', 'wk-text', workerLabel(key)), caret];
   }
 
+  // The card page's Worker button: the effective worker (see effectiveWorker in model.js). A worker working now has the live dot, a quiet one the
+  // ring (the same marks as the card's work indicator); one only last used is muted.
+  function workerFieldContent(eff) {
+    const caret = h('span', 'wk-caret');
+    caret.setAttribute('aria-hidden', 'true');
+    const main = h('span', 'wk-main');
+    if (eff.state === 'now' || eff.state === 'quiet') {
+      const dot = h('span', 'work-compact wk-dot ' + (eff.state === 'now' ? 'work-live' : 'work-quiet'));
+      dot.appendChild(shape(eff.state === 'now' ? 's-pulse' : 's-dring'));
+      main.appendChild(dot);
+    }
+    main.appendChild(h('span', 'wk-text' + (eff.state === 'quiet' || eff.state === 'last' ? ' wk-muted' : ''), eff.text));
+    return [main, caret];
+  }
+
   // The lists loaded again (a lane approved, a sub-agent added): an open picker shows the new rows.
   function refreshWorkerPicker() { if (workerModal) workerModal.refresh(); }
 
   // `value` is the worker now chosen (a key, see model.js), `opener` the button to give the focus back to, `onPick(key)` what to do with a choice.
   // `findOpener()` finds the button again when the page was drawn again meanwhile and `opener` is gone.
-  function openWorkerPicker({ value, opener, onPick, findOpener }) {
+  // `marks()` says which listed workers work on the card now or were used last: { 'agent:x': 'now', 'lane:y': 'last' } (see workerMarks).
+  function openWorkerPicker({ value, opener, onPick, findOpener, marks: getMarks }) {
     closeWorkerPicker();
     let rows = workerRows();
     let found = true;
     let query = '';
     let tab = workerTabOf(rows, value) || (WORKER_TABS.find(([id]) => rows[id].length) || WORKER_TABS[0])[0];
     let active = null;   // the row that is a tab stop; the arrows move it
+    let cardMarks = {};  // read again each time the lists are drawn
 
     const scrim = h('div', 'wp-scrim');
     const box = h('div', 'wp');
@@ -87,6 +104,8 @@
       const line = r.line !== undefined ? r.line : workerRowLine(r);
       if (line) top.appendChild(h('span', 'wp-line', line));
       const marks = h('span', 'wp-marks');
+      if (cardMarks[r.key] === 'now') marks.appendChild(badge('Working now', 'This worker is working on this card right now', 'wp-now'));
+      else if (cardMarks[r.key] === 'last') marks.appendChild(badge('Last used', 'Claude used this worker last on this card', 'wp-last'));
       if (cur) marks.appendChild(badge('Current', '', 'wp-cur'));
       if (r.kind === 'agent' && r.why !== 'not found') marks.appendChild(badge(r.where === 'user' ? 'User' : 'Project', r.where === 'user' ? 'Defined in your own .claude/agents folder' : 'Defined in this project’s .claude/agents folder', 'wp-where'));
       if (r.readOnly) marks.appendChild(badge('Read-only', 'This lane cannot edit files'));
@@ -114,6 +133,7 @@
       return id === 'project' ? 'This project has no lanes of its own. Set them up with the delegate-setup skill.' : 'No global lanes are set up. Use the delegate-setup skill.';
     }
     function draw() {
+      cardMarks = (getMarks && getMarks()) || {};
       found = value === '' || WORKER_TABS.some(([id]) => rows[id].some((r) => r.key === value));
       const shown = workerFilter(rows, query);
       tabBtns.forEach((b, i) => {
