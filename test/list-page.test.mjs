@@ -445,7 +445,7 @@ test('a card in a stage after the done stage counts as done in the Milestones vi
   assert.deepEqual(idsOf(st.open), ['c4']);
 });
 
-test('the Milestones view lists open milestones first, then empty ones, then done ones, each group in its own order', () => {
+test('the Milestones view lists open milestones first, then empty ones, then done ones, each group by title', () => {
   const cards = [
     card('c1', { kind: 'milestone', title: 'A done one' }), card('c2', { parent: 'c1', status: 'done' }),
     card('c3', { kind: 'milestone', title: 'An empty one' }), card('c4', { parent: 'c3', kind: 'idea' }),
@@ -678,4 +678,12 @@ test('the card page of a row returns focus to the row, and the chat-only route h
   const routes = vm.runInNewContext(`${block('routes')}\n({ viewsOf, resolveView, parseRoute })`, {});
   assert.deepEqual(plain(routes.viewsOf(true)), ['board']);
   assert.deepEqual(plain(routes.resolveView(routes.parseRoute('#/k/list'), true, '')), { view: 'board', fix: true });
+});
+
+test('milestones in one state go by title with numbers compared as numbers, not by id (random in a repo-backed project)', () => {
+  const ms = (id, title) => card(id, { kind: 'milestone', title });
+  const cards = [ms('cq7z2a', 'M10: Billing'), ms('c3kd9x', 'M2: Channels'), ms('ca1b2c', 'M1: Setup'), ms('cz9y8x', 'm3: Inbox')];
+  cards.push(...cards.map((m, i) => card('k' + i, { parent: m.id })));
+  const list = cards.filter((c) => c.kind === 'milestone');
+  assert.deepEqual(lib.milestonesOrdered(list, cards, CONFIG).map((m) => m.title), ['M1: Setup', 'M2: Channels', 'm3: Inbox', 'M10: Billing']);
 });

@@ -195,7 +195,7 @@ const TOOLS = [
       properties: {
         card: { type: 'string', description: 'The id of the card this belongs to, for example "c37". A task, idea or thread card; not a milestone.' },
         kind: { type: 'string', enum: core.WAIT_KINDS, description: '"question": the user types an answer. "choice": the user picks from choices. "todo": the user does something, then ticks Done. "review": the user checks your work and answers Approve or Request changes.' },
-        text: { type: 'string', description: 'What you need, written so it stands alone. Up to 2000 characters.' },
+        text: { type: 'string', description: 'What you need, written so it stands alone. Up to 2000 characters. The board shows Markdown: put steps and lists on their own lines (a numbered or bulleted list, not "1) ... 2) ..." run together in one paragraph) and keep paragraphs short.' },
         choices: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8, description: 'Only for kind "choice": 2 to 8 options, each up to 120 characters.' },
         multi: { type: 'boolean', description: 'Only for kind "choice": true lets the user pick several options, false (default) exactly one.' },
         worker: WORKER_PROP,
@@ -284,7 +284,7 @@ const TOOLS = [
           description: 'Which stage the plugin itself uses: start (a new card), working (a running thread), review (a finished turn), blocked (a failed thread), done (an ended thread; a card in this stage or a later one also counts as finished for its milestone). Left out, they follow the stages\' order, and giving new stages without roles drops the old roles. null removes them.',
         },
         reset: { type: 'boolean', description: 'true deletes this scope\'s config file. For a repo-backed project with scope "project" that includes its config.json in the repo, which is shared: once committed, the deletion reaches everyone who uses the repo, so ask the user first. Give no other setting with it.' },
-        repo: { type: 'boolean', description: 'true (scope "project" only) keeps this project\'s board in its repo: it makes the folder .claude/thread/ at the root of the main checkout, where every task, idea and milestone card is a file to commit and the project\'s mode, stages and roles are config.json; the cards this machine has are copied there once, ids kept. Threads, sub-agent runs and the wake setting stay on this machine. The files are visible to anyone with the repo, so ask the user first. It cannot be turned off here: the folder is deleted by hand.' },
+        repo: { type: 'boolean', description: 'true (scope "project" only) keeps this project\'s board in its repo: it makes the folder .claude/thread/ at the root of the main checkout, where every task, idea and milestone card is a file to commit and the project\'s mode, stages and roles are config.json; the cards this machine has are copied there once, each with a new random id (the old id still finds it). Threads, sub-agent runs and the wake setting stay on this machine. The files are visible to anyone with the repo, so ask the user first. It cannot be turned off here: the folder is deleted by hand.' },
       },
       required: ['scope'],
     },
@@ -945,7 +945,8 @@ const HANDLERS = {
       lines.push(`${st.label} (${inCol.length})`);
       for (const c of inCol) lines.push(cardLine(c));
     }
-    const milestones = cards.filter((c) => c.kind === 'milestone');
+    const milestones = cards.filter((c) => c.kind === 'milestone')   // by title, M2 before M10 (ids are random in a repo-backed project)
+      .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), undefined, { numeric: true, sensitivity: 'base' }) || (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0));
     if (milestones.length) {
       lines.push(`Milestones (${milestones.length})`);
       for (const c of milestones) lines.push(cardLine(c));

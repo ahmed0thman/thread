@@ -121,7 +121,7 @@
 .wait-item { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; padding: var(--s3); border-left-color: var(--k); }
 .wait-top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); }
 .wait-meta { flex: 1 1 140px; min-width: 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
-.wait-text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.wait-text { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .wait-opts { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .wait-opts legend, .start-mode legend { padding: 0 0 4px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
 .wait-opts .radio { align-items: flex-start; }

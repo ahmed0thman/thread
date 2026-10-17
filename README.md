@@ -1,12 +1,33 @@
 # thread
 
-Side threads for Claude Code, with a kanban board.
+**Side threads and a project board for Claude Code.** Hand a question or a task to a background Claude session without derailing the one you are in, keep the work on a local kanban board, and answer Claude's questions there instead of in the chat.
+
+[![Release](https://img.shields.io/github/v/release/ahmed0thman/thread)](https://github.com/ahmed0thman/thread/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)
+![Node 20+](https://img.shields.io/badge/node-%3E%3D20-339933)
+![No dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)
+
+```bash
+claude plugin marketplace add ahmed0thman/thread
+claude plugin install thread@thread-marketplace
+```
 
 While Claude is busy on one task, you often think of something else: a question that needs real digging, a doubt about the plan, an idea for later. Asking it in the same session derails the work. Opening a new session loses the context you have built up.
 
 `thread` gives you a third option. A **thread** is a background Claude session with its own tools that works on one task while the main session carries on. Claude gives it a short **brief** of what it needs from your conversation, so it starts cheap, and picks a sub-agent or model that suits how hard the task is. If the task needs everything said so far, a thread can instead be a **full copy** of the session. Nothing it does enters the main session until you ask for its report.
 
-The plugin also keeps a **board** of tasks, ideas, milestones and threads for each project, shown on a local web page. It opens on a home with one tile per project. Inside a project you get a Summary, the Board with its columns, a List, the Milestones and what is waiting for you, and you can read a thread's conversation, see what it did step by step, and send it follow-ups. The columns are yours to define, and if you only want threads, you can switch the task board off.
+## What you get
+
+- **Side threads.** `/thread:new <task>` starts a background session from a short brief; `/thread:report` pulls its digest (what happened, what was decided, what changed, what is still open) into the main session only when you want it. Send follow-ups from the board or the chat.
+- **A board for every project.** A local web page with a Summary, a kanban Board, a List, Milestones and a Waiting view: tasks, ideas, bugs, priorities, labels, blockers, acceptance criteria, and every sub-agent run on a card with its prompt, steps and report. Your own stages, or threads only.
+- **Waiting for you.** Claude raises questions, choices, to-dos and reviews on the card they belong to. You answer them on the board, all at once, and the answers reach the session that asked.
+- **Wake the session.** Optionally, an answer, a "Report to main session" click or a "Notify Claude" click on the board starts Claude working right away, without typing in the chat.
+- **A done gate.** A card with acceptance criteria cannot be marked done until you approve a review of it.
+- **Delegation lanes.** A thread can run on another coding CLI, such as OpenAI Codex, Google Antigravity, OpenCode or a separate Claude session, with its own model and effort, through the [delegate skills](https://github.com/amElnagdy/delegate-skills) by Ahmed Nagdy.
+- **The board in your repo.** Optionally keep a project's cards as files in `.claude/thread/`, so the board follows the repository to every device and worktree.
+- **On your phone.** `/thread:board --tunnel` opens the board through a temporary, token-protected Cloudflare link.
+- **Local and small.** Plain Node, no dependencies, no build step. The board listens on `127.0.0.1` only and makes no network calls.
 
 A short tour. Every screenshot in this README shows an invented shop, `acme-shop`.
 
@@ -26,6 +47,7 @@ More screens are in [The board](#the-board) and in the [use cases](#use-cases).
 
 ## Contents
 
+- [What you get](#what-you-get)
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Use cases](#use-cases)
@@ -65,6 +87,8 @@ More screens are in [The board](#the-board) and in the [use cases](#use-cases).
 - [Troubleshooting](#troubleshooting)
 - [What's new](#whats-new)
 - [Development](#development)
+- [Credits](#credits)
+- [License](#license)
 
 ## Install
 
@@ -605,7 +629,7 @@ The errors are plain: `milestone not found: c9`, `c3 is not a milestone`, `a mil
 
 ## Delegation lanes
 
-A **lane** is a named setting from the separate *delegate* skills: which coding CLI does a job (the provider: `codex`, `agy`, `opencode` or `claude`), on which model, at which effort (or variant), and whether it may only read. Names such as `code-codex` or `ui-design` are yours to choose. A thread can run on a lane, and so can a task card that has one. This plugin only reads the lane config; it never writes it or its approval.
+A **lane** is a named setting from the separate [delegate skills](https://github.com/amElnagdy/delegate-skills), written by [Ahmed Nagdy](https://github.com/amElnagdy): which coding CLI does a job (the provider: `codex`, `agy`, `opencode` or `claude`), on which model, at which effort (or variant), and whether it may only read. Names such as `code-codex` or `ui-design` are yours to choose. A thread can run on a lane, and so can a task card that has one. This plugin only reads the lane config; it never writes it or its approval.
 
 - **Where lanes come from.** The delegate skills keep them in `~/.config/delegate-skills/config.json` (all projects) and `<git root>/.delegate/config.json` (one project). The plugin asks the `delegate-setup` skill's script, `~/.claude/skills/delegate-setup/scripts/config.mjs load`, for the lanes in effect in the project, and keeps the answer for about 30 seconds. Running a thread uses the provider's relay, `~/.claude/skills/<provider>-delegate/scripts/relay.mjs`, which the same skills provide. Set `THREAD_DELEGATE_DIR` if the skills live elsewhere. Lanes whose provider is not one of the four above are left out.
 - **They need the delegate skills.** Without them (or when the script fails or takes too long) the board shows nothing about lanes, `lane_list` says they are not installed, and a lane is refused. A card that already has a lane still shows its tag, marked **not found**.
@@ -882,7 +906,7 @@ The same page in the dark theme, which the button in the header switches to:
 
 ![The Milestones view of acme-shop: Launch v1 at 7 of 15 done, Holiday sale at 1 of 7 and Beta storefront at 2 of 2, each with its to do, in progress and done counts and its open cards](docs/milestones.png)
 
-**Milestones** shows each milestone as a block: its title (a link to its page) with a state tag (**Open**, **Empty** or **Done**), a progress bar, a tag with the items waiting for you on its cards (to look at; answer them on the card), the number of its cards to do, in progress and done, and up to five of its open cards, each linking to its page. Open milestones come first, then empty ones, then done ones, each group in its own order. Ideas are left out of every count and of the open cards. In progress counts the cards in the working and review stages, to do counts every other stage that is not finished, and done counts the stage with the done role and any stage after it. When there are more open cards, "and N more" opens the List filtered to that milestone. A milestone whose cards are all done says so. See [Milestones](#milestones) for what a milestone is.
+**Milestones** shows each milestone as a block: its title (a link to its page) with a state tag (**Open**, **Empty** or **Done**), a progress bar, a tag with the items waiting for you on its cards (to look at; answer them on the card), the number of its cards to do, in progress and done, and up to five of its open cards, each linking to its page. Open milestones come first, then empty ones, then done ones, each group in its own order. Ideas are left out of every count and of the open cards. In progress counts the cards in the working and review stages, to do counts every other stage that is not finished, and done counts the stage with the done role and any stage after it. When there are more open cards, "and N more" opens the List filtered to that milestone. A milestone whose cards are all done says so. See [Milestones](#milestones) for what a milestone is. Open milestones come first, then empty ones, then done ones; within each, by title with numbers compared as numbers, so `M2` comes before `M10`.
 
 ### Task and idea pages
 
@@ -893,6 +917,7 @@ A task or idea card opens the same way a thread does, so you can see what is hap
 - **Right, "Trace":** one block per run with a step for each tool call (Read, Ran, Edited, Searched, Fetched), clipped to one line each; a call that failed is marked. Clicking a step scrolls to its run.
 - **History:** newest first. It lists when the card was created, moved between stages and edited (title, note, milestone, lane and the [card fields](#card-fields-workers-and-the-done-gate)), when a worker was noted on it, and when Claude raised an item [waiting for you](#waiting-for-you) on it and named a worker, each by You or Claude with the time. When Claude named the worker, it is in brackets: "Claude (agent:worker) moved it from New to Review", "Worked on by Claude (lane:code-codex)", "Claude (thread:c4) asked you to review it". It keeps the last 50 entries. It records changes made through the board or Claude's tools; a card made before this feature has only its creation, and a session still running an older plugin version does not add to it.
 - On a narrow window the three panes become tabs (Agent runs, Card, Trace); a card with no run opens on Card.
+- **Long text.** The text of a waiting item, a run's prompt, a thread's messages and the brief given to a thread are shown with Markdown structure (paragraphs, lists, code, bold) and the line breaks the writer used; steps run together in one paragraph ("1) … 2) … 3) …") are split into a numbered list. **Tables** (GitHub style, with a header and a `|---|---|` line) are drawn as tables that scroll sideways on a narrow window, and **links** show only their text: a link to an `http(s)` address opens in a new tab, and any other target, such as a file path with a line number, is shown as a dotted-underlined reference with the target in its tooltip, so a long path never fills the line. Long paths and ids wrap. Headings are in the accent colour, larger for `#`/`##`; a heading or a bold line named like a section is coloured to match the trace chips (Decided, Changed, Open or Next steps, Found or Findings, Risks or Not tested in red, Summary or Result or Done in green). The note of a card or milestone is shown the same way with an **Edit** button that swaps in the text box (Save and Cancel work as before; a new card or an empty note opens in the text box). Single-line places (a card tile's note, a waiting item's one-line summary, a trace step) show the text with its Markdown marks removed. Anything longer than about 12 lines is clamped with a fade and a **Show more** button (**Show less** folds it again) in place of an inner scroll bar; short text has no button. The note you edit stays a plain text box.
 
 **Start as thread.** Pressing it (or **Start as thread** in the card's gear menu) opens a form at the bottom of the left pane, in place of the buttons. A card no agent has worked on shows "No agent has worked on this card" in the centre.
 
@@ -1256,6 +1281,7 @@ Files in the data directory:
 
 ## What's new
 
+- **0.15.1** Long text on a card page and a thread page is easier to read: a waiting item's text, a run's prompt, a thread's messages and the brief are shown with Markdown structure and the writer's line breaks, steps written inline ("1) … 2) … 3) …") become a numbered list, and a long message is clamped to about 12 lines with a **Show more** / **Show less** button instead of its own scroll bar. Tables in a report are drawn as tables, links show only their text (a file path is a dotted reference with the path in its tooltip, a web address opens in a new tab), headings are coloured (section names like Decisions, Risks or Next steps match the trace colours), and the note of a card or milestone is shown as Markdown with an Edit button. Paragraphs in a report now have a small gap between them. The `wait_add` tool tells Claude to put steps and lists on their own lines. `config_set` now says that the cards copied into the repo get new random ids and the old id still finds them. Milestones are listed by title with numbers in order (`M1`, `M2`, ... `M10`) in the Milestones view, the Summary, the milestone pickers and `board_list`, instead of by card id, which is random in a project kept in the repo.
 - **0.15.0** A project's board can be [kept in the repo](#keeping-the-board-in-your-repo-claudethread): its tasks, ideas and milestones become files in `.claude/thread/` that you commit, so the board follows the repository to every device and worktree. Turn it on with `/thread:setup` or by creating the folder; the existing cards are copied once (with new random ids, so two devices never pick the same one), and `board_import` brings over cards an older session added later. Threads, runs and the `wake` setting stay on each machine. A git conflict in a card file names that file instead of breaking the board, and a card changed under a write is merged or refused, never overwritten. Only what you do on this machine's board carries your authority: an answer that arrived through a pull is passed to Claude once as information and never wakes the session, a pulled card shows as "new in the repo", and the done gate counts only approvals given here. An approval from another device, or one whose criteria have changed since, is accepted with one Confirm approval button, which confirms exactly what the page showed. A pushed file cannot replay an old approval, remove the criteria, undo a review you answered here, or fool the gate with a future date.
 - **0.14.0** The Board and List filter bars are reorganized: search, filters and New card on one row; toggles, the waiting key and the result count on a second. Cards Claude has not seen have a Notify Claude action: it wakes the session you pick when waking is on, and otherwise reaches it with its next message. Answers to waiting items are drafts until one Send sends them all, so Claude gets them in one turn.
 - **0.13.0** [Opening the board from your phone](#opening-the-board-from-your-phone-tunnel): `/thread:board --tunnel` opens a remote link through a Cloudflare quick tunnel (cloudflared installed once, no account), after asking you first. It lasts 12 hours, uses its own key, and cannot start, message, end or delete threads or stop the board. Milestones have no stage: a milestone is open until every card in it is finished, then done, and it reopens when a card is added; ideas do not count. Milestones are no longer on the kanban; the Milestones view, the List and the Summary show their state. A card in Done or any later stage (such as Released) counts as finished everywhere: blockers, counts, the Summary and the review gate. The new-card form has one **Type** select (Task, Bug, Idea or Milestone), and a task can be turned into an idea and back, keeping its bug mark, from its page or with `board_update`.
@@ -1304,6 +1330,10 @@ test/               node:test suites, with a stub in place of the claude CLI
 node --test
 claude plugin validate .
 ```
+
+## Credits
+
+Delegation lanes are built on the [delegate skills](https://github.com/amElnagdy/delegate-skills) by [Ahmed Nagdy](https://github.com/amElnagdy) (MIT): the skills that set up the lanes and run a task through Codex, Antigravity, OpenCode or Claude Code, then review the diff. Thank you, Ahmed, for making them and sharing them; this plugin only reads their lane settings and calls their relay, so install them from his repository to use lanes.
 
 ## License
 

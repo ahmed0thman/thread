@@ -3,7 +3,7 @@
   "owner": {
     "name": "Ahmed Hisham"
   },
-  "description": "Marketplace for the thread plugin: side threads for Claude Code with on-demand hand-back and a kanban board.",
+  "description": "The thread plugin for Claude Code: side threads that work in the background from a short brief, and a local project board where you track the work and answer Claude's questions.",
   "plugins": [
     {
       "name": "thread",

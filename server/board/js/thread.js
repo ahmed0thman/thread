@@ -83,7 +83,7 @@
     events.forEach((e) => {
       let li = null;
       if (e.kind === 'tool') li = toolRow(e, results[e.id]);
-      else if (e.kind === 'text' && e.text && e.text.trim()) { li = h('li', 'act-text', e.text); }
+      else if (e.kind === 'text' && e.text && e.text.trim()) { li = h('li', 'act-text'); inline(li, e.text, 'plain'); }
       else if (e.kind === 'truncated') li = h('li', 'act-text', 'More happened than is shown here.');
       else if (e.kind === 'earlier') li = h('li', 'act-text', 'Earlier steps are not shown here.');
       if (!li) return;
@@ -112,7 +112,7 @@
     if (ref) top.appendChild(h('span', 'refchip', ref));
     body.appendChild(top);
     const tx = h('span', 'step-text');
-    if (text) { if (kind === 'error' || o.plain) tx.textContent = text; else inline(tx, text); }
+    if (text) { if (kind === 'error' || o.plain) tx.textContent = text; else inline(tx, text, 'plain'); }
     body.appendChild(tx);
     li.appendChild(body);
     return li;
@@ -319,7 +319,9 @@
       if (run.sessionId) um.appendChild(h('span', 'tnum', sessionLabel(run.sessionId)));
       um.appendChild(timeEl(run.startedAt));
       u.appendChild(um);
-      u.appendChild(h('div', 'bubble run-prompt', d.promptFull || run.prompt || d.prompt || 'The prompt of this run was not recorded.'));
+      const pb = h('div', 'bubble run-prompt');
+      pb.appendChild(clampable(renderMarkdown(d.promptFull || run.prompt || d.prompt || 'The prompt of this run was not recorded.'), null, 'run-prompt:' + selKey + ':' + c.id + ':' + run.n));
+      u.appendChild(pb);
       tn.appendChild(u);
 
       const b = h('div', 'msg bot');
@@ -715,7 +717,7 @@
           tl.title = 'Show turn ' + (x.i + 1) + ' in the conversation';
           tl.addEventListener('click', () => jumpToTurn(x.i));
           tl.appendChild(h('span', 'tnum', 'Turn ' + (x.i + 1) + ' ·'));
-          const tp = h('span', 'tp', firstLine(x.t.prompt) || '(no prompt)');
+          const tp = h('span', 'tp', plainMd(firstLine(x.t.prompt)) || '(no prompt)');
           tl.appendChild(tp);
           const when = h('span', 'when'); when.appendChild(timeEl(x.t.startedAt));
           tl.appendChild(when);
@@ -760,7 +762,9 @@
           um.appendChild(h('strong', null, i === 0 ? 'You · task' : 'You'));
           um.appendChild(timeEl(t.startedAt));
           u.appendChild(um);
-          u.appendChild(h('div', 'bubble', t.prompt || ''));
+          const ub = h('div', 'bubble');
+          ub.appendChild(clampable(renderMarkdown(t.prompt || ''), null, 'turn-prompt:' + selKey + ':' + c.id + ':' + i));
+          u.appendChild(ub);
           tn.appendChild(u);
 
           const b = h('div', 'msg bot');
@@ -1038,7 +1042,7 @@
           d.addEventListener('toggle', () => { P.briefOpen = d.open; });
           const sm = h('summary', null, 'Brief given to the thread');
           sm.dataset.fid = 'c-brief';
-          d.append(sm, h('pre', null, t.brief));
+          d.append(sm, clampable(renderMarkdown(t.brief), 'brief-text', 'brief:' + selKey + ':' + c.id));
           out.push(d);
         }
 

@@ -8,7 +8,7 @@
   }
   // [[id, label]] by title; two milestones with one title get their ids
   function milestoneChoices() {
-    const list = milestoneCards().slice().sort((a, b) => a.title.localeCompare(b.title));
+    const list = milestoneCards().slice().sort(msTitleCmp);
     const seen = {};
     list.forEach((m) => { seen[m.title] = (seen[m.title] || 0) + 1; });
     return list.map((m) => [m.id, seen[m.title] > 1 ? m.title + ' (' + m.id + ')' : m.title]);

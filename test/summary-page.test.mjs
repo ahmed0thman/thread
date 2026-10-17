@@ -403,6 +403,7 @@ function summaryPage(cards, config = DEFAULT, over = {}) {
     document: doc, elPane: pane, selKey: 'k1', current: { cards }, setTimeout: () => 0, waitsFor: '', opened: [],
     openCard: (id, el) => env.opened.push([id, el]),
     cfg: () => config,
+    plainMd: (s) => s,
     h(tag, cls, text) { const e = doc.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== null) e.textContent = text; return e; },
     hashFor: (k, t) => '#/' + k + (t ? '/' + t : ''),
     timeEl: (at) => { const t = doc.createElement('time'); t.textContent = 'rel ' + at; return t; },

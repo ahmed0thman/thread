@@ -144,7 +144,7 @@
     const lbls = faceLabels(card, fm);
     if (lbls) el.appendChild(lbls);
     if (ms) el.appendChild(milestoneTag(ms));
-    if (card.note) el.appendChild(h('p', 'card-note', card.note));
+    if (card.note) el.appendChild(h('p', 'card-note', plainMd(card.note)));
     if (thread && t.parentSessionId) {
       const from = h('p', 'card-from', 'from ' + sessionLabel(t.parentSessionId));
       from.title = sessionLabel(t.parentSessionId);

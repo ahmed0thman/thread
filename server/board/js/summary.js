@@ -302,7 +302,7 @@
         const top = h('span', 'sum-wait-top');
         top.append(waitKindMark(w.kind, false), h('span', 'idchip', w.card), h('span', 'grow'));
         if (w.askedAt) top.appendChild(timeEl(w.askedAt));
-        a.append(top, h('span', 'sum-wait-text', w.text));
+        a.append(top, h('span', 'sum-wait-text', plainMd(w.text)));
         li.appendChild(a);
         ul.appendChild(li);
       });

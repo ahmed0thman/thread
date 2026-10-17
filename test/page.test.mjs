@@ -1092,6 +1092,7 @@ function runViews() {
     pp: (key, rest) => `/api/p/${key}/${rest}`,
     findCard: () => world.card,
     renderMarkdown: (t) => { const e = doc.createElement('div'); e.textContent = t; return e; },
+    clampable: (content, cls) => { const e = doc.createElement('div'); e.className = 'clamp' + (cls ? ' ' + cls : ''); e.appendChild(content); return e; },
     actList: (events) => { const e = doc.createElement('ul'); e.className = 'act-list'; events.forEach((ev) => { const li = doc.createElement('li'); li.textContent = ev.kind + ':' + (ev.id || ''); e.appendChild(li); }); return e; },
     UNAVAILABLE: 'unavailable', READONLY_WHY: 'read-only', ro: false, isRO: () => env.ro, isRemote: () => false, posts: [],
     actionBtn: (text, cls, key, onClick) => { const b = doc.createElement('button'); b.className = 'btn ' + cls; b.textContent = text; b.dataset.busykey = key; b.addEventListener('click', onClick); return b; },

@@ -203,7 +203,27 @@
     const fStatus = isMs ? null : h('select', 'input');
     if (fStatus) fillSelect(fStatus, stagePairs(), P.base.status);
     body.appendChild(fTitleWrap);
-    body.appendChild(field('Note', fNote, 'f-note'));
+    // The note of a saved card is shown as Markdown with an Edit button; Edit swaps in the textarea above, which Save and Cancel
+    // handle as before. A new card, and a card with no note, open straight in the textarea.
+    const noteField = field('Note', fNote, 'f-note');
+    const noteView = h('div', 'note-view');
+    const noteEdit = h('button', 'btn small', 'Edit');
+    noteEdit.type = 'button';
+    noteEdit.id = 'f-note-edit';
+    noteEdit.setAttribute('aria-controls', 'f-note');
+    noteField.append(noteView);
+    let noteEditing = create, noteShown = null;
+    function syncNote() {
+      const edit = noteEditing || !fNote.value.trim();
+      fNote.hidden = !edit;
+      noteView.hidden = edit;
+      if (edit || noteShown === fNote.value) return;
+      noteShown = fNote.value;
+      noteView.replaceChildren(clampable(renderMarkdown(noteShown), 'note-text', 'note:' + selKey + ':' + (card ? card.id : 'new')), noteEdit);
+    }
+    noteEdit.addEventListener('click', () => { noteEditing = true; syncNote(); fNote.focus(); });
+    body.appendChild(noteField);
+    syncNote();
     // the milestone this card belongs to (none for a milestone itself); hidden while no milestone exists
     let fKind = null;
     const fMs = isMs ? null : h('select', 'input');
@@ -365,6 +385,7 @@
               if (FX) P.base.fields.type = FX.values().type;
               msgEl.textContent = 'No changes to save.';
               syncStart();
+              noteEditing = false; syncNote();
               return;
             }
             const saved = await api('PATCH', pp(pk, 'cards/' + encodeURIComponent(card.id)), patch);
@@ -375,6 +396,7 @@
             P.latestUpdatedAt = saved.updatedAt;
             if (fTitle.value === saved.title) fTitle.value = saved.title; else if (fTitle.value.trim() === saved.title) fTitle.value = saved.title;
             msgEl.textContent = 'Saved.';
+            noteEditing = false; syncNote();
             applyCard(saved, pk);
             refreshConflict();
           }
@@ -385,6 +407,7 @@
 
     function resetFields() {
       fTitle.value = P.base.title; fNote.value = P.base.note;
+      noteEditing = false; syncNote();
       if (fStatus) fStatus.value = P.base.status;
       if (fMs) fMs.value = P.base.parent;
       if (fKind) fKind.value = P.base.kind;
@@ -623,6 +646,7 @@
       roShown = ro;
       roNote.hidden = !ro;
       [fTitle, fNote, fStatus, fMs, fKind].forEach((f) => { if (f) { f.disabled = ro; f.title = ro ? READONLY_WHY : ''; } });
+      noteEdit.disabled = ro; noteEdit.title = ro ? READONLY_WHY : '';
       if (FX) FX.setDisabled(ro, READONLY_WHY);
       if (ro) P.confirmDelete = P.starting = P.notifying = false;
       renderFoot();
@@ -647,6 +671,7 @@
       [[fTitle, 'title'], [fNote, 'note']].forEach(([f, k]) => {
         if (f.value === P.base[k]) { f.value = nb[k]; P.base[k] = nb[k]; }
       });
+      syncNote();
       // the stages and milestones may have changed too: refill the lists, keeping what the user picked
       [[fStatus, stagePairs(), 'status'], [fMs, milestonePairs(), 'parent']].forEach(([f, pairs, k]) => {
         if (!f) return;

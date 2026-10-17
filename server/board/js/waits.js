@@ -322,7 +322,7 @@
     li.appendChild(shape(w.state === 'withdrawn' ? 's-cross' : 's-check'));
     const body = h('span', 'wait-line-text');
     const head = h('span');
-    head.append(h('strong', null, w.id), ' ' + clip(w.text, 90));
+    head.append(h('strong', null, w.id), ' ' + clip(plainMd(w.text), 90));
     body.appendChild(head);
     const ans = h('span', 'wait-line-ans');
     if (w.state === 'withdrawn') ans.textContent = 'Withdrawn: Claude no longer needs it.';
@@ -349,7 +349,7 @@
     const meta = h('span', 'wait-meta');
     meta.append('asked by ' + (w.askedBy ? sessionLabel(w.askedBy) : 'Claude') + ' · ', timeEl(w.askedAt));
     top.appendChild(meta);
-    li.append(top, h('p', 'wait-text', w.text));
+    li.append(top, clampable(renderMarkdown(w.text), 'wait-text', 'wait:' + selKey + ':' + w.id));
 
     const ro = isRO();
     const pk = selKey;

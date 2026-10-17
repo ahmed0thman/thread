@@ -47,6 +47,9 @@ function waitsPage(over = {}) {
     isRO: () => state.ro,
     h(tag, cls, text) { const e = mk(tag, cls); if (text !== undefined && text !== null) e.textContent = text; return e; },
     shape(cls) { const s = mk('span', 'shape ' + cls); s.setAttribute('aria-hidden', 'true'); return s; },
+    plainMd: (s) => s,
+    renderMarkdown: (t) => { const e = mk('div', 'md'); e.textContent = t; return e; },
+    clampable: (content, cls) => { const e = mk('div', 'clamp' + (cls ? ' ' + cls : '')); e.appendChild(content); return e; },
     sessionLabel: (id) => `session ${String(id).slice(0, 8)}`,
     sessionInfo: (id) => (state.sessions && state.sessions[id]) || null,
     timeEl: (iso) => { const t = mk('time'); t.textContent = `at ${iso}`; return t; },
@@ -1047,7 +1050,7 @@ test('the draft row sits at the foot of each open item, where the Send button us
   const t = openSection();
   t.show(CARD([wait('c1.w1', 'question')]));
   const li = row(t, 'c1.w1');
-  assert.deepEqual(li.children.map((c) => c.className), ['wait-top', 'wait-text', 'input', 'wait-draft']);
+  assert.deepEqual(li.children.map((c) => c.className), ['wait-top', 'clamp wait-text', 'input', 'wait-draft']);
 });
 
 test('the text of an empty chat-only column follows the role of the stage, not its id', () => {

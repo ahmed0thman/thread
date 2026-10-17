@@ -17,7 +17,6 @@
 .hist-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
 .hist-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 var(--s3); }
 .hist-list time { color: var(--muted); }
-.run-prompt { max-height: 16em; overflow: auto; }
 .run-stop { align-self: flex-start; }
 .run-quiet { margin: 0; }
 
@@ -91,7 +90,8 @@
 .ab-row .v.plain { font: 14px/1.5 var(--sans); user-select: auto; }
 .ab-brief { margin-top: var(--s3); }
 .ab-brief summary { cursor: pointer; padding: 4px 0; font-size: 12.5px; font-weight: 500; color: var(--muted); }
-.ab-brief pre { margin: var(--s2) 0 0; padding: var(--s2) var(--s3); max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 var(--sans); background: var(--surface-2); border-radius: var(--r2); }
+.ab-brief .clamp { margin-top: var(--s2); padding: var(--s2) var(--s3); overflow-wrap: anywhere; background: var(--surface-2); border-radius: var(--r2); }
+.ab-brief .md { font-size: 12.5px; line-height: 1.5; font-family: var(--sans); }
 .ab-who { padding-top: 4px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ab-seen { margin-top: 2px; font-size: 12.5px; color: var(--muted); }
 .ab-note { margin: 0; font-size: 12.5px; color: var(--muted); }
@@ -197,18 +197,45 @@
 .composer-row .btn.primary { border-radius: var(--pill); }
 
 /* markdown subset */
-.md { font-size: 14px; }
+.md { font-size: 14px; white-space: normal; }
+.md p, .md li { white-space: pre-line; }
 .ws-center .md { font-size: 15px; line-height: 1.6; }
+.md :where(p, ul, ol, pre) { margin: 0; }
 .md > * + * { margin-top: var(--s2); }
-.md p { margin: 0; }
-.md ul, .md ol { margin: 0; padding-left: 20px; }
+.md ul, .md ol { padding-left: 20px; }
 .md li + li { margin-top: 4px; }
 .md li > ul, .md li > ol { margin-top: 4px; }
-.md h4 { margin: var(--s3) 0 0; font-size: 16px; font-weight: 500; }
-.md h4.l1 { font-size: 18px; }
-.md pre { margin: 0; padding: var(--s2) var(--s3); background: var(--surface-2); border-radius: var(--r2); overflow-x: auto; font-size: 12.5px; line-height: 1.5; }
+.md { overflow-wrap: anywhere; }
+.md h4 { margin: var(--s3) 0 0; font-size: 15.5px; font-weight: 600; line-height: 1.35; color: var(--accent); }
+.md h4.l1 { font-size: 19px; }
+.md > h4:first-child { margin-top: 0; }
+.md .tone-did { color: var(--did); }
+.md .tone-found { color: var(--found); }
+.md .tone-decided { color: var(--decided); }
+.md .tone-changed { color: var(--changed); }
+.md .tone-open { color: var(--open); }
+.md .tone-warn { color: var(--warn); }
+.md .tone-ok { color: var(--fin); }
+.md a { color: var(--focus); text-decoration: underline; text-underline-offset: 2px; }
+.md .ref { text-decoration: underline dotted var(--border-strong); text-underline-offset: 3px; cursor: help; }
+.md .md-table { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r2); }
+.md table { border-collapse: collapse; width: 100%; font-size: 13px; line-height: 1.45; }
+.md th, .md td { padding: 5px 10px; overflow-wrap: break-word; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); white-space: pre-line; }
+.md td + td, .md th + th { border-left: 1px solid var(--border); }
+.md tbody tr:last-child td { border-bottom: 0; }
+.md th { background: var(--surface-2); font-weight: 600; }
+.md .al-c { text-align: center; }
+.md .al-r { text-align: right; }
+.md pre { padding: var(--s2) var(--s3); background: var(--surface-2); border-radius: var(--r2); overflow-x: auto; font-size: 12.5px; line-height: 1.5; }
 .md pre code { background: none; padding: 0; font-size: inherit; }
 .md strong { font-weight: 600; }
+/* long text in one message: about 12 lines, a fade, and a Show more button when it overflows */
+.clamp-body { max-height: 19em; overflow: hidden; }
+.clamp[data-open] .clamp-body { max-height: none; }
+.clamp[data-over]:not([data-open]) .clamp-body { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 3.5em), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 3.5em), transparent); }
+.clamp-toggle { display: block; margin-top: 4px; padding: 2px 0; border: 0; background: none; color: var(--accent); font: 500 12.5px var(--sans); cursor: pointer; }
+.clamp-toggle:hover { text-decoration: underline; }
+.clamp-toggle[hidden] { display: none; }
 
 /* digest */
 .dg-grid { display: flex; flex-direction: column; gap: var(--s3); }
