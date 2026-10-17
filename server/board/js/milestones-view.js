@@ -30,7 +30,7 @@
     config.stages.forEach((s) => { stageName[s.id] = s.label; });
     return list.map((m) => {
       const st = milestoneStats(cards, m, config);
-      return [m.id, m.title, msStateOf(m, cards, config), milestoneWaits(cards, m.id).map((w) => w.kind).sort().join(), st.total, st.todo, st.working, st.done, st.more, st.shown.map((c) => [c.id, c.title, stageName[c.status] || c.status])];
+      return [m.id, m.title, msStateOf(m, cards, config), milestoneWaits(cards, m.id).map((w) => w.kind).sort().join(), st.total, st.todo, st.working, st.done, st.more, st.shown.map((c) => [c.id, c.title, stageName[c.status] || c.status, (workState(c) || {}).sig || ''])];
     });
   }
   // ---- end milestone view model ----
@@ -77,7 +77,10 @@
           const link = h('a', 'ms-open-link');
           link.href = hashFor(selKey, c.id);
           bindCardLink(link, c.id);
-          link.append(h('span', 'idchip', c.id), h('span', 'ms-open-text', c.title), h('span', 'ms-open-stage muted', stageName(c)));
+          const work = workState(c);
+          link.append(h('span', 'idchip', c.id), h('span', 'ms-open-text', c.title));
+          if (work) link.appendChild(workEl(work, 'dot'));
+          link.appendChild(h('span', 'ms-open-stage muted', stageName(c)));
           row.appendChild(link);
           open.appendChild(row);
         });

@@ -553,6 +553,22 @@ export async function markRunStopped(projectDirArg, cardId, n) {
 
 // ---------------------------------------------------------------- the board's reader
 
+// A running run with no new activity for this long may have stopped (its stop was never recorded). The card page's own
+// threshold (RUN_QUIET_MS in the board's thread.js) is the same number; a test holds them equal.
+export const RUN_QUIET_MS = 10 * 60 * 1000;
+
+// Whether a running run has been quiet for RUN_QUIET_MS: its transcript has not changed that long (a run whose transcript cannot be
+// read counts from its start, as the board's activity route does). The board tile shows it as `quiet`, computed per response, never stored.
+export function runQuiet(run, nowMs = Date.now()) {
+  if (!run || run.state !== 'running') return false;
+  let last = Date.parse(run.startedAt);
+  try {
+    const file = runTranscript(run);
+    if (file) last = statSync(file).mtimeMs;
+  } catch { /* gone: from its start */ }
+  return Number.isFinite(last) && nowMs - last >= RUN_QUIET_MS;
+}
+
 // What the board route returns for a run: { run, running, events, next, more, prompt?, reset?, quietMs?, gone? }. A finished run is
 // read from its snapshot; a running one (or a finished one without a snapshot) from its transcript, from byte `offset`.
 // The only path ever read is the one recorded on the run, and only after safeTranscript accepts it.

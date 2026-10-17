@@ -26,7 +26,7 @@ const CUSTOM = {
 };
 
 const lib = vm.runInNewContext(
-  `${block('milestones and stages')}\n${block('list model')}\n${block('milestone view model')}\n`
+  `${block('working now')}\n${block('milestones and stages')}\n${block('list model')}\n${block('milestone view model')}\n`
   + '({ rowType, workerText, listRows, LIST_COLS, LIST_DEFAULT_SORT, sortRows, nextSort, listFilter, listFiltering, listChoices, milestoneStats, milestonesShown, milestonesOrdered, msStateOf, listRowSig, NO_MS })',
   {},
 );
@@ -592,7 +592,7 @@ test('a card of an older version draws a plain row: no marks, normal priority, e
 
 test('a milestone row shows its state and progress where the stage would be, and text from a card is set as text', () => {
   const t = tablePage();
-  const page = vm.runInNewContext(`${block('list model')}\n({ listRows })`, { progressOf: () => ({ done: 2, total: 5 }), msStateOf: () => 'open', openWaitsOf: () => [], matches: () => true });
+  const page = vm.runInNewContext(`${block('working now')}\n${block('list model')}\n({ listRows })`, { progressOf: () => ({ done: 2, total: 5 }), msStateOf: () => 'open', openWaitsOf: () => [], matches: () => true });
   const m = page.listRows([card('c1', { kind: 'milestone', title: '<img src=x onerror=alert(1)>' })], CONFIG)[0];
   const tr = t.page.buildListRow(m);
   assert.equal(tr.querySelector('.c-stage').textContent, 'Open · 2/5');
@@ -622,13 +622,15 @@ function milestonesPage(cards) {
     plainBtn: (text) => { const b = doc.createElement('button'); b.textContent = text; return b; },
     progressEl: (p) => { const e = doc.createElement('div'); e.textContent = p.done + '/' + p.total; return e; },
     msStateTag: (state) => { const e = doc.createElement('span'); e.className = 'tag ms-st'; e.textContent = state; return e; },
+    shape(cls) { const s = doc.createElement('span'); s.className = 'shape ' + cls; return s; },
+    fmtMs: (ms) => Math.round(ms / 1000) + 's',
     waitTag: () => null,
     goView: () => {}, milestoneSel: '',
   };
   const start = html.indexOf('  function milestonesPaneKey');
   const end = html.indexOf('  // ---------- projects home');
   assert.ok(start > 0 && end > start);
-  const src = `${block('card link')}\n${block('milestones and stages')}\n${block('milestone view model')}\n${html.slice(start, end)}\n({ renderMilestones, milestonesPaneKey })`;
+  const src = `${block('card link')}\n${block('working now')}\n${block('milestones and stages')}\n${block('milestone view model')}\n${html.slice(start, end)}\n({ renderMilestones, milestonesPaneKey })`;
   const page = vm.runInNewContext(src, vm.createContext(env));
   return { page, pane, opened };
 }
@@ -647,7 +649,23 @@ test('a card or milestone link in the Milestones view opens the card page on a p
   }
   assert.equal(t.opened.length, 2);
   // the key follows what is drawn
-  assert.match(t.page.milestonesPaneKey(), /^\["milestones","k1",\[\["c1","Launch","open","",2,1,0,1,0,\[\["c2","Open one","New"\]\]\]\]\]$/);
+  assert.match(t.page.milestonesPaneKey(), /^\["milestones","k1",\[\["c1","Launch","open","",2,1,0,1,0,\[\["c2","Open one","New",""\]\]\]\]\]$/);
+});
+
+test('a card with a running agent has a dot in the Milestones view, named for screen readers, and the key follows it', () => {
+  const run = { n: 1, agentType: 'worker', state: 'running', startedAt: '2026-10-14T03:26:00.000Z' };
+  const cards = [card('c1', { kind: 'milestone', title: 'Launch' }), card('c2', { parent: 'c1', title: 'Busy', runs: [run] }), card('c3', { parent: 'c1', title: 'Idle' })];
+  const t = milestonesPage(cards);
+  t.page.renderMilestones();
+  const rows = t.pane.querySelectorAll('a.ms-open-link');
+  assert.equal(rows.length, 2);
+  const dot = rows[0].querySelector('.work-dot');
+  assert.ok(dot && dot.querySelector('.shape.s-pulse'));
+  assert.equal(dot.querySelector('.sr-only').textContent, 'worker working');
+  assert.equal(rows[1].querySelector('.work-dot'), null);
+  const before = t.page.milestonesPaneKey();
+  cards[1].runs = [{ ...run, state: 'done' }];
+  assert.notEqual(t.page.milestonesPaneKey(), before, 'the view is drawn again when the run ends');
 });
 
 test('closing a card page opened from a link in the Milestones or the Summary puts focus back on that link', () => {

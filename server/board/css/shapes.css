@@ -48,6 +48,16 @@
   border-radius: var(--r1); font-size: 12px; font-weight: 600; line-height: 18px; white-space: nowrap;
 }
 .pill { color: var(--k); background: var(--kbg); }
+/* working now: something runs on the card (a sub-agent run or a thread turn). Live work is the accent pill with the pulsing dot; a run
+   that has been quiet for a long time is muted with a dashed ring, so it does not pass for live work (the text says so too). */
+.pill.work { max-width: 100%; min-width: 0; }
+.pill.work-quiet { --k: var(--muted); --kbg: var(--surface-2); font-weight: 500; }
+.work-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.work-compact { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; font-size: 12px; font-weight: 600; line-height: 18px; white-space: nowrap; }
+.work-compact .shape { color: inherit; }
+.work-compact.work-live { color: var(--run); }
+.work-compact.work-quiet { color: var(--muted); font-weight: 500; }
+.work-compact.work-dot { position: relative; flex: none; }
 .idchip, .refchip {
   display: inline-block; font: 500 12px/18px var(--mono); padding: 0 6px; border-radius: var(--r1);
   background: var(--surface-2); color: var(--text); white-space: nowrap;

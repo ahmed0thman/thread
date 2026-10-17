@@ -152,8 +152,11 @@
     }
 
     const foot = h('div', 'card-foot');
+    // what is running on the card now comes first, so it is seen without opening the card; a thread shows it as its Running pill
+    const work = workState(card);
+    if (work) foot.appendChild(workEl(work, false));
     if (thread) {
-      foot.appendChild(runPill(t.runState));
+      if (!work) foot.appendChild(runPill(t.runState));
       const n = turnsOf(card).length;
       foot.appendChild(h('span', 'tnum', n + (n === 1 ? ' turn' : ' turns')));
       const rt = reportTag(card);
@@ -173,7 +176,7 @@
     if (foot.childNodes.length) el.appendChild(foot);
 
     const rs = thread ? reportState(card) : '';
-    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (ms ? ', in milestone ' + ms.title : '') + (laneInfo(card) ? ', lane ' + laneTagText(laneInfo(card)) : '') + fm.aria.map((a) => ', ' + a).join('') + (waits.length ? ', ' + waits.length + ' waiting for you' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : '') + (card.notified === true ? ', Claude notified' : ''));
+    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread && !work ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (work ? ', ' + work.aria : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (ms ? ', in milestone ' + ms.title : '') + (laneInfo(card) ? ', lane ' + laneTagText(laneInfo(card)) : '') + fm.aria.map((a) => ', ' + a).join('') + (waits.length ? ', ' + waits.length + ' waiting for you' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : '') + (card.notified === true ? ', Claude notified' : ''));
 
     el.addEventListener('click', () => {
       if (Date.now() - lastDragEnd < 200) return;

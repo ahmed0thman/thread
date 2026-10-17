@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import * as core from './core.mjs';
 import { listLanesWithRelay } from './lanes.mjs';
 import { assembleBoardPage } from './page.mjs';
-import { markRunStopped, readRunText, runActivity } from './runs.mjs';
+import { markRunStopped, readRunText, runActivity, runQuiet } from './runs.mjs';
 import { TunnelError, createTunnelManager, reapStaleTunnel } from './tunnel.mjs';
 
 export { TunnelError };
@@ -594,8 +594,8 @@ function withViews(card, cfg, cards) {
   delete view.localDoneAt;
   delete view.localCriteria;   // how many criteria this machine's board last had; the page is told the result (criteriaCut)
   delete view.approvals;   // this machine's own record of the approvals it was given; the page is told the result (verified, approvalElsewhere)
-  // where the transcript of a sub-agent run lies stays on the server
-  if (Array.isArray(view.runs)) view.runs = view.runs.filter((r) => r && typeof r === 'object').map(({ transcript, ...run }) => run);
+  // where the transcript of a sub-agent run lies stays on the server; a running run that has gone quiet says so (`quiet`, computed here, never stored)
+  if (Array.isArray(view.runs)) view.runs = view.runs.filter((r) => r && typeof r === 'object').map(({ transcript, ...run }) => (runQuiet({ ...run, transcript }) ? { ...run, quiet: true } : run));
   // an older plugin version can remove a milestone without clearing its cards
   if (view.parent && !cards.some((c) => c.id === view.parent && c.kind === 'milestone')) delete view.parent;
   if (card.kind === 'milestone') {

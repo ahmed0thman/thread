@@ -56,13 +56,14 @@
         updatedMs: Number.isFinite(updatedMs) ? updatedMs : null,
         blockedBy: unfinished(c),
         unverified: c.verified === false,
+        work: workState(c),
       };
     });
   }
   // What a row draws, as plain data. The List's pane key is made of these, so a change no row shows (a note, a history entry, a card of
   // another project) leaves the table alone.
   function listRowSig(r) {
-    return [r.id, r.type, r.bug, r.title, r.status, r.stageLabel, r.progress, r.msState, r.priority, r.labels, r.milestoneId, r.milestoneTitle, r.lastWorker, r.moreWorkers, r.waits, r.updated, r.blockedBy, r.unverified];
+    return [r.id, r.type, r.bug, r.title, r.status, r.stageLabel, r.progress, r.msState, r.priority, r.labels, r.milestoneId, r.milestoneTitle, r.lastWorker, r.moreWorkers, r.waits, r.updated, r.blockedBy, r.unverified, r.work ? r.work.sig : ''];
   }
   // The columns. `first` is the direction of the first click; `key` is what a row is compared by (null sorts last in either direction).
   // Priority and Waiting start with the most important at the top and Updated with the newest; the stage is in the order of the board's columns.
@@ -197,8 +198,9 @@
     const t = h('div', 'l-title', r.title);
     t.title = r.title;
     title.appendChild(t);
-    if (r.blockedBy.length || r.unverified) {
+    if (r.work || r.blockedBy.length || r.unverified) {
       const marks = h('div', 'l-marks');
+      if (r.work) marks.appendChild(workEl(r.work, true));
       if (r.blockedBy.length) marks.appendChild(blockedMark(r.blockedBy));
       if (r.unverified) marks.appendChild(unverifiedMark());
       title.appendChild(marks);

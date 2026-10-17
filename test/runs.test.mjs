@@ -386,6 +386,34 @@ test('the route reads a running run\'s transcript from an offset, a whole line a
   assert.equal(r.body.events.length, 3);
 });
 
+test('the board marks a running run quiet when its transcript has not changed for RUN_QUIET_MS, and no other run', async (t) => {
+  const w = world(t);
+  const file = w.install(COUNT_ID, { description: '[c7] count the files' });
+  const other = w.install(READ_ID, { description: '[c8] read each file' });
+  const stateCards = async (b) => Object.fromEntries((await b.get('/api/state')).body.cards.map((c) => [c.id, c]));
+  const old = (f) => { const at = new Date(Date.now() - runs.RUN_QUIET_MS - 60000); fs.utimesSync(f, at, at); };
+  writeStateFile(w.dataDir, w.projectDir, emptyState(w.projectDir, [
+    task('c7', { runs: [runRecord({ transcript: file })] }),
+    task('c8', { runs: [runRecord({ n: 1, agentId: READ_ID, transcript: other }), runRecord({ n: 2, agentId: 'f'.repeat(16), state: 'done', ok: true, finishedAt: '2026-10-14T03:06:00.000Z', transcript: null })] }),
+  ]));
+  const b = await board(t, w);
+  let cards = await stateCards(b);
+  assert.equal(cards.c7.runs[0].quiet, undefined, 'a transcript that changed just now: live');
+  old(file);
+  cards = await stateCards(b);
+  assert.equal(cards.c7.runs[0].quiet, true);
+  assert.equal(cards.c8.runs[0].quiet, undefined, 'another run is not touched');
+  assert.equal(cards.c8.runs[1].quiet, undefined, 'a finished run is never quiet');
+  assert.equal('transcript' in cards.c7.runs[0], false, 'the path still stays on the server');
+  // never stored: the state file has no such field
+  assert.equal(JSON.stringify(core.readState(w.projectDir)).includes('"quiet"'), false);
+  // no readable transcript: counted from the start of the run
+  assert.equal(runs.runQuiet(runRecord({ transcript: undefined, startedAt: new Date(Date.now() - 5 * 60000).toISOString() })), false);
+  assert.equal(runs.runQuiet(runRecord({ transcript: undefined, startedAt: new Date(Date.now() - 11 * 60000).toISOString() })), true);
+  assert.equal(runs.runQuiet(runRecord({ state: 'stopped', startedAt: '2020-01-01T00:00:00.000Z' })), false);
+  assert.equal(runs.runQuiet(null), false);
+});
+
 test('a finished run is read from its snapshot, which outlives the transcript', async (t) => {
   const w = world(t);
   const file = w.install(COUNT_ID, { description: '[c7] count the files' });

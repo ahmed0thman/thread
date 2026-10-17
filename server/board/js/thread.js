@@ -624,7 +624,8 @@
       titleEl.textContent = c.title;
       titleEl.title = c.title;
       meta.replaceChildren();
-      meta.appendChild(runPill(t.runState));
+      const work = workState(c);
+      meta.appendChild(work ? workEl(work, false) : runPill(t.runState));
       meta.appendChild(h('span', null, t.mode === 'write' ? 'Can edit files' : 'Read-only'));
       if (t.parentSessionId) {
         const from = h('span', 'ws-from', 'from ' + sessionLabel(t.parentSessionId));
@@ -1182,7 +1183,7 @@
       const ro = isRO();
       const sess = sessionInfo(t.parentSessionId);
       const k = {
-        head: JSON.stringify([c.title, t.runState, t.mode, turns.length, turns[0] && turns[0].startedAt, c.seenByClaude, reportState(c), sess && sess.label, ro]),
+        head: JSON.stringify([c.title, t.runState, t.mode, turns.length, turns[0] && turns[0].startedAt, c.seenByClaude, reportState(c), sess && sess.label, ro, (workState(c) || {}).sig]),
         about: JSON.stringify([t.sessionId, t.lane, laneFollowUp(c), t.parentSessionId, turns, reportState(c), sess, t.context, t.brief, t.agent, t.model, t.effort, c.parent, milestoneChoices(), ro]),
         trace: JSON.stringify([turns, t.runState, t.lane && t.lane.implementer]),
         convo: JSON.stringify([turns, t.runState]),

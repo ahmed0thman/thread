@@ -144,6 +144,58 @@
   // What the lanes change on a card or its page, for the keys that decide whether they are drawn again.
   const laneSig = (card) => JSON.stringify([laneInfo(card), card && card.thread ? laneFollowUp(card) : null]);
   // ---- end delegation lanes ----
+  // ---- working now (work-page.test.mjs runs this block on its own) ----
+  // Whether anything is running on a card right now, as plain data, or null. A task or idea: its sub-agent runs in the state `running`
+  // (the server marks one `quiet` after a long time without activity: it may have stopped, so it is not shown as live
+  // work). A thread: a turn that is running. { live, quiet, count, text, aria, kind, lane, since, runs, sig }: `text` is the short label
+  // ("worker working", "3 agents working", "Running on code-codex"), `sig` what a pane compares to know whether to draw it again.
+  function workState(card) {
+    if (!card || typeof card !== 'object') return null;
+    if (card.kind === 'thread' && card.thread) {
+      const t = card.thread;
+      if (t.runState !== 'running') return null;
+      const lane = t.lane && typeof t.lane.name === 'string' ? t.lane.name : '';
+      const turns = Array.isArray(t.turns) ? t.turns : [];
+      const last = turns.length ? turns[turns.length - 1] : null;
+      const w = { kind: 'thread', live: true, quiet: false, count: 1, lane, since: last && typeof last.startedAt === 'string' ? last.startedAt : '', runs: [], text: lane ? 'Running on ' + lane : 'Running', aria: 'working now: thread turn running' + (lane ? ' on lane ' + lane : '') };
+      w.sig = ['thread', lane, w.since].join('|');
+      return w;
+    }
+    const running = Array.isArray(card.runs) ? card.runs.filter((r) => r && typeof r === 'object' && r.state === 'running') : [];
+    if (!running.length) return null;
+    const runs = running.map((r) => ({ type: typeof r.agentType === 'string' && r.agentType ? r.agentType : 'agent', since: typeof r.startedAt === 'string' ? r.startedAt : '', quiet: r.quiet === true }));
+    const live = runs.filter((r) => !r.quiet);
+    const shown = live.length ? live : runs;
+    const isLive = live.length > 0;
+    const types = shown.map((r) => r.type).filter((x, i, a) => a.indexOf(x) === i);
+    const text = (shown.length === 1 ? shown[0].type : shown.length + ' agents') + (isLive ? ' working' : ' quiet');
+    const what = shown.length === 1 ? shown[0].type : shown.length + ' agents (' + types.join(', ') + ')';
+    return {
+      kind: 'runs', live: isLive, quiet: !isLive, count: shown.length, lane: '', since: '', runs, text,
+      aria: isLive ? 'working now: ' + what : what + (shown.length === 1 ? ' run' : ' runs') + ' quiet, may have stopped',
+      sig: ['runs', runs.map((r) => r.type + (r.quiet ? '!' : '') + '@' + r.since).join(',')].join('|'),
+    };
+  }
+  // The tooltip of the indicator: what runs, since when, and for a quiet run why it is not shown as live. `nowMs` is the clock.
+  function workTitle(w, nowMs) {
+    const age = (iso) => { const ms = nowMs - Date.parse(iso); return Number.isFinite(ms) ? ' for ' + fmtMs(ms) : ''; };
+    if (w.kind === 'thread') return 'A turn of this thread is running' + age(w.since) + (w.lane ? ' on the ' + w.lane + ' lane' : '') + '.';
+    const lines = w.runs.map((r) => r.type + (r.quiet ? ': no recent activity, it may have stopped' : ': running') + age(r.since));
+    return (w.live ? 'Working now' : 'Nothing has happened for a while') + '\n' + lines.join('\n');
+  }
+  // The indicator as an element: the pulsing dot of a thread's Running pill and the text. A quiet run gets a muted look and a ring instead
+  // of the dot, so it differs without colour. `compact` is for a table row, which has no room for a pill; 'dot' is the mark alone (its text is for screen readers).
+  function workEl(w, compact) {
+    const el = h('span', (compact ? 'work work-compact' : 'pill work') + (w.live ? ' work-live' : ' work-quiet') + (compact === 'dot' ? ' work-dot' : ''));
+    if (w.live) el.dataset.run = 'running';
+    el.appendChild(shape(w.live ? 's-pulse' : 's-dring'));
+    el.appendChild(h('span', compact === 'dot' ? 'sr-only' : 'work-text', w.text));
+    const set = () => { el.title = workTitle(w, Date.now()); };
+    set();
+    el.addEventListener('mouseenter', set);   // the elapsed time moves on between two drawings
+    return el;
+  }
+  // ---- end working now ----
   // ---- milestones and stages (page.test.mjs runs this block on its own) ----
   const NO_MS = ':none';     // the Milestone filter's "No milestone"; a colon is not valid in a card id
   const CHAT_ROLES = ['working', 'review', 'blocked', 'done'];

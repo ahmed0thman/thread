@@ -663,7 +663,8 @@
       if (c.notified === true) seenWrap.appendChild(notifiedEl(ws ? 'span' : 'div', c));
       if (ws) {
         const n = Array.isArray(c.runs) ? c.runs.length : 0;
-        S.meta.replaceChildren(h('span', null, label(c.status)), h('span', 'tnum', n ? n + (n === 1 ? ' agent run' : ' agent runs') : 'No agent runs'), seenWrap);
+        const work = workState(c);
+        S.meta.replaceChildren(h('span', null, label(c.status)), ...(work ? [workEl(work, false)] : []), h('span', 'tnum', n ? n + (n === 1 ? ' agent run' : ' agent runs') : 'No agent runs'), seenWrap);
         runsView.update(c);
       }
       // follow the server only for fields the user has not touched
