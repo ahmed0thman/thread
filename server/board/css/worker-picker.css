@@ -1,0 +1,52 @@
+/* ---------- the Worker field and its picker ---------- */
+.wk-btn { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); text-align: left; cursor: pointer; font: inherit; color: var(--text); }
+.wk-btn:disabled { cursor: not-allowed; }
+.wk-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-caret { flex: none; width: 7px; height: 7px; margin-right: 2px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: translateY(-2px) rotate(45deg); }
+
+.wp-scrim { position: fixed; inset: 0; z-index: 70; display: flex; align-items: flex-start; justify-content: center; padding: 8vh var(--s4) var(--s4); background: var(--scrim); animation: fade-in 0.15s ease-out; }
+.wp {
+  display: flex; flex-direction: column; gap: var(--s3); width: min(680px, 100%); max-height: 84vh; padding: var(--s4);
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--r3); box-shadow: var(--shadow-md);
+}
+.wp:focus { outline: none; }
+.wp-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
+.wp-title { margin: 0; font: 400 20px/1.3 var(--serif); }
+.wp-search { flex: none; }
+.wp-pinned { flex: none; display: flex; flex-direction: column; gap: 4px; }
+.wp-tabs { flex: none; display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--border); }
+.wp-tab {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 var(--s3); font: inherit; font-weight: 500; color: var(--muted);
+  background: transparent; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer;
+}
+.wp-tab:hover { color: var(--text); }
+.wp-tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.wp-count { min-width: 20px; padding: 0 6px; border-radius: var(--pill); background: var(--surface-2); color: var(--muted); font-size: 12px; font-weight: 600; line-height: 18px; text-align: center; }
+.wp-tab[aria-selected="true"] .wp-count { background: var(--accent-bg); color: var(--accent); }
+.wp-list { flex: 1 1 auto; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 2px; }
+.wp-row {
+  display: flex; flex-direction: column; gap: 2px; padding: var(--s2) var(--s3); border: 1px solid var(--border); border-radius: var(--r2);
+  background: var(--surface); cursor: pointer;
+}
+.wp-row:hover { background: var(--surface-2); }
+.wp-row[aria-selected="true"] { border-color: var(--accent); background: var(--accent-bg); }
+.wp-row[aria-disabled="true"] { cursor: not-allowed; }
+.wp-row[aria-disabled="true"] .wp-name, .wp-row[aria-disabled="true"] .wp-line { color: var(--muted); }
+.wp-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s3); min-width: 0; }
+.wp-name { font-weight: 600; overflow-wrap: anywhere; }
+.wp-line { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.wp-marks { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.wp-badge { padding: 0 6px; font-size: 11.5px; font-weight: 500; color: var(--muted); background: var(--surface-2); }
+.wp-row[aria-selected="true"] .wp-badge { background: var(--surface); }
+.wp-badge.wp-cur { color: var(--accent); font-weight: 600; }
+.wp-badge.attn { color: var(--warn); background: var(--warn-bg); }
+.wp-desc { margin: 0; font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wp-hint { margin: 0; font-size: 12.5px; color: var(--warn); }
+.wp-empty { margin: var(--s3) 0; color: var(--muted); }
+@media (max-width: 640px) {
+  .wp-scrim { padding: 0; align-items: stretch; }
+  .wp { width: 100%; max-height: none; height: 100%; border: 0; border-radius: 0; box-shadow: none; padding: var(--s3); }
+  .wp-tabs { flex-wrap: nowrap; gap: 0; }
+  .wp-tab { flex: 1 1 auto; justify-content: center; gap: 4px; padding: 0 6px; font-size: 13px; }
+  .wp-count { min-width: 18px; padding: 0 4px; }
+}

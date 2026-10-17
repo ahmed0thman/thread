@@ -279,6 +279,8 @@ export function readPlainFile(path, max, known = null) {
 // ---------------------------------------------------------------- a card file
 
 const WAIT_ORDER = ['id', 'kind', 'text', 'choices', 'multi', 'askedAt', 'state', 'answer', 'comment', 'answeredAt', 'answeredVia', 'withdrawnAt'];
+// Exactly the list older versions have: a key not in it sorts last, alphabetically, the same in every version (a card's file text and its
+// hash are the same whichever version writes it). So a field added later, `agent` included, is not added here.
 const CARD_ORDER = ['id', 'kind', 'title', 'note', 'status', 'source', 'parent', 'lane', 'type', 'priority', 'labels', 'blockedBy', 'criteria', 'waits', 'waitSeq', 'leftDoneAt', 'createdAt', 'updatedAt', 'history'];
 
 // The keys in the order above, then any others in alphabetical order, so the same card is always the same text.

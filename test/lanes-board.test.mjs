@@ -174,7 +174,7 @@ test('Start refuses with a 409 when the card\'s lane is not the one the page sho
   // the page showed ui-open; the card has code-codex (Claude changed it, or a pull did)
   let r = await go('c1', 'ui-open');
   assert.equal(r.status, 409, JSON.stringify(r.body));
-  assert.match(r.body.error, /^the card's lane changed since you looked at it/);
+  assert.match(r.body.error, /^the card's worker \(lane or agent\) changed since you looked at it/);
   // the page showed no lane; the card has one
   r = await go('c1', null);
   assert.equal(r.status, 409);

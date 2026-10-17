@@ -472,6 +472,34 @@ test('over the tunnel a lane cannot be set, changed or removed, and a refused sa
   assert.equal(lanesRead.status, 200, 'the lanes can be read, as before');
 });
 
+test('over the tunnel an agent cannot be set, changed or removed, and a refused save writes nothing; on the normal listener it can', async (t) => {
+  const b = await boot(t);
+  fs.mkdirSync(path.join(b.projectDir, '.claude', 'agents'), { recursive: true });
+  fs.writeFileSync(path.join(b.projectDir, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: Reviews\n---\nYou review.\n');
+  seedThread(b);
+  const a = await open(b);
+  const P = `/api/p/${b.key}`;
+  const stored = () => JSON.stringify(core.readState(b.projectDir).cards.find((c) => c.id === 'c1'));
+  const before = stored();
+  for (const body of [{ agent: 'reviewer' }, { agent: 'reviewer', title: 'Also renamed' }, { agent: null }, { agent: '' }, { agent: 'no-such-agent' }]) {
+    for (const route of [`${P}/cards/c1`, '/api/cards/c1']) {
+      const r = await a.write('PATCH', route, body);
+      assert.equal(r.status, 403, `${route} ${JSON.stringify(body)} -> ${r.status} ${r.text}`);
+      assert.match(r.json.error, /^a sub-agent decides who works on the card when it is started as a thread, so it can only be set, changed or removed on the computer itself, not through the tunnel$/);
+    }
+  }
+  assert.equal((await a.write('PATCH', `${P}/cards/c1`, { agent: 'reviewer', lane: null })).status, 403, 'a lane and an agent together');
+  assert.equal(stored(), before, 'nothing was written');
+  assert.equal((await a.write('PATCH', `${P}/cards/c1`, { title: 'Renamed from the phone' })).status, 200, 'the rest of a card can still be edited');
+  const H = { host: `127.0.0.1:${b.port}`, 'x-thread-token': b.token, ...JSON_HDR };
+  const local = await raw(b.port, { method: 'PATCH', path: `${P}/cards/c1`, headers: H, body: JSON.stringify({ agent: 'reviewer' }) });
+  assert.equal(local.status, 200, local.text);
+  assert.equal(local.json.agent, 'reviewer');
+  assert.equal((await a.write('PATCH', `${P}/cards/c1`, { note: 'A note from the phone' })).status, 200, 'a card that has an agent can still be edited remotely');
+  assert.equal(core.readState(b.projectDir).cards.find((c) => c.id === 'c1').agent, 'reviewer');
+  assert.equal((await a.get(`${P}/agents`)).status, 200, 'the agents can be read, as before');
+});
+
 test('on the normal listener the same routes still work as before', async (t) => {
   const b = await boot(t);
   seedThread(b);

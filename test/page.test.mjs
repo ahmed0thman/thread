@@ -254,10 +254,10 @@ test('agent and model labels leave out what is missing and name xhigh "extra-hig
   assert.equal(isBrief({}), false, 'a thread without the field is an old, full one');
 });
 
-test('the start step sends context and agent, and asks for the agent list when it opens', () => {
-  assert.match(html, /\{ sessionId, mode, context, agent: agent \|\| undefined, expectLane: L\.expectLane \}/);
-  assert.match(html, /pp\(pk, 'agents'\)/);
-  assert.match(html, /'Same as session'/);
+test('the start step sends context and the worker it showed, and the page reads the sub-agent list with the lanes', () => {
+  assert.match(html, /\{ sessionId, mode, context, expectLane: W\.expectLane, expectAgent: W\.expectAgent, agent: W\.expectAgent \|\| undefined \}/);
+  assert.match(html, /readList\(key, 'agents', 9000\)/);
+  assert.doesNotMatch(html, /'Same as session'/, 'the Agent select is gone: the Worker picker has Claude (default)');
   assert.match(html, /Copies the whole session; uses far more tokens\./);
   assert.match(html, /Gets only this card’s title and note\./);
 });
@@ -764,17 +764,18 @@ const LANES = {
   ],
 };
 
-function lanePage(lanes = null) {
+function lanePage(lanes = null, agents = null) {
   const m = /\/\/ ---- delegation lanes[^\n]*\n([\s\S]*?)\/\/ ---- end delegation lanes ----/.exec(html);
   const t = /\/\/ ---- tokens and agents[^\n]*\n([\s\S]*?)\/\/ ---- end tokens and agents ----/.exec(html);
-  assert.ok(m && t, 'the lanes block is missing from the board page');
+  const w = /\/\/ ---- workers[^\n]*\n([\s\S]*?)\/\/ ---- end workers ----/.exec(html);
+  assert.ok(m && t && w, 'the lanes or workers block is missing from the board page');
   const doc = { createElement: (tag) => new FakeEl(doc, tag) };
   doc.body = new FakeEl(doc, 'body');
   const env = {
     h(tag, cls, text) { const e = doc.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== null) e.textContent = text; return e; },
     shape(cls) { const s = doc.createElement('span'); s.className = 'shape ' + cls; s.setAttribute('aria-hidden', 'true'); return s; },
   };
-  const page = vm.runInNewContext(`let lanes = ${JSON.stringify(lanes)};\n${t[1]}\n${m[1]}\n({ laneInfo, laneTag, laneRows, showLaneRows, laneSig, laneFollowUp, laneTraceNote, laneStartPlan, laneChoiceText, laneChoices, laneOffered, laneOf, laneEditor, fillLaneSelect, startLaneArgs, setLanes(v) { lanes = v; } })`, vm.createContext(env));
+  const page = vm.runInNewContext(`let lanes = ${JSON.stringify(lanes)}, agents = ${JSON.stringify(agents)};\n${t[1]}\n${m[1]}\n${w[1]}\n({ laneInfo, laneTag, laneRows, showLaneRows, laneSig, laneFollowUp, laneTraceNote, laneStartPlan, laneOf, agentOf, workerOf, workerKind, workerName, workerRows, workerRowLine, WORKER_TABS, workerFilter, workerTabOf, workerLabel, workerEditor, workerPatch, startWorkerArgs, agentStartPlan, workerStartBlocked, workerOffered, setLanes(v) { lanes = v; }, setAgents(v) { agents = v; } })`, vm.createContext(env));
   return { page, doc };
 }
 const lcard = (lane, extra = {}) => ({ id: 'c3', kind: 'task', title: 'T', note: '', status: 'todo', lane, ...extra });
@@ -871,14 +872,14 @@ test('the lane signature changes when the lanes change what a card shows, and no
 });
 
 test('the page wires lanes in: read on the slow cycle and when a project shows, drawn in the foot and on the page, never written', () => {
-  assert.match(html, /request\('GET', pp\(key, 'lanes'\), null, 9000\)/);
-  assert.match(html, /lanes = null; lanesSig = ''; lanesAt = 0;/);
+  assert.match(html, /readList\(key, 'lanes', 9000\)/);
+  assert.match(html, /lanes = null; lanesSig = ''; lanesAt = 0; agents = null; agentsSig = '';/);
   assert.match(html, /const lt = laneTag\(card\);\n\s+if \(lt\) foot\.appendChild\(lt\);/);
   assert.match(html, /laneNodes = showLaneRows\(metaDl, laneNodes, c\);/);
   assert.match(html, /f\.milestone \+ '\|' \+ f\.waiting \+ '\|' \+ lanesSig/, 'the board is drawn again when the lanes change');
   assert.match(html, /if \(card\.lane \|\| \(card\.thread && card\.thread\.lane\)\) ctx\.push\(laneSig\(card\)\)/, 'so is a card page');
   assert.doesNotMatch(html, /\blane\s*:\s*(fMs|fTitle|fNote|fStatus)|bodyObj\.lane/, 'the new-card form sends no lane');
-  assert.match(html, /if \(LE\) Object\.assign\(patch, LE\.patch\(\)\);/, 'only the Lane select of a saved card sends one, and only when it was changed');
+  assert.match(html, /if \(WE\) Object\.assign\(patch, WE\.patch\(\)\);/, 'only the Worker field of a saved card sends one, and only when it was changed');
 });
 
 const SNAP = (over = {}) => ({ name: 'code-codex', implementer: 'codex', model: 'gpt-fake', effort: 'high', variant: null, readOnly: false, source: 'global', session: 'codex-sess-1', ...over });
@@ -939,158 +940,279 @@ test('start step for a card with a lane: the lane line, read-only when the lane 
   assert.equal(page.laneStartPlan(lthread(SNAP())), null, 'a thread has no start step');
 });
 
-test('the Lane select offers None and every lane with its provider and model; one that is not approved is listed but cannot be picked', () => {
-  const { page } = lanePage({ ...LANES, lanes: [...LANES.lanes, { name: 'agy-fast', implementer: 'agy', model: 'gemini-fake', effort: null, variant: null, readOnly: false, source: 'global', approved: true, relay: false }] });
-  assert.deepEqual(plain(page.laneChoices('', false)), [
-    { value: '', text: 'None', disabled: false },
-    { value: 'code-codex', text: 'code-codex · codex · gpt-fake · high', disabled: false },
-    { value: 'ui-open', text: 'ui-open · opencode · vendor/model-x · max', disabled: false },
-    { value: 'review-ro', text: 'review-ro (not approved) · claude · extra-high · read-only', disabled: true },
-    { value: 'agy-fast', text: 'agy-fast · agy · gemini-fake · read-only', disabled: false },
-  ], 'a variant stands in for the effort, extra-high is spelt out, agy lanes are read-only, and a lane without a relay can still be put on a card');
-  const start = plain(page.laneChoices('', true));
-  assert.equal(start[0].text, 'Claude (no lane)', 'the start step\'s first choice is Claude without a lane');
-  assert.deepEqual(start.filter((c) => c.disabled).map((c) => [c.value, /\((.*)\)/.exec(c.text)[1]]), [['review-ro', 'not approved'], ['agy-fast', 'relay not installed']], 'in the start step a lane without its relay cannot be picked either');
-  assert.deepEqual(plain(page.laneChoices('gone', false)).at(-1), { value: 'gone', text: 'gone (not found)', disabled: true }, 'the card\'s own lane stays in the list when no lane has its name');
-  assert.equal(plain(page.laneChoices('code-codex', false)).filter((c) => c.value === 'code-codex').length, 1, 'a lane that is found is listed once');
-  page.setLanes({ available: false, projectTrusted: false, lanes: [] });
-  assert.deepEqual(plain(page.laneChoices('', false)), [{ value: '', text: 'None', disabled: false }]);
-  page.setLanes(null);
-  assert.deepEqual(plain(page.laneChoices('code-codex', true)).map((c) => c.value), ['', 'code-codex'], 'before the lanes have loaded, only None and the card\'s own lane');
+const AGENTS = {
+  agents: [
+    { name: 'reviewer', description: 'Reads a diff and reports what is wrong with it.', model: 'claude-opus-5-5', effort: 'high', scope: 'project' },
+    { name: 'worker', description: 'Routine work.\nSecond line.', model: 'claude-sonnet-5-5', effort: 'xhigh', scope: 'user' },
+    { name: 'plain', description: '', model: null, effort: null, scope: 'user' },
+  ],
+};
+const WLANES = {
+  available: true, projectTrusted: false,
+  lanes: [
+    ...LANES.lanes,
+    { name: 'agy-fast', implementer: 'agy', model: 'gemini-fake', effort: null, variant: null, readOnly: false, source: 'project', approved: false, relay: false },
+    { name: 'claude-edit', implementer: 'claude', model: 'claude-fake', effort: 'medium', variant: null, readOnly: false, source: 'project', approved: true, relay: true, overridesGlobal: true },
+    { name: 'no-relay', implementer: 'opencode', model: 'vendor/y', effort: null, variant: null, readOnly: false, source: 'global', approved: true, relay: false },
+  ],
+};
+
+test('the picker lists sub-agents, project lanes and global lanes, each with provider, model and effort and the badges that tell them apart', () => {
+  const { page } = lanePage(WLANES, AGENTS);
+  const rows = plain(page.workerRows());
+  assert.deepEqual(rows.agents.map((r) => [r.key, page.workerRowLine(r), r.where, r.desc]), [
+    ['agent:reviewer', 'claude · claude-opus-5-5 · high', 'project', 'Reads a diff and reports what is wrong with it.'],
+    ['agent:worker', 'claude · claude-sonnet-5-5 · extra-high', 'user', 'Routine work.'],
+    ['agent:plain', 'claude', 'user', ''],
+  ], 'an agent runs on Claude; its description is the first line; where it is defined is project or user');
+  assert.deepEqual(rows.project.map((r) => r.name), ['review-ro', 'agy-fast', 'claude-edit'], 'lanes of the project config');
+  assert.deepEqual(rows.global.map((r) => r.name), ['code-codex', 'ui-open', 'no-relay'], 'lanes of the global config');
+  const by = (n) => [].concat(rows.project, rows.global).find((r) => r.name === n);
+  assert.equal(page.workerRowLine(by('ui-open')), 'opencode · vendor/model-x · max', 'a variant stands in for the effort');
+  assert.equal(page.workerRowLine(by('review-ro')), 'claude · extra-high', 'a lane without a model has the rest');
+  assert.deepEqual([by('review-ro').why, by('review-ro').readOnly], ['not approved', true], 'read-only is a badge of its own; a project lane that is not approved cannot be picked');
+  assert.match(by('review-ro').hint, /delegate-setup skill/, 'with a hint on how to approve it');
+  assert.deepEqual([by('agy-fast').readOnly, by('agy-fast').why], [true, 'not approved'], 'agy lanes are read-only in this version; not approved wins over the missing relay');
+  assert.deepEqual([by('no-relay').why, by('no-relay').hint], ['relay not installed', 'Install the opencode-delegate skill to use this lane.'], 'a lane without its relay cannot be picked');
+  assert.deepEqual([by('claude-edit').overrides, by('code-codex').overrides, by('claude-edit').why], [true, false, ''], 'only a project lane that replaces a global one says so');
+  assert.deepEqual(plain(page.workerRows()), rows, 'the same twice');
 });
 
-test('the Lane select is offered for a task or idea when lanes can be read, or when the card has one that may need taking off; never for a milestone or thread', () => {
-  const { page } = lanePage(LANES);
-  assert.equal(page.laneOffered(lcard(undefined)), true);
-  assert.equal(page.laneOffered(lcard(undefined, { kind: 'idea' })), true);
-  assert.equal(page.laneOffered(lcard(undefined, { kind: 'milestone' })), false);
-  assert.equal(page.laneOffered(lthread(SNAP())), false);
+test('the picker without the delegate skills or without agents still lists what it can, and a card that has a worker keeps the field', () => {
+  const { page } = lanePage(null, null);
+  assert.deepEqual(plain(page.workerRows()), { agents: [], project: [], global: [] }, 'before anything has loaded');
   page.setLanes({ available: false, projectTrusted: false, lanes: [] });
-  assert.equal(page.laneOffered(lcard(undefined)), false, 'no delegate skills: no select, as before');
-  assert.equal(page.laneOffered(lcard('code-codex')), true, 'a lane that cannot be read can still be taken off');
+  page.setAgents({ agents: [] });
+  assert.deepEqual(plain(page.workerRows()), { agents: [], project: [], global: [] });
+  assert.equal(page.workerOffered(lcard(undefined)), false, 'nothing to pick from: no field, as before');
+  assert.equal(page.workerOffered(lcard('code-codex')), true, 'a lane that cannot be read can still be taken off');
+  assert.equal(page.workerOffered(lcard(undefined, { agent: 'reviewer' })), true, 'and so can an agent');
+  page.setAgents(AGENTS);
+  assert.equal(page.workerOffered(lcard(undefined)), true, 'agents alone make the field worth showing');
+  assert.equal(page.workerOffered(lcard(undefined, { kind: 'idea' })), true);
+  assert.equal(page.workerOffered(lcard(undefined, { kind: 'milestone' })), false);
+  assert.equal(page.workerOffered(lthread(SNAP())), false);
+  page.setAgents(null);
+  page.setLanes(LANES);
+  assert.equal(page.workerOffered(lcard(undefined)), true, 'lanes alone too');
   page.setLanes(null);
-  assert.equal(page.laneOffered(lcard(undefined)), false, 'not before the lanes have loaded');
+  assert.equal(page.workerOffered(lcard(undefined)), false, 'not before either has loaded');
 });
 
-test('the start step plans for the lane chosen in it: none switches to the usual step, another lane to that lane\'s plan', () => {
-  const { page } = lanePage(LANES);
+test('the picker search is case-insensitive over name, provider and model, and each tab counts its matches', () => {
+  const { page } = lanePage(WLANES, AGENTS);
+  const rows = page.workerRows();
+  const count = (q) => Object.fromEntries(Object.entries(plain(page.workerFilter(rows, q))).map(([k, v]) => [k, v.map((r) => r.name)]));
+  assert.deepEqual(Object.values(count('')).map((l) => l.length), [3, 3, 3], 'no search: everything');
+  assert.deepEqual(count('  ').agents.length, 3, 'blank is no search');
+  assert.deepEqual(count('REVIEW'), { agents: ['reviewer'], project: ['review-ro'], global: [] }, 'a name, in any case, across the tabs');
+  assert.deepEqual(count('codex'), { agents: [], project: [], global: ['code-codex'] }, 'a name or a provider');
+  assert.deepEqual(count('opencode'), { agents: [], project: [], global: ['ui-open', 'no-relay'] }, 'a provider');
+  assert.deepEqual(count('Gpt-F'), { agents: [], project: [], global: ['code-codex'] }, 'a model');
+  assert.deepEqual(count('sonnet'), { agents: ['worker'], project: [], global: [] }, 'a model of an agent');
+  assert.deepEqual(count('claude'), { agents: ['reviewer', 'worker', 'plain'], project: ['review-ro', 'claude-edit'], global: [] }, 'an agent\'s provider is claude, as a claude lane\'s is');
+  assert.deepEqual(count('zzz'), { agents: [], project: [], global: [] });
+  assert.deepEqual(count('high'), { agents: [], project: [], global: [] }, 'the effort and the description are not searched');
+  assert.deepEqual(plain(page.WORKER_TABS), [['agents', 'Sub-agents'], ['project', 'Project lanes'], ['global', 'Global lanes']]);
+});
+
+test('the picker opens on the tab that holds the current choice', () => {
+  const { page } = lanePage(WLANES, AGENTS);
+  const rows = page.workerRows();
+  assert.equal(page.workerTabOf(rows, 'agent:worker'), 'agents');
+  assert.equal(page.workerTabOf(rows, 'lane:review-ro'), 'project');
+  assert.equal(page.workerTabOf(rows, 'lane:code-codex'), 'global');
+  assert.equal(page.workerTabOf(rows, ''), '', 'Claude (default) is pinned above the tabs');
+  assert.equal(page.workerTabOf(rows, 'lane:gone'), '', 'a choice no list knows has no tab');
+});
+
+test('a card has one worker: the lane, else the agent, as a name only', () => {
+  const { page } = lanePage(WLANES, AGENTS);
+  assert.equal(page.workerOf(lcard('code-codex')), 'lane:code-codex');
+  assert.equal(page.workerOf(lcard(undefined, { agent: 'reviewer' })), 'agent:reviewer');
+  assert.equal(page.workerOf(lcard('code-codex', { agent: 'reviewer' })), 'lane:code-codex', 'a card file that holds both: the lane, as the server starts it');
+  assert.equal(page.workerOf(lcard(undefined)), '');
+  for (const bad of [5, ['x'], { name: 'x' }, true, null, '']) {
+    assert.equal(page.workerOf(lcard(bad, { agent: bad })), '', `${JSON.stringify(bad)} is no worker`);
+  }
+  assert.equal(page.agentOf(lcard(undefined, { agent: 'a' })), 'a');
+  assert.deepEqual([page.workerKind('lane:x'), page.workerKind('agent:y'), page.workerKind(''), page.workerName('agent:y:z'), page.workerName('')], ['lane', 'agent', '', 'y:z', '']);
+});
+
+test('the Worker button says what is chosen, and a choice that no longer exists says not found, never Claude (default)', () => {
+  const { page } = lanePage(WLANES, AGENTS);
+  assert.equal(page.workerLabel(''), 'Claude (default)');
+  assert.equal(page.workerLabel('lane:code-codex'), 'code-codex · codex · gpt-fake · high');
+  assert.equal(page.workerLabel('lane:ui-open'), 'ui-open · opencode · vendor/model-x · max');
+  assert.equal(page.workerLabel('lane:review-ro'), 'review-ro (not approved) · claude · extra-high');
+  assert.equal(page.workerLabel('agent:reviewer'), 'agent: reviewer');
+  assert.equal(page.workerLabel('lane:gone'), 'gone (not found)');
+  assert.equal(page.workerLabel('agent:gone'), 'agent: gone (not found)');
+  page.setLanes({ available: false, projectTrusted: false, lanes: [] });
+  assert.equal(page.workerLabel('lane:code-codex'), 'code-codex (not found)', 'without the delegate skills the lane cannot be checked');
+  page.setLanes(null);
+  page.setAgents(null);
+  assert.equal(page.workerLabel('lane:code-codex'), 'code-codex', 'before the lanes have loaded the name is shown plain');
+  assert.equal(page.workerLabel('agent:reviewer'), 'agent: reviewer');
+});
+
+test('the start step plans for the sub-agent chosen in it, and cannot start on one that is not there', () => {
+  const { page } = lanePage(WLANES, AGENTS);
+  assert.deepEqual(plain(page.agentStartPlan('reviewer')), { name: 'reviewer', line: 'Runs as sub-agent reviewer', detail: 'claude-opus-5-5 · high', blocked: '' });
+  assert.equal(page.agentStartPlan('worker').detail, 'claude-sonnet-5-5 · extra-high');
+  assert.equal(page.agentStartPlan('plain').detail, '');
+  assert.match(page.agentStartPlan('gone').blocked, /^Sub-agent “gone” was not found\./);
+  page.setAgents(null);
+  assert.equal(page.agentStartPlan('gone').blocked, '', 'not before the agents have loaded: the server checks');
+  page.setAgents(AGENTS);
   const card = lcard('code-codex');
-  assert.equal(page.laneStartPlan(card, undefined).name, 'code-codex', 'nothing chosen: the card\'s lane');
-  assert.equal(page.laneStartPlan(card, ''), null, 'Claude (no lane) on a card that has one: the usual step, with Full copy and an agent');
-  assert.equal(page.laneStartPlan(card, 'ui-open').detail, 'vendor/model-x · max');
-  assert.equal(page.laneStartPlan(lcard(undefined), 'code-codex').provider, 'codex', 'a lane chosen for a card that has none');
-  assert.equal(page.laneStartPlan(lcard(undefined), undefined), null);
+  assert.equal(page.workerStartBlocked(card, undefined), '', 'the card\'s own lane');
+  assert.match(page.workerStartBlocked(card, 'lane:gone'), /^Lane “gone” was not found/);
+  assert.match(page.workerStartBlocked(card, 'lane:review-ro'), /not approved/);
+  assert.match(page.workerStartBlocked(card, 'agent:gone'), /^Sub-agent “gone”/);
+  assert.equal(page.workerStartBlocked(card, 'agent:reviewer'), '');
+  assert.equal(page.workerStartBlocked(card, ''), '', 'Claude (default) on a card that has a lane starts as Claude');
+  assert.equal(page.workerStartBlocked(lcard(undefined, { agent: 'gone' }), undefined), page.agentStartPlan('gone').blocked, 'the card\'s own agent');
   assert.equal(card.lane, 'code-codex', 'the card itself is not changed');
-  assert.match(page.laneStartPlan(lcard(undefined), 'gone').blocked, /^Lane “gone” was not found/);
+  assert.equal(page.laneStartPlan(card, ''), null, 'a worker that is not a lane: the usual step');
 });
 
-// The Lane select's own logic runs against a fake select. A real one starts on its first option after its options are replaced; the editor
-// always sets the value after filling, so the fake just keeps the value it is given.
-function laneForm(lanes = LANES) {
-  const { page, doc } = lanePage(lanes);
-  const sel = new FakeEl(doc, 'select');
-  sel.value = '';
-  Object.defineProperty(sel, 'options', { get() { return sel.children; } });
-  return { page, sel, ed: page.laneEditor(sel) };
-}
-
-test('an untouched card page is not dirty, whatever its lane holds, and a save that does not change the lane sends no lane', () => {
-  for (const lane of ['code-codex', 'ui-open', 'review-ro', 'gone', undefined, '', null, 5, ['code-codex'], { name: 'code-codex' }, true]) {
-    const { page, sel, ed } = laneForm();
-    ed.sync(lcard(lane));
-    const name = typeof lane === 'string' ? lane : '';
-    assert.equal(sel.value, name, `the select shows ${JSON.stringify(lane)} as ${JSON.stringify(name)}`);
-    assert.equal(ed.dirty(), false, `${JSON.stringify(lane)} is not dirty`);
-    assert.deepEqual(plain(ed.patch()), {}, `${JSON.stringify(lane)} sends no lane key`);
-    ed.sync(lcard(lane));   // the poll draws the same card again
+// The Worker field's own logic needs no DOM: the editor holds the picked key.
+test('an untouched card page is not dirty, whatever its worker holds, and a save that changes nothing sends nothing', () => {
+  for (const [lane, agent] of [['code-codex'], ['gone'], [undefined, 'reviewer'], [undefined, 'gone'], ['ui-open', 'reviewer'], [undefined], [''], [null, null], [5, ['x']], [{ name: 'x' }, true]]) {
+    const { page } = lanePage(WLANES, AGENTS);
+    const ed = page.workerEditor();
+    ed.sync(lcard(lane, { agent }));
+    const want = page.workerOf(lcard(lane, { agent }));
+    assert.equal(ed.value, want, `${JSON.stringify([lane, agent])} shows as ${JSON.stringify(want)}`);
     assert.equal(ed.dirty(), false);
-    assert.equal(page.laneOf(lcard(lane)), name);
+    assert.deepEqual(plain(ed.patch()), {}, 'no lane key and no agent key');
+    ed.sync(lcard(lane, { agent }));   // the poll draws the same card again
+    assert.equal(ed.dirty(), false);
   }
 });
 
-test('picking a lane makes the form dirty and sends exactly that lane; None sends null; Cancel and a save bring it back to clean', () => {
-  const { sel, ed } = laneForm();
+test('picking a worker makes the form dirty and sends only that key; Claude (default) sends null for what the card holds; Cancel and a save bring it back to clean', () => {
+  const { page } = lanePage(WLANES, AGENTS);
+  const ed = page.workerEditor();
   ed.sync(lcard('code-codex'));
-  sel.value = 'ui-open';
+  ed.pick('lane:ui-open');
   assert.equal(ed.dirty(), true);
   assert.deepEqual(plain(ed.patch()), { lane: 'ui-open' });
+  ed.pick('agent:reviewer');
+  assert.deepEqual(plain(ed.patch()), { agent: 'reviewer' }, 'an agent: the server takes the lane off');
   ed.reset();
-  assert.equal(sel.value, 'code-codex', 'Cancel puts the saved lane back');
+  assert.equal(ed.value, 'lane:code-codex', 'Cancel puts the saved worker back');
   assert.equal(ed.dirty(), false);
   assert.deepEqual(plain(ed.patch()), {});
-  sel.value = '';
-  assert.deepEqual(plain(ed.patch()), { lane: null }, 'None takes the lane off');
+  ed.pick('');
+  assert.deepEqual(plain(ed.patch()), { lane: null }, 'Claude (default) takes the lane off, and says nothing of an agent the card does not hold');
   ed.saved(lcard(undefined));   // the server's answer to that save
   assert.equal(ed.dirty(), false);
   assert.deepEqual(plain(ed.patch()), {});
-  assert.equal(sel.value, '');
-  sel.value = 'code-codex';
+  ed.pick('lane:code-codex');
   assert.deepEqual(plain(ed.patch()), { lane: 'code-codex' }, 'a card that had none gets one');
+  const withAgent = page.workerEditor();
+  withAgent.sync(lcard(undefined, { agent: 'reviewer' }));
+  withAgent.pick('');
+  assert.deepEqual(plain(withAgent.patch()), { agent: null }, 'an agent comes off with agent: null');
+  const both = page.workerEditor();
+  both.sync(lcard('code-codex', { agent: 'reviewer' }));
+  both.pick('');
+  assert.deepEqual(plain(both.patch()), { lane: null, agent: null }, 'a card file that holds both loses both');
+  assert.deepEqual(plain(page.workerPatch('lane:x', {})), { lane: 'x' });
+  assert.deepEqual(plain(page.workerPatch('', {})), { lane: null, agent: null }, 'nothing known to hold: both are cleared, which is harmless');
 });
 
-test('the Lane select follows the saved card while untouched, and keeps what the person picked when the card changes under it', () => {
-  const { sel, ed } = laneForm();
+test('the Worker field follows the saved card while untouched, and keeps what the person picked when the card changes under it', () => {
+  const { page } = lanePage(WLANES, AGENTS);
+  const ed = page.workerEditor();
   ed.sync(lcard('code-codex'));
-  ed.sync(lcard('ui-open'));   // changed elsewhere
-  assert.equal(sel.value, 'ui-open');
+  ed.sync(lcard(undefined, { agent: 'reviewer' }));   // changed elsewhere
+  assert.equal(ed.value, 'agent:reviewer');
   assert.equal(ed.dirty(), false);
-  sel.value = 'code-codex';
+  ed.pick('lane:code-codex');
   ed.sync(lcard('claude-edit'));
-  assert.equal(sel.value, 'code-codex', 'the pick stays');
+  assert.equal(ed.value, 'lane:code-codex', 'the pick stays');
   assert.equal(ed.dirty(), true);
 });
 
-test('a lane that was picked and then vanishes from the loaded lanes stays selected as not found, never as None', () => {
-  const { page, sel, ed } = laneForm();
+test('a worker that was picked and then vanishes from the lists stays chosen as not found, never as Claude (default)', () => {
+  const { page } = lanePage(WLANES, AGENTS);
+  const ed = page.workerEditor();
   ed.sync(lcard(undefined));
-  sel.value = 'ui-open';
-  page.setLanes({ ...LANES, lanes: LANES.lanes.filter((l) => l.name !== 'ui-open') });
+  ed.pick('lane:ui-open');
+  page.setLanes({ ...WLANES, lanes: WLANES.lanes.filter((l) => l.name !== 'ui-open') });
   ed.sync(lcard(undefined));
-  assert.equal(sel.value, 'ui-open', 'still what was picked');
-  const gone = sel.children.find((o) => o.value === 'ui-open');
-  assert.ok(gone, 'it is in the list');
-  assert.equal(gone.disabled, true);
-  assert.equal(gone.textContent, 'ui-open (not found)');
+  assert.equal(ed.value, 'lane:ui-open', 'still what was picked');
+  assert.equal(page.workerLabel(ed.value), 'ui-open (not found)');
   assert.deepEqual(plain(ed.patch()), { lane: 'ui-open' }, 'the form is still dirty, and a save is refused by the server with its reason');
-  // the card's own lane that vanishes is shown the same way, and is not dirty
-  const b = laneForm();
-  b.ed.sync(lcard('ui-open'));
-  b.page.setLanes({ available: false, projectTrusted: false, lanes: [] });
-  b.ed.sync(lcard('ui-open'));
-  assert.equal(b.sel.value, 'ui-open');
-  assert.equal(b.ed.dirty(), false);
-  assert.equal(b.sel.children.find((o) => o.value === 'ui-open').textContent, 'ui-open (not found)');
+  ed.pick('agent:reviewer');
+  page.setAgents({ agents: [] });
+  ed.sync(lcard(undefined));
+  assert.equal(ed.value, 'agent:reviewer');
+  assert.equal(page.workerLabel(ed.value), 'agent: reviewer (not found)');
+  // the card's own worker that vanishes is shown the same way, and is not dirty
+  const b = page.workerEditor();
+  b.sync(lcard('code-codex'));
+  page.setLanes({ available: false, projectTrusted: false, lanes: [] });
+  b.sync(lcard('code-codex'));
+  assert.equal(b.value, 'lane:code-codex');
+  assert.equal(b.dirty(), false);
+  assert.equal(page.workerLabel(b.value), 'code-codex (not found)');
 });
 
-test('Start saves a lane only when the step\'s choice differs from the lane it showed, and tells the server which lane that was', () => {
-  const { page } = lanePage(LANES);
-  assert.deepEqual(plain(page.startLaneArgs('code-codex', undefined)), { lane: 'code-codex', save: false, expectLane: 'code-codex' }, 'nothing picked: the card\'s lane, not written again');
-  assert.deepEqual(plain(page.startLaneArgs('', undefined)), { lane: '', save: false, expectLane: null }, 'a card with no lane: the server must still find none');
-  assert.deepEqual(plain(page.startLaneArgs('code-codex', 'code-codex')), { lane: 'code-codex', save: false, expectLane: 'code-codex' }, 'the shown lane picked again is no change');
-  assert.deepEqual(plain(page.startLaneArgs('code-codex', 'ui-open')), { lane: 'ui-open', save: true, expectLane: 'ui-open' });
-  assert.deepEqual(plain(page.startLaneArgs('code-codex', '')), { lane: '', save: true, expectLane: null }, 'Claude (no lane) removes it first');
-  assert.deepEqual(plain(page.startLaneArgs('', 'code-codex')), { lane: 'code-codex', save: true, expectLane: 'code-codex' });
+test('Start saves a worker only when the step\'s choice differs from the one it showed, and tells the server which one that was', () => {
+  const { page } = lanePage(WLANES, AGENTS);
+  const a = (shown, picked, card) => plain(page.startWorkerArgs(shown, picked, card));
+  assert.deepEqual(a('lane:code-codex', undefined, lcard('code-codex')), { worker: 'lane:code-codex', save: false, patch: { lane: 'code-codex' }, expectLane: 'code-codex', expectAgent: null }, 'nothing picked: the card\'s worker, not written again');
+  assert.deepEqual(a('', undefined, lcard(undefined)), { worker: '', save: false, patch: { lane: null, agent: null }, expectLane: null, expectAgent: null }, 'a card with none: the server must still find none');
+  assert.equal(a('lane:code-codex', 'lane:code-codex', lcard('code-codex')).save, false, 'the shown worker picked again is no change');
+  assert.deepEqual(a('lane:code-codex', 'lane:ui-open', lcard('code-codex')), { worker: 'lane:ui-open', save: true, patch: { lane: 'ui-open' }, expectLane: 'ui-open', expectAgent: null });
+  assert.deepEqual(a('lane:code-codex', '', lcard('code-codex')), { worker: '', save: true, patch: { lane: null }, expectLane: null, expectAgent: null }, 'Claude (default) removes it first');
+  assert.deepEqual(a('', 'agent:reviewer', lcard(undefined)), { worker: 'agent:reviewer', save: true, patch: { agent: 'reviewer' }, expectLane: null, expectAgent: 'reviewer' });
+  assert.deepEqual(a('agent:reviewer', undefined, lcard(undefined, { agent: 'reviewer' })), { worker: 'agent:reviewer', save: false, patch: { agent: 'reviewer' }, expectLane: null, expectAgent: 'reviewer' }, 'the shown agent: expectLane stays null');
+  assert.deepEqual(a('agent:reviewer', '', lcard(undefined, { agent: 'reviewer' })).patch, { agent: null });
+  assert.deepEqual(a('lane:code-codex', 'agent:reviewer', lcard('code-codex')).expectLane, null, 'from a lane to an agent: the server is told the lane is gone, the agent is there');
 });
 
-test('the Lane select is wired into the card form for a saved task or idea only, and hidden on the tunnel', () => {
-  assert.match(html, /laneField\.hidden = isRemote\(\) \|\| !laneOffered\(c\);/);
-  assert.match(html, /const fLane = !create && !isMs \? h\('select', 'input'\) : null;/, 'not for a new card or a milestone');
-  assert.match(html, /if \(LE && LE\.dirty\(\)\) return true;/);
-  assert.match(html, /\[fTitle, fNote, fStatus, fMs, fLane, fKind\]\.forEach/, 'a read-only board disables it');
+test('the Worker field is wired into the card form for a saved task or idea only, hidden on the tunnel, and picks in the start step redraw it', () => {
+  assert.match(html, /workerField\.hidden = isRemote\(\) \|\| !workerOffered\(c\);/);
+  assert.match(html, /const fWorker = !create && !isMs \? h\('button', 'input wk-btn'\) : null;/, 'not for a new card or a milestone');
+  assert.match(html, /if \(WE && WE\.dirty\(\)\) return true;/);
+  assert.match(html, /if \(WE\) Object\.assign\(patch, WE\.patch\(\)\);/, 'a save sends only what changed');
+  assert.match(html, /\[fTitle, fNote, fStatus, fMs, fWorker, fKind\]\.forEach/, 'a read-only board disables it');
+  assert.match(html, /P\.dispose = \(\) => \{ closeWorkerPicker\(\); if \(shellDispose\) shellDispose\(\); \};/, 'the picker goes away with the page');
+  assert.doesNotMatch(html, /laneChoices|laneEditor|fLane\b|f-start-lane|f-start-agent|startLaneArgs/, 'the Lane select and the Agent select are gone');
   assert.doesNotMatch(html, /innerHTML/, 'no innerHTML');
 });
 
-test('the start step hides the agent and Full copy for a lane, never sends a lane, and the composer follows the lane\'s session', () => {
-  assert.match(html, /const lp = laneStartPlan\(findCard\(P\.target\) \|\| card, P\.startLane\);/);
-  assert.match(html, /if \(!lp\) dyn\.appendChild\(field\('Agent', agentSel, 'f-start-agent'\)\);/);
-  assert.match(html, /context: ctx \? ctx\.value\(\) : 'brief', agent: lp \? '' : agentSel\.value/);
+test('the start step has one Worker field in place of the lane and agent selects, and its request names the agent only when the worker is one', () => {
+  assert.match(html, /step\.appendChild\(field\('Worker', workerBtn, 'f-start-worker'\)\);/);
+  assert.match(html, /const \{ lp, ap \} = startPlans\(wkKey\(\)\);/);
   assert.match(html, /lp && lp\.readOnly \? \[\['read', 'Read-only'\]\]/);
-  assert.match(html, /lp && lp\.blocked \? lp\.blocked : ''/);
-  assert.match(html, /if \(P\.starting\) renderFoot\(\); else syncStart\(\); \}/, 'a lane that loads or changes enables or disables the Start as thread button');
+  assert.match(html, /const why = open \|\| workerStartBlocked\(savedCard, P\.startWorker\);/);
+  assert.match(html, /if \(P\.starting\) renderFoot\(\); else syncStart\(\); \}/, 'a worker that loads or changes enables or disables the Start as thread button');
   assert.match(html, /if \(t\.lane\) \{ const f = laneFollowUp\(card\); return f\.ok \? '' : 'This thread cannot take a follow-up\. ' \+ f\.why; \}/);
   assert.match(html, /const laneNote = laneTraceNote\(c\);/);
-  assert.doesNotMatch(html, /\{ sessionId, mode, context, agent: [^}]*lane/, 'the start request carries no lane');
-  assert.match(html, /'\/start'\), \{ sessionId, mode, context, agent: agent \|\| undefined, expectLane: L\.expectLane \}\)/, 'a lane chosen in the step is saved on the card before; the start carries only the lane that was seen');
+  assert.match(html, /'\/start'\), \{ sessionId, mode, context, expectLane: W\.expectLane, expectAgent: W\.expectAgent, agent: W\.expectAgent \|\| undefined \}\)/, 'a worker chosen in the step is saved on the card before; the start carries only what was seen');
+  assert.doesNotMatch(html, /\{ sessionId, mode, context, agent/, 'the agent is not the first thing the request carries: it follows the worker that was seen');
+  assert.match(html, /a background Claude session run as the sub-agent ' \+ ap\.name/);
+});
+
+test('the picker is a labelled modal dialog with a focus trap, a search box, three tabs and a full-screen sheet on a narrow screen', () => {
+  assert.match(html, /box\.setAttribute\('role', 'dialog'\);\s*box\.setAttribute\('aria-modal', 'true'\);\s*box\.setAttribute\('aria-labelledby', 'wp-title'\);/);
+  assert.match(html, /tabs\.setAttribute\('role', 'tablist'\)/);
+  assert.match(html, /el\.setAttribute\('role', 'option'\)/);
+  assert.match(html, /if \(e\.key === 'Escape'\) \{ e\.preventDefault\(\); close\(\); return; \}/);
+  assert.match(html, /if \(e\.key === 'Tab'\) \{/);
+  assert.match(html, /e\.key === 'ArrowDown'/);
+  assert.match(html, /const back = opener && opener\.isConnected \? opener : findOpener \? findOpener\(\) : null;/, 'the focus goes back to the button, found again when the page was drawn again');
+  assert.match(html, /function refreshWorkerPicker\(\) \{ if \(workerModal\) workerModal\.refresh\(\); \}/, 'new lists redraw an open picker');
+  assert.match(html, /if \(changed\) refreshWorkerPicker\(\);/);
+  assert.match(html, /elOverlay\.inert = true;/, 'the card page behind it cannot be reached');
+  assert.match(html, /@media \(max-width: 640px\) \{\n  \.wp-scrim \{ padding: 0;/);
+  assert.doesNotMatch(html, /innerHTML/);
 });
 
 test('lane tag: the name may be cut short, but the state and the provider are a part of their own that never shrinks', () => {

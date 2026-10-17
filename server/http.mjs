@@ -149,10 +149,11 @@ function cardFields(body) {
   return out;
 }
 
-// A lane can be set on a saved task or idea from the board (the page's Lane select), not on a new card.
+// A lane or a sub-agent (the card's worker) can be set on a saved task or idea from the board (the page's Worker picker), not on a new card.
 const CREATE_KEYS = ['title', 'note', 'status', 'kind', 'parent', ...core.FIELD_NAMES];   // what the page's "New" panel sends (issue.js)
-const PATCH_KEYS = [...CREATE_KEYS, 'lane'];
+const PATCH_KEYS = [...CREATE_KEYS, 'lane', 'agent'];
 const LANE_REMOTE = 'a lane sends the card\'s work to another coding CLI, so it can only be set, changed or removed on the computer itself, not through the tunnel';
+const AGENT_REMOTE = 'a sub-agent decides who works on the card when it is started as a thread, so it can only be set, changed or removed on the computer itself, not through the tunnel';
 
 // A key the card calls do not take is a mistake worth telling the sender about (a lane, blocked_by).
 function checkKeys(body, allowed) {
@@ -259,6 +260,12 @@ async function handleProject(req, res, projectDir, sub, query, remote = false) {
         await requireLane(projectDir, name);
       }
       args.lane = name;
+    }
+    if (body.agent !== undefined) {
+      // The core checks the name against the sub-agents there are, and that the card is a task or idea; removing one (null or '') needs neither.
+      if (remote) throw new HttpError(403, AGENT_REMOTE);
+      if (body.agent !== null && typeof body.agent !== 'string') throw new HttpError(400, 'agent must be a sub-agent name, or null to remove it');
+      args.agent = body.agent === null ? '' : body.agent.trim();
     }
     let card;
     try {
@@ -369,7 +376,10 @@ async function handleProject(req, res, projectDir, sub, query, remote = false) {
     // the lane the page showed (null: none), which the start must still find on the card; a page that sends nothing is not checked
     if (body.expectLane !== undefined && body.expectLane !== null && typeof body.expectLane !== 'string') throw new HttpError(400, 'expectLane must be a lane name or null');
     const expectLane = body.expectLane === undefined ? undefined : body.expectLane === null ? '' : body.expectLane;
-    card = await core.startThreadFromCard(projectDir, sm[1], { sessionId, mode, context, agent, extraDirs: body.extraDirs, expectLane });
+    // the same for the sub-agent the page showed
+    if (body.expectAgent !== undefined && body.expectAgent !== null && typeof body.expectAgent !== 'string') throw new HttpError(400, 'expectAgent must be a sub-agent name or null');
+    const expectAgent = body.expectAgent === undefined ? undefined : body.expectAgent === null ? '' : body.expectAgent;
+    card = await core.startThreadFromCard(projectDir, sm[1], { sessionId, mode, context, agent, extraDirs: body.extraDirs, expectLane, expectAgent });
   } else if (tm[2] === 'messages') {
     card = await core.continueThread(projectDir, tm[1], body.message);
   } else if (tm[2] === 'end') {
@@ -413,7 +423,7 @@ const REMOTE_ROUTES = [
   ['GET', new RegExp(`^/threads/${RID}/activity$`)],
   ['GET', new RegExp(`^/cards/${RID}/runs/[0-9]{1,6}/(activity|prompt|report)$`)],
   ['POST', /^\/cards$/],                                                  // a new card
-  ['PATCH', new RegExp(`^/cards/${RID}$`)],                                // an edit (a lane in it is refused: see LANE_REMOTE)
+  ['PATCH', new RegExp(`^/cards/${RID}$`)],                                // an edit (a lane or an agent in it is refused: see LANE_REMOTE, AGENT_REMOTE)
   ['POST', new RegExp(`^/cards/${RID}/waits/[A-Za-z0-9_.-]{1,80}$`)],      // answer or close a waiting item
   ['POST', /^\/waits\/answer-batch$/],                                      // the drafted answers, sent together
   ['POST', new RegExp(`^/cards/${RID}/approval$`)],                        // "Confirm approval": take over an approval given on another device
@@ -609,6 +619,7 @@ function withViews(card, cfg, cards) {
   delete view.localLeftDoneAt;
   delete view.localDoneAt;
   if (view.lane !== undefined && typeof view.lane !== 'string') delete view.lane;   // a card file written by hand or by another version: the page reads a lane as a name
+  if (view.agent !== undefined && typeof view.agent !== 'string') delete view.agent;   // and an agent too
   delete view.localCriteria;   // how many criteria this machine's board last had; the page is told the result (criteriaCut)
   delete view.approvals;   // this machine's own record of the approvals it was given; the page is told the result (verified, approvalElsewhere)
   // where the transcript of a sub-agent run lies stays on the server; a running run that has gone quiet says so (`quiet`, computed here, never stored)

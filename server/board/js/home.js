@@ -119,7 +119,7 @@
     showingHome = true;
     selKey = '';
     viewSel = '';
-    lanes = null; lanesSig = ''; lanesAt = 0;
+    lanes = null; lanesSig = ''; lanesAt = 0; agents = null; agentsSig = '';
     current = null; currentKey = ''; lastRaw = null; boardKey = null; synced = false; pendingRender = false;
     loadFilters();
     setDir('');

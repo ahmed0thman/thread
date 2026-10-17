@@ -34,25 +34,29 @@
       if (projectsAgain) { projectsAgain = false; refreshProjects(); }
     }
   }
-  // The lanes of the selected project, on the slow cycle and when a project is shown. A lane is only read here, never set.
+  // The lanes and the sub-agents of the selected project (the choices of the Worker picker), on the slow cycle and when a project is shown.
+  // They are only read here, never set.
   let lanesBusy = false;
+  async function readList(key, route, ms) {
+    try {
+      const { res, text } = await request('GET', pp(key, route), null, ms);
+      return res.ok ? parseJson(text) : null;
+    } catch (e) { return null; }   // optional: keep what is shown
+  }
   async function refreshLanes() {
     lanesAt = Date.now();
     const key = selKey;
     if (halted || !key || lanesBusy) return;
     lanesBusy = true;
-    let data = null;
-    try {
-      const { res, text } = await request('GET', pp(key, 'lanes'), null, 9000);
-      data = res.ok ? parseJson(text) : null;
-    } catch (e) { /* the lanes are optional: keep what is shown */ }
+    let ld = null, ad = null;
+    try { [ld, ad] = await Promise.all([readList(key, 'lanes', 9000), readList(key, 'agents', 9000)]); }
     finally { lanesBusy = false; }
-    if (key !== selKey || !data || typeof data.available !== 'boolean' || !Array.isArray(data.lanes)) return;
-    const sig = JSON.stringify(data);
-    if (sig === lanesSig) return;
-    lanes = data;
-    lanesSig = sig;
-    if (current) { renderBoard(false); updatePanel(); }
+    if (key !== selKey) return;
+    let changed = false;
+    if (ld && typeof ld.available === 'boolean' && Array.isArray(ld.lanes) && JSON.stringify(ld) !== lanesSig) { lanes = ld; lanesSig = JSON.stringify(ld); changed = true; }
+    if (ad && Array.isArray(ad.agents) && JSON.stringify(ad) !== agentsSig) { agents = ad; agentsSig = JSON.stringify(ad); changed = true; }
+    if (changed && current) { renderBoard(false); updatePanel(); }
+    if (changed) refreshWorkerPicker();
   }
   // a write went through: counts and activity in the project list have changed
   function wrote() { refreshProjects(); }
@@ -121,7 +125,7 @@
     showingHome = false;
     selKey = key;
     viewSel = '';
-    lanes = null; lanesSig = ''; lanesAt = 0;
+    lanes = null; lanesSig = ''; lanesAt = 0; agents = null; agentsSig = '';
     current = null; currentKey = ''; lastRaw = null; boardKey = null; synced = false; pendingRender = false;
     loadFilters();
     const p = projectByKey(key);

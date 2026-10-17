@@ -133,67 +133,8 @@
     const modeNote = l.implementer === 'agy' ? 'agy lanes are read-only in this version.' : readOnly ? 'This lane is read-only.' : l.sandbox === 'danger-full-access' ? 'This lane has no sandbox: in write mode it has full access.' : '';
     return { name: info.name, provider: l.implementer, line: 'Runs on lane ' + info.name + ' · ' + l.implementer, detail: [l.model, l.variant || effortText(l.effort)].filter(Boolean).join(' · '), readOnly, modeNote, blocked: '' };
   }
-  // The text of a lane in a choice list: 'code-codex · codex · gpt-fake · high', and 'read-only' when it is (agy lanes are, in this version).
   // The lane name a task or idea holds, '' for none. A card file written by hand can hold anything: only a name counts.
   const laneOf = (card) => (card && typeof card.lane === 'string' ? card.lane : '');
-  // `why` (a lane that cannot be picked) follows the name, where a narrow select still shows it.
-  function laneChoiceText(l, why) {
-    const dials = [l.model, l.variant || effortText(l.effort)].filter(Boolean);
-    return [l.name + (why ? ' (' + why + ')' : ''), l.implementer].concat(dials, l.readOnly === true || l.implementer === 'agy' ? ['read-only'] : []).join(' · ');
-  }
-  // What a card's Lane select (and, with forStart, the start step's) offers: None (or 'Claude (no lane)' to start without one) and the loaded
-  // lanes, each as { value, text, disabled }. A lane that is not approved is listed but cannot be picked, and in the start step neither can
-  // one whose provider's relay is not installed. `current` is a lane name, or a list of them (the card's lane and the one picked): each stays in the
-  // list, disabled, when the lanes do not know it, so that what is shown never silently becomes None.
-  function laneChoices(current, forStart) {
-    const out = [{ value: '', text: forStart ? 'Claude (no lane)' : 'None', disabled: false }];
-    ((lanes && lanes.available && lanes.lanes) || []).forEach((l) => {
-      const why = l.approved === false ? 'not approved' : forStart && l.relay === false ? 'relay not installed' : '';
-      out.push({ value: l.name, text: laneChoiceText(l, why), disabled: !!why });
-    });
-    [].concat(current).forEach((name) => {
-      if (name && typeof name === 'string' && !out.some((o) => o.value === name)) out.push({ value: name, text: name + ' (not found)', disabled: true });
-    });
-    return out;
-  }
-  // Fills a Lane select from laneChoices: an option that cannot be picked is listed, disabled, with its reason. `want` is kept when it is one of them.
-  function fillLaneSelect(sel, choices, want) {
-    const sig = JSON.stringify(choices);
-    if (sel.dataset.sig !== sig) {
-      sel.dataset.sig = sig;
-      sel.replaceChildren(...choices.map((c) => { const o = h('option', null, c.text); o.value = c.value; o.disabled = c.disabled; return o; }));
-    }
-    sel.value = choices.some((c) => c.value === want) ? want : '';
-  }
-  // The Lane select of a saved card's form. `base` is the card's saved lane; what is picked is the select's value. It follows the card
-  // while untouched, shows a picked lane the lanes no longer know as not found (never as None), and sends a lane only when it was changed.
-  function laneEditor(sel) {
-    let base = '';
-    const ed = {
-      get base() { return base; },
-      sync(card) {
-        const clean = !sel.dataset.sig || sel.value === base;   // the first fill has nothing the person could have touched
-        if (clean) base = laneOf(card);
-        fillLaneSelect(sel, laneChoices([base, clean ? '' : sel.value], false), clean ? base : sel.value);
-      },
-      dirty: () => sel.value !== base,
-      patch: () => (sel.value !== base ? { lane: sel.value || null } : {}),   // null takes the lane off
-      saved(card) { base = laneOf(card); ed.sync(card); },
-      reset() { sel.value = base; },
-    };
-    return ed;
-  }
-  // What Start does about the lane. `shown` is the card's lane as the start step showed it, `picked` the step's own choice (undefined: not
-  // touched, so the card's). A choice other than the one shown is saved on the card first; expectLane tells the server which lane was seen.
-  function startLaneArgs(shown, picked) {
-    const lane = picked !== undefined ? picked : shown;
-    return { lane, save: lane !== shown, expectLane: lane || null };
-  }
-  // Whether a task or idea's page offers the Lane select: when lanes can be read, or the card has one already (so that one that is gone can be removed).
-  function laneOffered(card) {
-    if (!card || (card.kind !== 'task' && card.kind !== 'idea')) return false;
-    return !!(lanes && lanes.available) || laneOf(card) !== '';
-  }
   // Puts the card's lane rows at the end of a details list, in place of the ones put there before. Returns the new nodes.
   function showLaneRows(dl, before, card) {
     before.forEach((n) => n.remove());
@@ -208,6 +149,107 @@
   // What the lanes change on a card or its page, for the keys that decide whether they are drawn again.
   const laneSig = (card) => JSON.stringify([laneInfo(card), card && card.thread ? laneFollowUp(card) : null]);
   // ---- end delegation lanes ----
+  // ---- workers (page.test.mjs runs this block, with the delegation lanes one, against a small fake DOM) ----
+  // A task or idea has one worker: a delegation lane, a sub-agent (a file in .claude/agents), or neither (Claude on the session's model).
+  // Here a worker is one string: '' for neither, 'lane:<name>' or 'agent:<name>'. `agents` is the server's { agents: [...] }, null until it answered.
+  const agentOf = (card) => (card && typeof card.agent === 'string' ? card.agent : '');
+  // A card file can hold both (an older version only knows the lane): the lane is the worker, as the server starts it.
+  const workerOf = (card) => (laneOf(card) ? 'lane:' + laneOf(card) : agentOf(card) ? 'agent:' + agentOf(card) : '');
+  const workerKind = (key) => (typeof key === 'string' && key.startsWith('lane:') ? 'lane' : typeof key === 'string' && key.startsWith('agent:') ? 'agent' : '');
+  const workerName = (key) => (workerKind(key) ? key.slice(key.indexOf(':') + 1) : '');
+  const descLine = (t) => String(t || '').split('\n').map((x) => x.trim()).find(Boolean) || '';
+  // What the picker lists, in its three tabs. A row is { key, kind, name, provider, model, effort, ... }; one that cannot be picked has `why`.
+  function workerRows() {
+    const rows = { agents: [], project: [], global: [] };
+    ((agents && agents.agents) || []).forEach((a) => {
+      if (!a || typeof a.name !== 'string') return;
+      rows.agents.push({ key: 'agent:' + a.name, kind: 'agent', name: a.name, provider: 'claude', model: a.model || '', effort: effortText(a.effort), desc: descLine(a.description), where: a.scope === 'user' ? 'user' : 'project', why: '', hint: '', readOnly: false, overrides: false });
+    });
+    ((lanes && lanes.available && lanes.lanes) || []).forEach((l) => {
+      const why = l.approved === false ? 'not approved' : l.relay === false ? 'relay not installed' : '';
+      const hint = why === 'not approved' ? 'Approve this project’s lane config with the delegate-setup skill.' : why ? 'Install the ' + l.implementer + '-delegate skill to use this lane.' : '';
+      (l.source === 'project' ? rows.project : rows.global).push({ key: 'lane:' + l.name, kind: 'lane', name: l.name, provider: l.implementer, model: l.model || '', effort: l.variant || effortText(l.effort), desc: '', where: l.source === 'project' ? 'project' : 'global', why, hint, readOnly: l.readOnly === true || l.implementer === 'agy', overrides: l.source === 'project' && l.overridesGlobal === true });
+    });
+    return rows;
+  }
+  const workerRowLine = (r) => [r.provider, r.model, r.effort].filter(Boolean).join(' · ');
+  const WORKER_TABS = [['agents', 'Sub-agents'], ['project', 'Project lanes'], ['global', 'Global lanes']];
+  // The rows whose name, provider or model has `q` in it (case-insensitive); an empty search keeps them all.
+  function workerFilter(rows, q) {
+    const n = String(q || '').trim().toLowerCase();
+    const hit = (r) => !n || [r.name, r.provider, r.model].some((t) => String(t).toLowerCase().includes(n));
+    const out = {};
+    WORKER_TABS.forEach(([id]) => { out[id] = rows[id].filter(hit); });
+    return out;
+  }
+  // The tab that holds `key`, '' when none does.
+  const workerTabOf = (rows, key) => (WORKER_TABS.find(([id]) => rows[id].some((r) => r.key === key)) || [''])[0];
+  // The text on the Worker button. A choice the lists do not know says '(not found)': it is never shown as Claude (default).
+  function workerLabel(key) {
+    const kind = workerKind(key), name = workerName(key);
+    if (!kind) return 'Claude (default)';
+    const rows = workerRows();
+    const row = [].concat(rows.agents, rows.project, rows.global).find((r) => r.key === key);
+    if (kind === 'agent') return 'agent: ' + name + (row || !agents ? '' : ' (not found)');
+    if (!row) return name + (lanes ? ' (not found)' : '');
+    return [row.name + (row.why === 'not approved' ? ' (not approved)' : ''), row.provider, row.model, row.effort].filter(Boolean).join(' · ');
+  }
+  // What a card's Worker field edits. `base` is the saved worker; `value` what is picked. It follows the card while untouched, keeps what was
+  // picked when the card changes under it (also a worker the lists no longer know), and sends only what changed: the key of a lane or an
+  // agent, and null for each one the card holds when Claude (default) is picked.
+  function workerEditor() {
+    let base = '', picked = '', held = { lane: '', agent: '' };
+    const ed = {
+      get base() { return base; },
+      get value() { return picked; },
+      sync(card) {
+        if (picked === base) { base = workerOf(card); picked = base; }
+        held = { lane: laneOf(card), agent: agentOf(card) };
+      },
+      pick(key) { picked = key; },
+      dirty: () => picked !== base,
+      patch: () => (picked !== base ? workerPatch(picked, held) : {}),
+      saved(card) { base = workerOf(card); held = { lane: laneOf(card), agent: agentOf(card) }; },
+      reset() { picked = base; },
+    };
+    return ed;
+  }
+  // The body of a save that sets `key` on a card that holds `held` ({ lane, agent }). The server takes the other kind off by itself.
+  function workerPatch(key, held) {
+    const kind = workerKind(key);
+    if (kind === 'lane') return { lane: workerName(key) };
+    if (kind === 'agent') return { agent: workerName(key) };
+    const out = {};
+    if (laneOf(held)) out.lane = null;
+    if (agentOf(held)) out.agent = null;
+    return Object.keys(out).length ? out : { lane: null, agent: null };
+  }
+  // What Start does about the worker. `shown` is the card's worker as the start step showed it, `picked` the step's own choice (undefined: not
+  // touched, so the card's). A choice other than the one shown is saved on the card first (`patch`); the server is told what was seen.
+  function startWorkerArgs(shown, picked, card) {
+    const worker = picked !== undefined ? picked : shown;
+    return { worker, save: worker !== shown, patch: workerPatch(worker, card), expectLane: workerKind(worker) === 'lane' ? workerName(worker) : null, expectAgent: workerKind(worker) === 'agent' ? workerName(worker) : null };
+  }
+  // What the card page's start step shows for a sub-agent: the line, the dials and why it cannot start (it is not one of the loaded agents).
+  function agentStartPlan(name) {
+    const a = ((agents && agents.agents) || []).find((x) => x && x.name === name);
+    if (!a) return { name, line: 'Runs as sub-agent ' + name, detail: '', blocked: agents ? 'Sub-agent “' + name + '” was not found. Pick another worker, or add it under .claude/agents.' : '' };
+    return { name, line: 'Runs as sub-agent ' + name, detail: [a.model, effortText(a.effort)].filter(Boolean).join(' · '), blocked: '' };
+  }
+  // Why the start step's Start cannot run on the worker chosen in it ('' when it can); `picked` as in startWorkerArgs.
+  function workerStartBlocked(card, picked) {
+    const key = picked !== undefined ? picked : workerOf(card);
+    if (workerKind(key) === 'lane') { const lp = laneStartPlan(card, workerName(key)); return lp ? lp.blocked : ''; }
+    if (workerKind(key) === 'agent') return agentStartPlan(workerName(key)).blocked;
+    return '';
+  }
+  // Whether a task or idea's page offers the Worker field: when lanes or sub-agents can be read, or the card has a worker already (so that
+  // one that is gone can be taken off).
+  function workerOffered(card) {
+    if (!card || (card.kind !== 'task' && card.kind !== 'idea')) return false;
+    return !!(lanes && lanes.available) || !!(agents && Array.isArray(agents.agents) && agents.agents.length) || workerOf(card) !== '';
+  }
+  // ---- end workers ----
   // ---- working now (work-page.test.mjs runs this block on its own) ----
   // Whether anything is running on a card right now, as plain data, or null. A task or idea: its sub-agent runs in the state `running`
   // (the server marks one `quiet` after a long time without activity: it may have stopped, so it is not shown as live

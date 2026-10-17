@@ -38,6 +38,7 @@ const SESSION_PROP = { type: 'string', description: 'This session\'s id (a UUID)
 const STATUS_NOTE = 'one of the board\'s stage ids (board_list shows them)';
 const PARENT_PROP = { type: 'string', description: 'Optional: the id of a milestone card this card belongs to.' };
 const LANE_PROP = { type: 'string', description: 'Optional: the name of a delegation lane (a coding CLI, model and effort set up with the delegate skills) to label this task or idea with. Starting the card as a thread then runs it on that lane. lane_list shows the names. Needs the delegate skills, and a project lane needs its config approved.' };
+const AGENT_PROP = { type: 'string', description: 'Optional: the name of a sub-agent (a file in .claude/agents of the project or of the user) to label this task or idea with. Starting the card as a thread then runs it as that sub-agent. A card has a lane or an agent, never both: giving one takes the other off. Unknown names are refused.' };
 const WORKER_PROP = { type: 'string', description: 'Optional: who did the work you are recording, so the card shows it: "main" (this session), "agent:<type>" (a sub-agent you handed it to), "thread:<card id>" (a side thread) or "lane:<name>" (a delegation lane).' };
 // board_add and board_update take these; on board_update an empty value (an empty string, an empty list) removes the field.
 const CARD_FIELD_PROPS = {
@@ -139,6 +140,7 @@ const TOOLS = [
         kind: { type: 'string', enum: KINDS, description: 'Defaults to "task".' },
         parent: PARENT_PROP,
         lane: LANE_PROP,
+        agent: AGENT_PROP,
         ...CARD_FIELD_PROPS,
       },
       required: ['title'],
@@ -146,7 +148,7 @@ const TOOLS = [
   },
   {
     name: 'board_update',
-    description: 'Change a board card\'s title, note, status, kind (task or idea), milestone, lane, type, priority, labels, blocked_by or criteria. An empty value (an empty list, or an empty string) removes that field, except criteria: once a card has acceptance criteria you may add lines but not remove or change them (only the owner can, on the board). A card with criteria cannot be moved to the done stage, or any stage after it, until the owner approves a review item on it (wait_add, kind "review"; in a project kept in the repo only an approval given or confirmed on this machine\'s board counts); a card moved back out of the finished stages needs a new approval. Thread cards follow their thread and should not be moved by hand. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
+    description: 'Change a board card\'s title, note, status, kind (task or idea), milestone, lane, agent, type, priority, labels, blocked_by or criteria. An empty value (an empty list, or an empty string) removes that field, except criteria: once a card has acceptance criteria you may add lines but not remove or change them (only the owner can, on the board). A card with criteria cannot be moved to the done stage, or any stage after it, until the owner approves a review item on it (wait_add, kind "review"; in a project kept in the repo only an approval given or confirmed on this machine\'s board counts); a card moved back out of the finished stages needs a new approval. Thread cards follow their thread and should not be moved by hand. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -156,7 +158,8 @@ const TOOLS = [
         status: { type: 'string', description: `New column: ${STATUS_NOTE}. Not for a milestone: it has no stage (it is done when all its cards are done), so a status is refused.` },
         kind: { type: 'string', enum: ['task', 'idea'], description: 'Turn a task into an idea, or an idea into a task (an idea does not count towards its milestone until it is a task). Threads and milestones never change kind, and a card cannot become a milestone.' },
         parent: { type: 'string', description: 'The id of the milestone card this card belongs to, or an empty string to take it out of its milestone.' },
-        lane: { type: 'string', description: 'The name of a delegation lane to label this task or idea with, or an empty string to remove its lane. Milestones and threads cannot have one.' },
+        lane: { type: 'string', description: 'The name of a delegation lane to label this task or idea with, or an empty string to remove its lane. Milestones and threads cannot have one. Giving a lane takes the card\'s agent off.' },
+        agent: { type: 'string', description: 'The name of a sub-agent to label this task or idea with (starting it as a thread then runs it as that agent), or an empty string to remove its agent. Milestones and threads cannot have one. Giving an agent takes the card\'s lane off.' },
         ...CARD_FIELD_PROPS,
       },
       required: ['id'],
@@ -178,7 +181,7 @@ const TOOLS = [
   },
   {
     name: 'board_list',
-    description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane shows it in braces, as {lane: name}; milestones are listed in their own section after the stages, each with its state (empty, open or done) and how many of its cards are done; a card with items waiting for the user shows "(2 waiting)" (wait_list reads them). ' +
+    description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane or a sub-agent shows it in braces, as {lane: name} or {agent: name}; milestones are listed in their own section after the stages, each with its state (empty, open or done) and how many of its cards are done; a card with items waiting for the user shows "(2 waiting)" (wait_list reads them). ' +
       'After the title come the marks of its fields, when it has them: "(bug)", "!high" or "!low", "#label" for each label, "{blocked by c4, c7}" for the blockers that are not finished yet (in the done stage or a later one), "[criteria 3]" for its acceptance criteria, and "(done, not verified)" for a finished card whose criteria were never approved (in a project kept in the repo: never approved on this machine\'s board). ' +
       'With parent, list only that milestone and its cards, after a summary line: the report for a milestone. Cards the user added or edited since the last listing are flagged "(new from user)"; in a project kept in the repo, a card that came with a pull (another device, a collaborator) and that this machine has not listed yet is flagged "(new in repo)" instead, since nothing in a file shows the user wrote it. Listing marks them as seen. When the user clicks Notify Claude on such a card for this session, a line at the start of your turn asks you to look at it: list the board then, passing session_id, which is what ends that request (another session listing the board does not).',
     inputSchema: { type: 'object', properties: { parent: { type: 'string', description: 'Optional: a milestone card id; list only that milestone and the cards under it.' }, session_id: SESSION_PROP }, required: [] },
@@ -395,9 +398,11 @@ function milestoneTag(cards, c) {
   return m ? ` [${core.clip(m.title, 30)}]` : '';
 }
 
-// ` {lane: name}` for a task or idea with a delegation lane, else ''.
-function laneTag(c) {
-  return c.lane && c.kind !== 'thread' && c.kind !== 'milestone' ? ` {lane: ${core.clip(c.lane, 40)}}` : '';
+// ` {lane: name}` or ` {agent: name}` for a task or idea with a delegation lane or a sub-agent (the lane, when a card file holds both), else ''.
+function workerTag(c) {
+  if (c.kind === 'thread' || c.kind === 'milestone') return '';
+  if (typeof c.lane === 'string' && c.lane) return ` {lane: ${core.clip(c.lane, 40)}}`;
+  return typeof c.agent === 'string' && c.agent ? ` {agent: ${core.clip(c.agent, 40)}}` : '';
 }
 
 // The compact marks after a card's title in board_list, in this order and only when present: (bug) !high or !low #label
@@ -847,10 +852,11 @@ const HANDLERS = {
       kind: optEnum(args, 'kind', KINDS),
       parent: optStr(args, 'parent'),
       lane,
+      agent: optStr(args, 'agent'),
       ...cardFieldArgs(args),
       source: 'claude',
     }));
-    const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : '');
+    const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : card.agent ? `, agent ${card.agent}` : '');
     // a sub-agent's run is linked to its card by the card id at the start of the Agent call's description
     const hand = card.kind === 'milestone' ? '' : ` When you hand this card's work to a sub-agent, start the Agent call's description with [${card.id}] (for example "[${card.id}] fix the rounding") so the board shows that run on the card.`;
     const where = card.kind === 'milestone' ? '' : ` in ${card.status}`;   // a milestone has no stage
@@ -873,9 +879,10 @@ const HANDLERS = {
       kind: optEnum(args, 'kind', ['task', 'idea']),
       parent: optStr(args, 'parent'),
       lane,
+      agent: optStr(args, 'agent'),
       ...cardFieldArgs(args),
     }), { source: 'claude' });
-    const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : '');
+    const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : card.agent ? `, agent ${card.agent}` : '');
     const where = card.kind === 'milestone' ? m.replace(/^, /, '') : `${card.status}${m}`;   // a milestone has no stage
     return `Updated ${card.id} "${core.clip(card.title, 80)}"${where ? ` (${where})` : ''}.`;
   },
@@ -937,7 +944,7 @@ const HANDLERS = {
       const waiting = chat ? 0 : core.openWaits(c).length;   // not shown on a chat-only board
       const wait = waiting ? ` (${waiting} waiting)` : '';
       const note = c.note ? ` — ${core.clip(c.note, 200)}` : '';
-      return `- ${c.id} [${kind}] ${core.clip(c.title, 120)}${fieldMarks(c, all, cfg)}${milestoneTag(all, c)}${laneTag(c)}${done}${wait}${flag}${twin}${note}`;
+      return `- ${c.id} [${kind}] ${core.clip(c.title, 120)}${fieldMarks(c, all, cfg)}${milestoneTag(all, c)}${workerTag(c)}${done}${wait}${flag}${twin}${note}`;
     };
     for (const st of cfg.stages) {
       const inCol = cards.filter((c) => c.kind !== 'milestone' && c.status === st.id);

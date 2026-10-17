@@ -4,7 +4,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, parse, resolve } from 'node:path';
 
 export const PROVIDERS = ['codex', 'agy', 'opencode', 'claude'];
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -57,8 +57,9 @@ function load(projectDir, timeoutMs) {
 }
 
 const cache = new Map();   // skills folder + project folder -> { at, result: Promise }
+const globalCache = new Map();   // skills folder + filesystem root -> { at, result: Promise of the names of the global lanes }
 
-export function clearLanesCache() { cache.clear(); }
+export function clearLanesCache() { cache.clear(); globalCache.clear(); }
 
 // { available, projectTrusted, lanes } for a project. `available` is false when the delegate
 // skills are missing or their script fails, times out or prints something unreadable.
@@ -135,8 +136,22 @@ export function unusableLane(l) {
   return '';
 }
 
-// The lanes of a project, each with whether its provider's relay is installed (the board decides from it whether a follow-up can run).
+// The names of the global lanes, as the delegate script gives them for a folder that is in no repository (the filesystem root): a project's lane
+// of the same name replaces the global one whole, so the merged list of a project cannot say which of its lanes do.
+async function globalLaneNames(projectDir) {
+  const root = parse(resolve(projectDir)).root;
+  const key = `${skillsDir()}\0${root}`;
+  const hit = globalCache.get(key);
+  if (hit && Date.now() - hit.at < TTL_MS) return hit.result;
+  const result = load(root, TIMEOUT_MS).then((r) => new Set(r.lanes.map((l) => l.name)));
+  globalCache.set(key, { at: Date.now(), result });
+  return result;
+}
+
+// The lanes of a project, each with whether its provider's relay is installed (the board decides from it whether a follow-up can run) and,
+// for a project lane, whether it replaces a global lane of the same name (`overridesGlobal`).
 export async function listLanesWithRelay(projectDir) {
-  const r = await listLanes(projectDir);
-  return { ...r, lanes: r.lanes.map((l) => ({ ...l, relay: existsSync(relayPath(l.implementer)) })) };
+  // both loads at once, so the answer takes as long as the slower one and not both; a global load that fails just leaves `overridesGlobal` out
+  const [r, global] = await Promise.all([listLanes(projectDir), globalLaneNames(projectDir).catch(() => new Set())]);
+  return { ...r, lanes: r.lanes.map((l) => ({ ...l, relay: existsSync(relayPath(l.implementer)), ...(l.source === 'project' && global.has(l.name) ? { overridesGlobal: true } : {}) })) };
 }

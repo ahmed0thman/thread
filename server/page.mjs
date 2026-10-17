@@ -18,6 +18,7 @@ export const CSS_PIECES = [
   'css/list.css',
   'css/summary.css',
   'css/issue.css',
+  'css/worker-picker.css',
   'css/thread.css',
   'css/responsive.css',
 ];
@@ -37,6 +38,7 @@ export const JS_PIECES = [
   'js/board-view.js',
   'js/content.js',
   'js/panel.js',
+  'js/worker-picker.js',
   'js/issue.js',
   'js/copy.js',
   'js/waits.js',

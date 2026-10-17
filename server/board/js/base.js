@@ -122,6 +122,8 @@
   let lanes = null;          // the selected project's delegation lanes: { available, projectTrusted, lanes }, null until loaded
   let lanesSig = '';         // lanes as text, to tell a change
   let lanesAt = 0;           // when the lanes were last asked for
+  let agents = null;         // the selected project's sub-agents: { agents: [{ name, description, model, effort, scope }] }, null until loaded
+  let agentsSig = '';        // agents as text, to tell a change
   const filterMemo = {};     // per project: { q, threadsOnly, session, milestone, waiting }
 
   let current = null;        // newest state from the server

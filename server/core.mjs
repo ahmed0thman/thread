@@ -377,6 +377,19 @@ export function checkLaneKind(kind) {
   if (kind === 'milestone') throw new Error('a milestone cannot have a lane');
   if (kind === 'thread') throw new Error('a thread\'s lane is chosen when it starts (thread_start with lane, or start a card that has one)');
 }
+// A sub-agent (a file in .claude/agents) is the card's other kind of worker: starting the card as a thread runs it as that agent. A card holds
+// a lane or an agent, never both. Same rules as the lane: undefined not given, null given empty (removes it).
+const cleanAgent = (agent) => {
+  if (agent === undefined) return undefined;
+  if (agent === null || (typeof agent === 'string' && !agent.trim())) return null;
+  if (typeof agent !== 'string') throw new Error('agent must be a sub-agent name');
+  return agent.trim();
+};
+export function checkAgentKind(kind) {
+  if (kind === 'milestone') throw new Error('a milestone cannot have an agent');
+  if (kind === 'thread') throw new Error('a thread\'s agent is chosen when it starts (thread_start with agent, or start a card that has one)');
+}
+const ONE_WORKER = 'a card has one worker: give a lane or an agent, not both';
 
 // The first n characters of a collapsed text, with an ellipsis when cut.
 export function clip(s, n) {
@@ -450,7 +463,7 @@ function guardCriteria(card, next) {
   if (!kept) throw new Error(`${card.id}'s acceptance criteria can only be changed by the owner on the board; you may add lines.`);
 }
 
-export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent, lane, type, priority, labels, blockedBy, criteria, worker } = {}) {
+export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent, lane, agent, type, priority, labels, blockedBy, criteria, worker } = {}) {
   const cfg = readConfig(projectDirArg);
   requireTasks(cfg);
   const t = typeof title === 'string' ? title.trim() : '';
@@ -465,6 +478,12 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
   const parentId0 = cleanParent(parent);
   const laneName = cleanLane(lane);
   if (laneName) checkLaneKind(kind);
+  const agentName = cleanAgent(agent);
+  if (agentName) {
+    if (laneName) throw new Error(ONE_WORKER);
+    checkAgentKind(kind);
+    requireAgent(projectDirArg, agentName);
+  }
   const fields = cleanFields({ type, priority, labels, blockedBy, criteria });
   const by = cleanWorker(worker);
   return updateState(projectDirArg, (state) => {
@@ -486,6 +505,7 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
     };
     if (parentId) card.parent = parentId;
     if (laneName) card.lane = laneName;
+    if (agentName) card.agent = agentName;
     setFields(state, card, fields);
     if (source === 'claude') gateDone(state, card, cfg, status);
     addHistory(card, source, { type: 'created', to: status }, ts, by);
@@ -503,7 +523,7 @@ function checkKindChange(card, kind) {
   if (kind !== 'task' && kind !== 'idea') throw new Error(`a card can only become a task or an idea, not "${kind.slice(0, 40)}"`);
 }
 
-export async function updateCard(projectDirArg, id, { title, note, status, kind, parent, lane, type, priority, labels, blockedBy, criteria, worker } = {}, { source = 'claude' } = {}) {
+export async function updateCard(projectDirArg, id, { title, note, status, kind, parent, lane, agent, type, priority, labels, blockedBy, criteria, worker } = {}, { source = 'claude' } = {}) {
   const cfg = readConfig(projectDirArg);
   if (title !== undefined) {
     if (typeof title !== 'string' || !title.trim()) throw new Error('title must not be empty');
@@ -512,6 +532,11 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
   if (status !== undefined && cfg.mode !== 'chat') checkStatus(cfg, status);
   const parentId0 = cleanParent(parent);
   const laneName = cleanLane(lane);
+  const agentName = cleanAgent(agent);
+  if (agentName) {
+    if (laneName) throw new Error(ONE_WORKER);
+    requireAgent(projectDirArg, agentName);
+  }
   const cleaned = cleanFields({ type, priority, labels, blockedBy, criteria });
   const by = cleanWorker(worker);
   return updateState(projectDirArg, (state) => {
@@ -534,6 +559,12 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
     if (laneName) {
       if (card.lane !== laneName) { checkLaneKind(card.kind); card.lane = laneName; changed = true; fields.push('lane'); }
     } else if (laneName === null && card.lane !== undefined) { delete card.lane; changed = true; fields.push('lane'); }
+    if (agentName) {
+      if (card.agent !== agentName) { checkAgentKind(card.kind); card.agent = agentName; changed = true; fields.push('agent'); }
+    } else if (agentName === null && card.agent !== undefined) { delete card.agent; changed = true; fields.push('agent'); }
+    // one worker: setting a lane takes the agent off, and setting an agent takes the lane off
+    if (laneName && card.agent !== undefined) { delete card.agent; changed = true; fields.push('agent'); }
+    if (agentName && card.lane !== undefined) { delete card.lane; changed = true; fields.push('lane'); }
     if (source === 'claude') guardCriteria(card, cleaned.criteria);
     const setNow = setFields(state, card, cleaned);
     if (setNow.length) { changed = true; fields.push(...setNow); }
@@ -816,6 +847,14 @@ export function listAgents(projectDirArg, userDir = join(homedir(), '.claude', '
   return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
+// The sub-agent called `name`, or an Error that lists the ones there are.
+export function requireAgent(projectDirArg, name) {
+  const known = listAgents(projectDirArg).map((a) => a.name);
+  if (!known.includes(name)) {
+    throw new Error(`Unknown agent "${clip(name, 60)}". ${known.length ? `Available: ${known.join(', ')}.` : 'No agents are defined in .claude/agents.'}`);
+  }
+}
+
 export function buildClaudeArgs(card) {
   const t = card.thread;
   // Read mode names its permission mode too, since the CLI otherwise takes the user's own default (a settings file may skip prompts
@@ -986,12 +1025,7 @@ async function launchOptions(projectDirArg, { sessionId, mode, extraDirs, contex
     const l = await requireRunnableLane(projectDirArg, laneName, mode);
     return { context: 'brief', brief: text, dirs, agent: null, model: null, effort: null, lane: laneSnapshot(l) };
   }
-  if (name) {
-    const known = listAgents(projectDirArg).map((a) => a.name);
-    if (!known.includes(name)) {
-      throw new Error(`Unknown agent "${clip(name, 60)}". ${known.length ? `Available: ${known.join(', ')}.` : 'No agents are defined in .claude/agents.'}`);
-    }
-  }
+  if (name) requireAgent(projectDirArg, name);
   const wantModel = typeof model === 'string' ? model.trim() : '';
   const wantEffort = typeof effort === 'string' ? effort.trim() : '';
   if (wantModel && !cleanModel(wantModel)) throw new Error(`invalid model "${clip(wantModel, 60)}"`);
@@ -1065,28 +1099,42 @@ function refuseThreadFields(card, cards) {
   if (has.length) throw new Error(`A card with acceptance criteria or a Blocked by list cannot be started as a thread; clear them first (${card.id} has ${has.join(' and ')}).`);
 }
 
-// The page showed one lane and the card has another by now. The board maps it to HTTP 409.
+// The page showed one worker (a lane or a sub-agent) and the card has another by now. The board maps it to HTTP 409.
 export class StaleCardError extends Error {
   constructor(message) { super(message); this.status = 409; }
 }
 
+// What a card runs as when it is started: its lane, else its agent (a card file written by hand or by an older version can hold both: the lane
+// wins, as the page shows it), else neither. Only a task or an idea has one. Always strings, '' for none.
+function cardWorker(card) {
+  if (!card || card.kind === 'thread' || card.kind === 'milestone') return { lane: '', agent: '' };
+  const lane = typeof card.lane === 'string' ? card.lane : '';
+  return { lane, agent: !lane && typeof card.agent === 'string' ? card.agent : '' };
+}
+
 // Turns a task or idea card into a thread in place: same id, title, note and source.
 // Nobody writes a brief on the board, so in brief mode the card's note is the brief.
-// A card that has a lane runs on it; the lane is read from the card, never from the caller.
-// `expectLane` is the lane the caller was shown ('' for none): the start is refused when the card's is another. Left out, nothing is checked.
-export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mode = 'read', extraDirs, context, agent, expectLane } = {}) {
+// A card that has a lane or an agent runs on it; they are read from the card, never from the caller (`agent` only stands in when the card has neither, and a different one is refused as stale).
+// `expectLane` and `expectAgent` are what the caller was shown ('' for none): the start is refused when the card's worker is another. Left out, nothing is checked.
+export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mode = 'read', extraDirs, context, agent, expectLane, expectAgent } = {}) {
   refuseInsideThread('start');
   requireTasks(readConfig(projectDirArg));
   const existing = cardById(readState(projectDirArg).cards, cardId);
   if (existing && existing.kind !== 'thread' && existing.kind !== 'milestone') refuseThreadFields(existing, readState(projectDirArg).cards);
-  const cardLane = existing && existing.kind !== 'thread' && existing.kind !== 'milestone' && typeof existing.lane === 'string' ? existing.lane : '';
-  if (expectLane !== undefined && expectLane !== cardLane) throw new StaleCardError('the card\'s lane changed since you looked at it; look at it again and then start it');
-  const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief: existing && existing.note, agent, lane: cardLane });
+  const worker = cardWorker(existing);
+  if ((expectLane !== undefined && expectLane !== worker.lane) || (expectAgent !== undefined && expectAgent !== worker.agent)) {
+    throw new StaleCardError('the card\'s worker (lane or agent) changed since you looked at it; look at it again and then start it');
+  }
+  // an agent in the request is what the caller means to run: it must be the card's (a 0.16.0 page names it; the card is what it was shown)
+  const asked = typeof agent === 'string' ? agent.trim() : '';
+  if (asked && worker.agent && asked !== worker.agent) throw new StaleCardError('the card\'s agent is not the one in the request; look at the card again and then start it');
+  const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief: existing && existing.note, agent: worker.agent || agent, lane: worker.lane });
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, cardId);
     if (card.kind === 'thread') throw new Error(`card ${cardId} is already a thread`);
     if (card.kind === 'milestone') throw new Error(`card ${cardId} is a milestone and cannot be started as a thread`);
-    if ((typeof card.lane === 'string' ? card.lane : '') !== cardLane) throw new Error(`card ${cardId} changed while it was starting; try again`);
+    const now = cardWorker(card);
+    if (now.lane !== worker.lane || now.agent !== worker.agent) throw new Error(`card ${cardId} changed while it was starting; try again`);
     refuseThreadFields(card, state.cards);
     const text = typeof card.note === 'string' ? card.note.trim() : '';
     // A card from a file in the repo: the thread stands for it on this machine, hides it, and only it may delete the file when it is removed.
@@ -1098,7 +1146,8 @@ export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mo
     // In brief mode the note already travels as the brief, so the task is the title alone.
     const prompt = text && opts.context === 'full' ? `${card.title}\n\n${text}` : card.title;
     beginThread(projectDirArg, card, { sessionId, mode, prompt, ...opts });
-    delete card.lane;   // the thread holds it now
+    delete card.lane;   // the thread holds them now
+    delete card.agent;
     return card;
   });
 }

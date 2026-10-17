@@ -24,7 +24,7 @@ test('the card page disables both start buttons for saved criteria or blockers a
     const startBtn = {}, goBtn = {}, whyEl = {}, startWhyEl = {};
     const sync = vm.runInNewContext(src, {
       create: false, P: { target: 'c1', isDirty: () => false }, card: { id: 'c1', kind },
-      findCard: () => saved, laneStartPlan: () => null, isRO: () => false,
+      findCard: () => saved, workerStartBlocked: () => '', isRO: () => false,
       startBtn, goBtn, whyEl, startWhyEl, setOff: (b, off) => { b.disabled = off; },
     });
     for (const fields of [{ criteria: ['Tests pass'] }, { blockedBy: ['c9'] }, { criteria: ['Tests pass'], blockedBy: ['c9'] }]) {
@@ -432,7 +432,7 @@ test('the new-card form does not look for a saved card when it syncs the start b
   const startBtn = {};
   const sync = vm.runInNewContext(src, {
     create: true, P: { target: '', isDirty: () => true }, card: null, findCard: () => null,
-    laneStartPlan: () => { throw new Error('read a saved card'); }, isRO: () => false, startBtn, goBtn: null, whyEl: {}, startWhyEl: {}, setOff: () => {},
+    workerStartBlocked: () => { throw new Error('read a saved card'); }, isRO: () => false, startBtn, goBtn: null, whyEl: {}, startWhyEl: {}, setOff: () => {},
   });
   assert.doesNotThrow(() => sync());
   assert.deepEqual(startBtn, {}, 'nothing is touched');

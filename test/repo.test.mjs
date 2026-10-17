@@ -486,6 +486,50 @@ test('the SessionStart note says once that the cards are committed files, names 
   assert.match(await start(), /used to be kept in the repo.*missing now/);
 });
 
+// ---------------------------------------------------------------- a card's worker
+
+test('a card\'s agent is a shared field: it lives in the card file next to the lane, the other clone gets it, and this machine\'s overlay never holds it', async (t) => {
+  const w = twoDevices(t);
+  const { A } = w;
+  fs.mkdirSync(path.join(A.dir, '.claude', 'agents'), { recursive: true });
+  fs.writeFileSync(path.join(A.dir, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: Reviews\n---\nYou review.\n');
+  const c = await as(A, async () => {
+    core.enableRepo(A.dir);
+    const made = await core.addCard(A.dir, { title: 'Review it', agent: 'reviewer' });
+    await core.addCard(A.dir, { title: 'Lane first', lane: 'code-codex' });
+    return made;
+  });
+  const file = JSON.parse(repoText(A.dir, c.id));
+  assert.equal(file.agent, 'reviewer', 'the agent is in the card file');
+  assert.equal(repoText(A.dir, c.id).includes('"agent": "reviewer"'), true);
+  const overlay = (await as(A, () => JSON.parse(fs.readFileSync(core.projectPaths(A.dir).repo, 'utf8')))).overlay || {};
+  assert.equal(JSON.stringify(overlay[c.id] || {}).includes('reviewer'), false, 'nothing of it is local');
+  // the agent is swapped with a lane in the file, and taken off
+  await as(A, () => core.updateCard(A.dir, c.id, { lane: 'ui-open' }, { source: 'user' }));
+  let f = JSON.parse(repoText(A.dir, c.id));
+  assert.deepEqual([f.lane, 'agent' in f], ['ui-open', false]);
+  await as(A, () => core.updateCard(A.dir, c.id, { agent: 'reviewer' }, { source: 'user' }));
+  f = JSON.parse(repoText(A.dir, c.id));
+  assert.deepEqual([f.agent, 'lane' in f], ['reviewer', false]);
+  commitAll(A.dir, 'cards');
+  git(A.dir, 'push', '-q', 'origin', 'main');
+  const B = w.clone('B');
+  const seen = await as(B, () => core.readState(B.dir).cards.find((x) => x.id === c.id));
+  assert.equal(seen.agent, 'reviewer', 'another device reads it from the file');
+  // no absolute path, session id or pid went into the file
+  const text = repoText(A.dir, c.id);
+  for (const bad of [os.homedir(), w.base, w.dataDir]) assert.equal(text.includes(bad), false);
+  // the thread that a start makes is local and takes the agent with it: the file still holds it until the card is removed
+  await as(A, async () => {
+    await core.touchSession(A.dir, S1, {});
+    await core.startThreadFromCard(A.dir, c.id, { sessionId: S1, expectAgent: 'reviewer' });
+  });
+  await waitFor(() => as(A, () => core.readState(A.dir).cards.find((x) => x.id === c.id).thread.runState === 'idle'), { timeout: 15000 });
+  const th = await as(A, () => core.readState(A.dir).cards.find((x) => x.id === c.id));
+  assert.equal(th.thread.agent, 'reviewer');
+  assert.equal('agent' in th, false, 'the thread holds it now');
+});
+
 // ---------------------------------------------------------------- what is never written to a repo file
 
 test('no absolute path, session id or pid is written to a repo file', async (t) => {
