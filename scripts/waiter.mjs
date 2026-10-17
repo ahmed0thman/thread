@@ -153,7 +153,7 @@ async function main() {
 
     const soon = () => { clearTimeout(debounce); debounce = setTimeout(check, DEBOUNCE_MS); };
     try {
-      watcher = watch(dirname(stateFile), (_event, name) => { if (!name || name === 'state.json') soon(); });
+      watcher = watch(dirname(stateFile), (_event, name) => { if (!name || name === 'state.json' || name === 'repo.json') soon(); });   // repo.json: the overlay
       watcher.on('error', () => {});
     } catch { /* the poll alone then */ }
     if (repoRoot) {

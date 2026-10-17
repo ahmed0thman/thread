@@ -4,7 +4,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, existsSync, linkSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as core from './core.mjs';
-import { listLanesWithRelay } from './lanes.mjs';
+import { listLanesWithRelay, requireLane } from './lanes.mjs';
 import { assembleBoardPage } from './page.mjs';
 import { markRunStopped, readRunText, runActivity, runQuiet } from './runs.mjs';
 import { TunnelError, createTunnelManager, reapStaleTunnel } from './tunnel.mjs';
@@ -149,9 +149,10 @@ function cardFields(body) {
   return out;
 }
 
-const PATCH_KEYS = ['title', 'note', 'status', 'kind', 'parent', ...core.FIELD_NAMES];
-// What the page's "New" panel sends (issue.js): the same as a patch.
-const CREATE_KEYS = PATCH_KEYS;
+// A lane can be set on a saved task or idea from the board (the page's Lane select), not on a new card.
+const CREATE_KEYS = ['title', 'note', 'status', 'kind', 'parent', ...core.FIELD_NAMES];   // what the page's "New" panel sends (issue.js)
+const PATCH_KEYS = [...CREATE_KEYS, 'lane'];
+const LANE_REMOTE = 'a lane sends the card\'s work to another coding CLI, so it can only be set, changed or removed on the computer itself, not through the tunnel';
 
 // A key the card calls do not take is a mistake worth telling the sender about (a lane, blocked_by).
 function checkKeys(body, allowed) {
@@ -164,7 +165,7 @@ const THREAD_ROUTES = new Set(['POST messages', 'POST end', 'POST report-request
 
 // One route table for every project. `sub` is the path below the project
 // ("/state", "/cards", "/cards/c1", "/threads/c1/messages"); `query` is the URL's search params.
-async function handleProject(req, res, projectDir, sub, query) {
+async function handleProject(req, res, projectDir, sub, query, remote = false) {
   const method = req.method;
   const isState = method === 'GET' && sub === '/state';
   const isAgents = method === 'GET' && sub === '/agents';
@@ -247,6 +248,18 @@ async function handleProject(req, res, projectDir, sub, query) {
     if (body.parent === null) args.parent = null; // null takes the card out of its milestone, like ''
     else Object.assign(args, pick(body, ['parent']));
     Object.assign(args, cardFields(body));
+    if (body.lane !== undefined) {
+      // The same checks as board_update: the lane must be a loaded, approved one and the card a task or idea. Removing a lane (null or '') needs none.
+      if (remote) throw new HttpError(403, LANE_REMOTE);
+      if (body.lane !== null && typeof body.lane !== 'string') throw new HttpError(400, 'lane must be a lane name, or null to remove it');
+      const name = body.lane === null ? '' : body.lane.trim();
+      if (name) {
+        const existing = core.cardById(core.readState(projectDir).cards, cm[1]);
+        if (existing) core.checkLaneKind(existing.kind);
+        await requireLane(projectDir, name);
+      }
+      args.lane = name;
+    }
     let card;
     try {
       card = await core.updateCard(projectDir, cm[1], args, { source: 'user' });
@@ -353,7 +366,10 @@ async function handleProject(req, res, projectDir, sub, query) {
   let card;
   if (sm) {
     const { sessionId, mode, context, agent } = pick(body, ['sessionId', 'mode', 'context', 'agent']);
-    card = await core.startThreadFromCard(projectDir, sm[1], { sessionId, mode, context, agent, extraDirs: body.extraDirs });
+    // the lane the page showed (null: none), which the start must still find on the card; a page that sends nothing is not checked
+    if (body.expectLane !== undefined && body.expectLane !== null && typeof body.expectLane !== 'string') throw new HttpError(400, 'expectLane must be a lane name or null');
+    const expectLane = body.expectLane === undefined ? undefined : body.expectLane === null ? '' : body.expectLane;
+    card = await core.startThreadFromCard(projectDir, sm[1], { sessionId, mode, context, agent, extraDirs: body.extraDirs, expectLane });
   } else if (tm[2] === 'messages') {
     card = await core.continueThread(projectDir, tm[1], body.message);
   } else if (tm[2] === 'end') {
@@ -397,7 +413,7 @@ const REMOTE_ROUTES = [
   ['GET', new RegExp(`^/threads/${RID}/activity$`)],
   ['GET', new RegExp(`^/cards/${RID}/runs/[0-9]{1,6}/(activity|prompt|report)$`)],
   ['POST', /^\/cards$/],                                                  // a new card
-  ['PATCH', new RegExp(`^/cards/${RID}$`)],                                // an edit
+  ['PATCH', new RegExp(`^/cards/${RID}$`)],                                // an edit (a lane in it is refused: see LANE_REMOTE)
   ['POST', new RegExp(`^/cards/${RID}/waits/[A-Za-z0-9_.-]{1,80}$`)],      // answer or close a waiting item
   ['POST', /^\/waits\/answer-batch$/],                                      // the drafted answers, sent together
   ['POST', new RegExp(`^/cards/${RID}/approval$`)],                        // "Confirm approval": take over an approval given on another device
@@ -566,13 +582,13 @@ function makeHandler(homeDir, token, stop, { remote = null, tunnel = null } = {}
         return;
       }
       // An older per-path store of a repo-backed project (a worktree's, a sub-folder's) is shown as the store it is, not as the repo's board.
-      if (core.storeKey(dir) !== key) await core.runInStore(key, () => handleProject(req, res, dir, sub, url.searchParams));
-      else await handleProject(req, res, dir, sub, url.searchParams);
+      if (core.storeKey(dir) !== key) await core.runInStore(key, () => handleProject(req, res, dir, sub, url.searchParams, !!remote));
+      else await handleProject(req, res, dir, sub, url.searchParams, !!remote);
       return;
     }
 
     if (path === '/api/state' || path === '/api/agents' || path === '/api/cards' || path.startsWith('/api/cards/') || path.startsWith('/api/threads/') || path.startsWith('/api/waits/')) {
-      await handleProject(req, res, homeDir, path.slice('/api'.length), url.searchParams);
+      await handleProject(req, res, homeDir, path.slice('/api'.length), url.searchParams, !!remote);
       return;
     }
 
@@ -592,6 +608,7 @@ function withViews(card, cfg, cards) {
   delete view.localAnswers;   // the same kind of record (answers given here), and when the card last left the finished stages here
   delete view.localLeftDoneAt;
   delete view.localDoneAt;
+  if (view.lane !== undefined && typeof view.lane !== 'string') delete view.lane;   // a card file written by hand or by another version: the page reads a lane as a name
   delete view.localCriteria;   // how many criteria this machine's board last had; the page is told the result (criteriaCut)
   delete view.approvals;   // this machine's own record of the approvals it was given; the page is told the result (verified, approvalElsewhere)
   // where the transcript of a sub-agent run lies stays on the server; a running run that has gone quiet says so (`quiet`, computed here, never stored)
@@ -672,7 +689,7 @@ function listenOnce(server, port) {
 function buildServer(handle) {
   const server = http.createServer((req, res) => {
     handle(req, res).catch((e) => {
-      if (e instanceof HttpError || e instanceof core.ChatOnlyError || e instanceof core.WaitError) send(res, e.status, { error: e.message });
+      if (e instanceof HttpError || e instanceof core.ChatOnlyError || e instanceof core.WaitError || e instanceof core.StaleCardError) send(res, e.status, { error: e.message });
       else if (e && e.message) send(res, 400, { error: String(e.message).split('\n')[0] });
       else send(res, 500, { error: 'internal error' });
     });

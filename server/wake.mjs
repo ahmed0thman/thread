@@ -166,11 +166,13 @@ export async function claimWake(projectDirArg, sessionId, token, startedAtMs = n
 
 /**
  * A cheap fingerprint of the files `pendingWake` reads, so a poll that finds them unchanged need not parse them. A repo-backed project's cards are
- * files in its repo folder (an answer is written there): the card files and the folder are part of it.
+ * files in its repo folder (an answer is written there): the card files and the folder are part of it, and so is this machine's overlay.
  */
 export function filesSignature(projectDirArg) {
   const cp = configPaths(projectDirArg);
-  const paths = [projectPaths(projectDirArg).state, cp.global, cp.project, cp.local];
+  const pp = projectPaths(projectDirArg);
+  // repo.json is this machine's overlay of a repo-backed project: a Notify click or an answer's local record is written there only
+  const paths = [pp.state, pp.repo, cp.global, cp.project, cp.local];
   return [...paths.map((p) => {
     try {
       const st = statSync(p);

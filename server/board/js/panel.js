@@ -202,6 +202,7 @@
   function panelCtx(card) {
     const ctx = [current.config, milestoneChoices()];
     if (card.lane || (card.thread && card.thread.lane)) ctx.push(laneSig(card));
+    if (card.kind === 'task' || card.kind === 'idea') ctx.push([laneChoices(laneOf(card), false), laneChoices(laneOf(card), true), laneOffered(card), isRemote()]);   // the Lane select and the start step's lane choice
     if (card.kind === 'milestone') ctx.push(childrenOf(current.cards, card.id).map((k) => [k.id, k.kind, k.title, k.status, k.thread && k.thread.runState]));
     return ctx;
   }

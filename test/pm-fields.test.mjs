@@ -532,7 +532,7 @@ test('PATCH takes blockedBy, and refuses keys it does not know', async (t) => {
   assert.deepEqual(r.body.blockedBy, ['c2']);
   // unknown keys are 400, and nothing is written
   const before = JSON.stringify(cardOf(e, 'c1'));
-  for (const body of [{ blocked_by: ['c2'] }, { lane: 'code-codex' }, { worker: 'main' }, { id: 'c9' }, { title: 'T', whatever: 1 }]) {
+  for (const body of [{ blocked_by: ['c2'] }, { lanes: 'code-codex' }, { worker: 'main' }, { id: 'c9' }, { title: 'T', whatever: 1 }]) {
     r = await bd.patch('c1', body);
     assert.equal(r.status, 400, JSON.stringify(body));
     assert.match(r.body.error, /unknown key/);
@@ -710,7 +710,7 @@ test('POST /api/cards takes the fields, checks them like PATCH, and leaves a car
   }
   assert.equal(core.readState(e.projectDir).cards.length, count);
   // keys the page does not send are refused, as PATCH refuses them; every key the page's New panel sends is accepted
-  for (const body of [{ blocked_by: ['c2'] }, { lane: 'code-codex' }, { worker: 'main' }, { id: 'c9' }, { source: 'claude' }, { whatever: 1 }]) {
+  for (const body of [{ blocked_by: ['c2'] }, { lanes: 'code-codex' }, { worker: 'main' }, { id: 'c9' }, { source: 'claude' }, { whatever: 1 }]) {
     r = await bd.api('POST', '/api/cards', { title: 'X', ...body });
     assert.equal(r.status, 400, JSON.stringify(body));
     assert.match(r.body.error, /unknown key/);

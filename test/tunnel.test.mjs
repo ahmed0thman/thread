@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import vm from 'node:vm';
 import { spawn } from 'node:child_process';
 import {
-  PARENT_SESSION, setupThreadEnv, cleanAmbientEnv, McpClient, freePort, waitFor, sleep, isAlive, writeStateFile, emptyState, threadCard, TEST_DIR,
+  PARENT_SESSION, setupThreadEnv, cleanAmbientEnv, McpClient, freePort, waitFor, sleep, isAlive, writeStateFile, emptyState, threadCard, TEST_DIR, FAKE_DELEGATE,
 } from './helpers.mjs';
 import * as core from '../server/core.mjs';
 import { addWait } from '../server/waits.mjs';
@@ -441,6 +441,35 @@ test('over the tunnel a person can read, edit, answer and ask for a report, but 
   assert.ok(core.listProjects().some((p) => p.key === b.key), 'the project is still listed');
   // a denied route is refused before the body is read, so an oversized body gets the same answer
   assert.equal((await a.write('POST', `${P}/threads/c2/messages`, { message: 'x'.repeat(100000) })).status, 403);
+});
+
+test('over the tunnel a lane cannot be set, changed or removed, and a refused save writes nothing; on the normal listener it can', async (t) => {
+  const b = await boot(t);
+  b.setEnv('THREAD_DELEGATE_DIR', FAKE_DELEGATE);   // the fake delegate skills, never the real ones
+  b.setEnv('FAKE_DELEGATE_MODE', 'ok');
+  seedThread(b);
+  const a = await open(b);
+  const P = `/api/p/${b.key}`;
+  const stored = () => JSON.stringify(core.readState(b.projectDir).cards.find((c) => c.id === 'c1'));
+  const before = stored();
+  for (const body of [{ lane: 'code-codex' }, { lane: 'code-codex', title: 'Also renamed' }, { lane: null }, { lane: '' }, { lane: 'no-such-lane' }]) {
+    for (const route of [`${P}/cards/c1`, '/api/cards/c1']) {
+      const r = await a.write('PATCH', route, body);
+      assert.equal(r.status, 403, `${route} ${JSON.stringify(body)} -> ${r.status} ${r.text}`);
+      assert.match(r.json.error, /^a lane sends the card's work to another coding CLI, so it can only be set, changed or removed on the computer itself, not through the tunnel$/);
+    }
+  }
+  assert.equal(stored(), before, 'nothing was written');
+  assert.equal((await a.write('PATCH', `${P}/cards/c1`, { title: 'Renamed from the phone' })).status, 200, 'the rest of a card can still be edited');
+  // the same save on the board's own listener
+  const H = { host: `127.0.0.1:${b.port}`, 'x-thread-token': b.token, ...JSON_HDR };
+  const local = await raw(b.port, { method: 'PATCH', path: `${P}/cards/c1`, headers: H, body: JSON.stringify({ lane: 'code-codex' }) });
+  assert.equal(local.status, 200, local.text);
+  assert.equal(local.json.lane, 'code-codex');
+  assert.equal((await a.write('PATCH', `${P}/cards/c1`, { note: 'A note from the phone' })).status, 200, 'a card that has a lane can still be edited remotely');
+  assert.equal(core.readState(b.projectDir).cards.find((c) => c.id === 'c1').lane, 'code-codex');
+  const lanesRead = await a.get(`${P}/lanes`);
+  assert.equal(lanesRead.status, 200, 'the lanes can be read, as before');
 });
 
 test('on the normal listener the same routes still work as before', async (t) => {

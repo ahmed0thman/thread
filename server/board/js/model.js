@@ -119,7 +119,10 @@
   }
   // What the card page's start step shows for a card that has a lane: the line, the dials, whether it is read-only (and the note for
   // the Mode choice), what runs it, and why it cannot start.
-  function laneStartPlan(card) {
+  // `name` (the start step's own Lane choice, '' for none) stands in for the card's lane when given: the plan is for the lane the card
+  // would run on if it were started now.
+  function laneStartPlan(card, name) {
+    if (name !== undefined && card) card = Object.assign({}, card, { lane: name });
     const info = laneInfo(card);
     if (!info || card.kind === 'thread') return null;
     if (info.state !== 'ok') {
@@ -129,6 +132,67 @@
     const readOnly = l.readOnly === true || l.implementer === 'agy';
     const modeNote = l.implementer === 'agy' ? 'agy lanes are read-only in this version.' : readOnly ? 'This lane is read-only.' : l.sandbox === 'danger-full-access' ? 'This lane has no sandbox: in write mode it has full access.' : '';
     return { name: info.name, provider: l.implementer, line: 'Runs on lane ' + info.name + ' · ' + l.implementer, detail: [l.model, l.variant || effortText(l.effort)].filter(Boolean).join(' · '), readOnly, modeNote, blocked: '' };
+  }
+  // The text of a lane in a choice list: 'code-codex · codex · gpt-fake · high', and 'read-only' when it is (agy lanes are, in this version).
+  // The lane name a task or idea holds, '' for none. A card file written by hand can hold anything: only a name counts.
+  const laneOf = (card) => (card && typeof card.lane === 'string' ? card.lane : '');
+  // `why` (a lane that cannot be picked) follows the name, where a narrow select still shows it.
+  function laneChoiceText(l, why) {
+    const dials = [l.model, l.variant || effortText(l.effort)].filter(Boolean);
+    return [l.name + (why ? ' (' + why + ')' : ''), l.implementer].concat(dials, l.readOnly === true || l.implementer === 'agy' ? ['read-only'] : []).join(' · ');
+  }
+  // What a card's Lane select (and, with forStart, the start step's) offers: None (or 'Claude (no lane)' to start without one) and the loaded
+  // lanes, each as { value, text, disabled }. A lane that is not approved is listed but cannot be picked, and in the start step neither can
+  // one whose provider's relay is not installed. `current` is a lane name, or a list of them (the card's lane and the one picked): each stays in the
+  // list, disabled, when the lanes do not know it, so that what is shown never silently becomes None.
+  function laneChoices(current, forStart) {
+    const out = [{ value: '', text: forStart ? 'Claude (no lane)' : 'None', disabled: false }];
+    ((lanes && lanes.available && lanes.lanes) || []).forEach((l) => {
+      const why = l.approved === false ? 'not approved' : forStart && l.relay === false ? 'relay not installed' : '';
+      out.push({ value: l.name, text: laneChoiceText(l, why), disabled: !!why });
+    });
+    [].concat(current).forEach((name) => {
+      if (name && typeof name === 'string' && !out.some((o) => o.value === name)) out.push({ value: name, text: name + ' (not found)', disabled: true });
+    });
+    return out;
+  }
+  // Fills a Lane select from laneChoices: an option that cannot be picked is listed, disabled, with its reason. `want` is kept when it is one of them.
+  function fillLaneSelect(sel, choices, want) {
+    const sig = JSON.stringify(choices);
+    if (sel.dataset.sig !== sig) {
+      sel.dataset.sig = sig;
+      sel.replaceChildren(...choices.map((c) => { const o = h('option', null, c.text); o.value = c.value; o.disabled = c.disabled; return o; }));
+    }
+    sel.value = choices.some((c) => c.value === want) ? want : '';
+  }
+  // The Lane select of a saved card's form. `base` is the card's saved lane; what is picked is the select's value. It follows the card
+  // while untouched, shows a picked lane the lanes no longer know as not found (never as None), and sends a lane only when it was changed.
+  function laneEditor(sel) {
+    let base = '';
+    const ed = {
+      get base() { return base; },
+      sync(card) {
+        const clean = !sel.dataset.sig || sel.value === base;   // the first fill has nothing the person could have touched
+        if (clean) base = laneOf(card);
+        fillLaneSelect(sel, laneChoices([base, clean ? '' : sel.value], false), clean ? base : sel.value);
+      },
+      dirty: () => sel.value !== base,
+      patch: () => (sel.value !== base ? { lane: sel.value || null } : {}),   // null takes the lane off
+      saved(card) { base = laneOf(card); ed.sync(card); },
+      reset() { sel.value = base; },
+    };
+    return ed;
+  }
+  // What Start does about the lane. `shown` is the card's lane as the start step showed it, `picked` the step's own choice (undefined: not
+  // touched, so the card's). A choice other than the one shown is saved on the card first; expectLane tells the server which lane was seen.
+  function startLaneArgs(shown, picked) {
+    const lane = picked !== undefined ? picked : shown;
+    return { lane, save: lane !== shown, expectLane: lane || null };
+  }
+  // Whether a task or idea's page offers the Lane select: when lanes can be read, or the card has one already (so that one that is gone can be removed).
+  function laneOffered(card) {
+    if (!card || (card.kind !== 'task' && card.kind !== 'idea')) return false;
+    return !!(lanes && lanes.available) || laneOf(card) !== '';
   }
   // Puts the card's lane rows at the end of a details list, in place of the ones put there before. Returns the new nodes.
   function showLaneRows(dl, before, card) {

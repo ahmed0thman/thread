@@ -32,6 +32,9 @@
 .confirm-text { font-weight: 500; }
 .start-step { flex: 1 1 100%; display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
 .start-step p { margin: 0; }
+.start-dyn { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.start-dyn:empty { display: none; }
+.start-dyn p { margin: 0; }
 .start-mode { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .start-opts { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s5); }
 .start-opts > * { flex: 1 1 190px; }

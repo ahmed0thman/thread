@@ -255,7 +255,7 @@ test('agent and model labels leave out what is missing and name xhigh "extra-hig
 });
 
 test('the start step sends context and agent, and asks for the agent list when it opens', () => {
-  assert.match(html, /\{ sessionId, mode, context, agent: agent \|\| undefined \}/);
+  assert.match(html, /\{ sessionId, mode, context, agent: agent \|\| undefined, expectLane: L\.expectLane \}/);
   assert.match(html, /pp\(pk, 'agents'\)/);
   assert.match(html, /'Same as session'/);
   assert.match(html, /Copies the whole session; uses far more tokens\./);
@@ -774,7 +774,7 @@ function lanePage(lanes = null) {
     h(tag, cls, text) { const e = doc.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== null) e.textContent = text; return e; },
     shape(cls) { const s = doc.createElement('span'); s.className = 'shape ' + cls; s.setAttribute('aria-hidden', 'true'); return s; },
   };
-  const page = vm.runInNewContext(`let lanes = ${JSON.stringify(lanes)};\n${t[1]}\n${m[1]}\n({ laneInfo, laneTag, laneRows, showLaneRows, laneSig, laneFollowUp, laneTraceNote, laneStartPlan, setLanes(v) { lanes = v; } })`, vm.createContext(env));
+  const page = vm.runInNewContext(`let lanes = ${JSON.stringify(lanes)};\n${t[1]}\n${m[1]}\n({ laneInfo, laneTag, laneRows, showLaneRows, laneSig, laneFollowUp, laneTraceNote, laneStartPlan, laneChoiceText, laneChoices, laneOffered, laneOf, laneEditor, fillLaneSelect, startLaneArgs, setLanes(v) { lanes = v; } })`, vm.createContext(env));
   return { page, doc };
 }
 const lcard = (lane, extra = {}) => ({ id: 'c3', kind: 'task', title: 'T', note: '', status: 'todo', lane, ...extra });
@@ -877,7 +877,8 @@ test('the page wires lanes in: read on the slow cycle and when a project shows, 
   assert.match(html, /laneNodes = showLaneRows\(metaDl, laneNodes, c\);/);
   assert.match(html, /f\.milestone \+ '\|' \+ f\.waiting \+ '\|' \+ lanesSig/, 'the board is drawn again when the lanes change');
   assert.match(html, /if \(card\.lane \|\| \(card\.thread && card\.thread\.lane\)\) ctx\.push\(laneSig\(card\)\)/, 'so is a card page');
-  assert.doesNotMatch(html, /\blane\s*:\s*(fMs|fTitle|fNote|fStatus)|patch\.lane|bodyObj\.lane/, 'no write sends a lane');
+  assert.doesNotMatch(html, /\blane\s*:\s*(fMs|fTitle|fNote|fStatus)|bodyObj\.lane/, 'the new-card form sends no lane');
+  assert.match(html, /if \(LE\) Object\.assign\(patch, LE\.patch\(\)\);/, 'only the Lane select of a saved card sends one, and only when it was changed');
 });
 
 const SNAP = (over = {}) => ({ name: 'code-codex', implementer: 'codex', model: 'gpt-fake', effort: 'high', variant: null, readOnly: false, source: 'global', session: 'codex-sess-1', ...over });
@@ -938,9 +939,150 @@ test('start step for a card with a lane: the lane line, read-only when the lane 
   assert.equal(page.laneStartPlan(lthread(SNAP())), null, 'a thread has no start step');
 });
 
+test('the Lane select offers None and every lane with its provider and model; one that is not approved is listed but cannot be picked', () => {
+  const { page } = lanePage({ ...LANES, lanes: [...LANES.lanes, { name: 'agy-fast', implementer: 'agy', model: 'gemini-fake', effort: null, variant: null, readOnly: false, source: 'global', approved: true, relay: false }] });
+  assert.deepEqual(plain(page.laneChoices('', false)), [
+    { value: '', text: 'None', disabled: false },
+    { value: 'code-codex', text: 'code-codex · codex · gpt-fake · high', disabled: false },
+    { value: 'ui-open', text: 'ui-open · opencode · vendor/model-x · max', disabled: false },
+    { value: 'review-ro', text: 'review-ro (not approved) · claude · extra-high · read-only', disabled: true },
+    { value: 'agy-fast', text: 'agy-fast · agy · gemini-fake · read-only', disabled: false },
+  ], 'a variant stands in for the effort, extra-high is spelt out, agy lanes are read-only, and a lane without a relay can still be put on a card');
+  const start = plain(page.laneChoices('', true));
+  assert.equal(start[0].text, 'Claude (no lane)', 'the start step\'s first choice is Claude without a lane');
+  assert.deepEqual(start.filter((c) => c.disabled).map((c) => [c.value, /\((.*)\)/.exec(c.text)[1]]), [['review-ro', 'not approved'], ['agy-fast', 'relay not installed']], 'in the start step a lane without its relay cannot be picked either');
+  assert.deepEqual(plain(page.laneChoices('gone', false)).at(-1), { value: 'gone', text: 'gone (not found)', disabled: true }, 'the card\'s own lane stays in the list when no lane has its name');
+  assert.equal(plain(page.laneChoices('code-codex', false)).filter((c) => c.value === 'code-codex').length, 1, 'a lane that is found is listed once');
+  page.setLanes({ available: false, projectTrusted: false, lanes: [] });
+  assert.deepEqual(plain(page.laneChoices('', false)), [{ value: '', text: 'None', disabled: false }]);
+  page.setLanes(null);
+  assert.deepEqual(plain(page.laneChoices('code-codex', true)).map((c) => c.value), ['', 'code-codex'], 'before the lanes have loaded, only None and the card\'s own lane');
+});
+
+test('the Lane select is offered for a task or idea when lanes can be read, or when the card has one that may need taking off; never for a milestone or thread', () => {
+  const { page } = lanePage(LANES);
+  assert.equal(page.laneOffered(lcard(undefined)), true);
+  assert.equal(page.laneOffered(lcard(undefined, { kind: 'idea' })), true);
+  assert.equal(page.laneOffered(lcard(undefined, { kind: 'milestone' })), false);
+  assert.equal(page.laneOffered(lthread(SNAP())), false);
+  page.setLanes({ available: false, projectTrusted: false, lanes: [] });
+  assert.equal(page.laneOffered(lcard(undefined)), false, 'no delegate skills: no select, as before');
+  assert.equal(page.laneOffered(lcard('code-codex')), true, 'a lane that cannot be read can still be taken off');
+  page.setLanes(null);
+  assert.equal(page.laneOffered(lcard(undefined)), false, 'not before the lanes have loaded');
+});
+
+test('the start step plans for the lane chosen in it: none switches to the usual step, another lane to that lane\'s plan', () => {
+  const { page } = lanePage(LANES);
+  const card = lcard('code-codex');
+  assert.equal(page.laneStartPlan(card, undefined).name, 'code-codex', 'nothing chosen: the card\'s lane');
+  assert.equal(page.laneStartPlan(card, ''), null, 'Claude (no lane) on a card that has one: the usual step, with Full copy and an agent');
+  assert.equal(page.laneStartPlan(card, 'ui-open').detail, 'vendor/model-x · max');
+  assert.equal(page.laneStartPlan(lcard(undefined), 'code-codex').provider, 'codex', 'a lane chosen for a card that has none');
+  assert.equal(page.laneStartPlan(lcard(undefined), undefined), null);
+  assert.equal(card.lane, 'code-codex', 'the card itself is not changed');
+  assert.match(page.laneStartPlan(lcard(undefined), 'gone').blocked, /^Lane “gone” was not found/);
+});
+
+// The Lane select's own logic runs against a fake select. A real one starts on its first option after its options are replaced; the editor
+// always sets the value after filling, so the fake just keeps the value it is given.
+function laneForm(lanes = LANES) {
+  const { page, doc } = lanePage(lanes);
+  const sel = new FakeEl(doc, 'select');
+  sel.value = '';
+  Object.defineProperty(sel, 'options', { get() { return sel.children; } });
+  return { page, sel, ed: page.laneEditor(sel) };
+}
+
+test('an untouched card page is not dirty, whatever its lane holds, and a save that does not change the lane sends no lane', () => {
+  for (const lane of ['code-codex', 'ui-open', 'review-ro', 'gone', undefined, '', null, 5, ['code-codex'], { name: 'code-codex' }, true]) {
+    const { page, sel, ed } = laneForm();
+    ed.sync(lcard(lane));
+    const name = typeof lane === 'string' ? lane : '';
+    assert.equal(sel.value, name, `the select shows ${JSON.stringify(lane)} as ${JSON.stringify(name)}`);
+    assert.equal(ed.dirty(), false, `${JSON.stringify(lane)} is not dirty`);
+    assert.deepEqual(plain(ed.patch()), {}, `${JSON.stringify(lane)} sends no lane key`);
+    ed.sync(lcard(lane));   // the poll draws the same card again
+    assert.equal(ed.dirty(), false);
+    assert.equal(page.laneOf(lcard(lane)), name);
+  }
+});
+
+test('picking a lane makes the form dirty and sends exactly that lane; None sends null; Cancel and a save bring it back to clean', () => {
+  const { sel, ed } = laneForm();
+  ed.sync(lcard('code-codex'));
+  sel.value = 'ui-open';
+  assert.equal(ed.dirty(), true);
+  assert.deepEqual(plain(ed.patch()), { lane: 'ui-open' });
+  ed.reset();
+  assert.equal(sel.value, 'code-codex', 'Cancel puts the saved lane back');
+  assert.equal(ed.dirty(), false);
+  assert.deepEqual(plain(ed.patch()), {});
+  sel.value = '';
+  assert.deepEqual(plain(ed.patch()), { lane: null }, 'None takes the lane off');
+  ed.saved(lcard(undefined));   // the server's answer to that save
+  assert.equal(ed.dirty(), false);
+  assert.deepEqual(plain(ed.patch()), {});
+  assert.equal(sel.value, '');
+  sel.value = 'code-codex';
+  assert.deepEqual(plain(ed.patch()), { lane: 'code-codex' }, 'a card that had none gets one');
+});
+
+test('the Lane select follows the saved card while untouched, and keeps what the person picked when the card changes under it', () => {
+  const { sel, ed } = laneForm();
+  ed.sync(lcard('code-codex'));
+  ed.sync(lcard('ui-open'));   // changed elsewhere
+  assert.equal(sel.value, 'ui-open');
+  assert.equal(ed.dirty(), false);
+  sel.value = 'code-codex';
+  ed.sync(lcard('claude-edit'));
+  assert.equal(sel.value, 'code-codex', 'the pick stays');
+  assert.equal(ed.dirty(), true);
+});
+
+test('a lane that was picked and then vanishes from the loaded lanes stays selected as not found, never as None', () => {
+  const { page, sel, ed } = laneForm();
+  ed.sync(lcard(undefined));
+  sel.value = 'ui-open';
+  page.setLanes({ ...LANES, lanes: LANES.lanes.filter((l) => l.name !== 'ui-open') });
+  ed.sync(lcard(undefined));
+  assert.equal(sel.value, 'ui-open', 'still what was picked');
+  const gone = sel.children.find((o) => o.value === 'ui-open');
+  assert.ok(gone, 'it is in the list');
+  assert.equal(gone.disabled, true);
+  assert.equal(gone.textContent, 'ui-open (not found)');
+  assert.deepEqual(plain(ed.patch()), { lane: 'ui-open' }, 'the form is still dirty, and a save is refused by the server with its reason');
+  // the card's own lane that vanishes is shown the same way, and is not dirty
+  const b = laneForm();
+  b.ed.sync(lcard('ui-open'));
+  b.page.setLanes({ available: false, projectTrusted: false, lanes: [] });
+  b.ed.sync(lcard('ui-open'));
+  assert.equal(b.sel.value, 'ui-open');
+  assert.equal(b.ed.dirty(), false);
+  assert.equal(b.sel.children.find((o) => o.value === 'ui-open').textContent, 'ui-open (not found)');
+});
+
+test('Start saves a lane only when the step\'s choice differs from the lane it showed, and tells the server which lane that was', () => {
+  const { page } = lanePage(LANES);
+  assert.deepEqual(plain(page.startLaneArgs('code-codex', undefined)), { lane: 'code-codex', save: false, expectLane: 'code-codex' }, 'nothing picked: the card\'s lane, not written again');
+  assert.deepEqual(plain(page.startLaneArgs('', undefined)), { lane: '', save: false, expectLane: null }, 'a card with no lane: the server must still find none');
+  assert.deepEqual(plain(page.startLaneArgs('code-codex', 'code-codex')), { lane: 'code-codex', save: false, expectLane: 'code-codex' }, 'the shown lane picked again is no change');
+  assert.deepEqual(plain(page.startLaneArgs('code-codex', 'ui-open')), { lane: 'ui-open', save: true, expectLane: 'ui-open' });
+  assert.deepEqual(plain(page.startLaneArgs('code-codex', '')), { lane: '', save: true, expectLane: null }, 'Claude (no lane) removes it first');
+  assert.deepEqual(plain(page.startLaneArgs('', 'code-codex')), { lane: 'code-codex', save: true, expectLane: 'code-codex' });
+});
+
+test('the Lane select is wired into the card form for a saved task or idea only, and hidden on the tunnel', () => {
+  assert.match(html, /laneField\.hidden = isRemote\(\) \|\| !laneOffered\(c\);/);
+  assert.match(html, /const fLane = !create && !isMs \? h\('select', 'input'\) : null;/, 'not for a new card or a milestone');
+  assert.match(html, /if \(LE && LE\.dirty\(\)\) return true;/);
+  assert.match(html, /\[fTitle, fNote, fStatus, fMs, fLane, fKind\]\.forEach/, 'a read-only board disables it');
+  assert.doesNotMatch(html, /innerHTML/, 'no innerHTML');
+});
+
 test('the start step hides the agent and Full copy for a lane, never sends a lane, and the composer follows the lane\'s session', () => {
-  assert.match(html, /const lp = laneStartPlan\(findCard\(P\.target\) \|\| card\);/);
-  assert.match(html, /if \(!lp\) step\.appendChild\(field\('Agent', agentSel, 'f-start-agent'\)\);/);
+  assert.match(html, /const lp = laneStartPlan\(findCard\(P\.target\) \|\| card, P\.startLane\);/);
+  assert.match(html, /if \(!lp\) dyn\.appendChild\(field\('Agent', agentSel, 'f-start-agent'\)\);/);
   assert.match(html, /context: ctx \? ctx\.value\(\) : 'brief', agent: lp \? '' : agentSel\.value/);
   assert.match(html, /lp && lp\.readOnly \? \[\['read', 'Read-only'\]\]/);
   assert.match(html, /lp && lp\.blocked \? lp\.blocked : ''/);
@@ -948,6 +1090,7 @@ test('the start step hides the agent and Full copy for a lane, never sends a lan
   assert.match(html, /if \(t\.lane\) \{ const f = laneFollowUp\(card\); return f\.ok \? '' : 'This thread cannot take a follow-up\. ' \+ f\.why; \}/);
   assert.match(html, /const laneNote = laneTraceNote\(c\);/);
   assert.doesNotMatch(html, /\{ sessionId, mode, context, agent: [^}]*lane/, 'the start request carries no lane');
+  assert.match(html, /'\/start'\), \{ sessionId, mode, context, agent: agent \|\| undefined, expectLane: L\.expectLane \}\)/, 'a lane chosen in the step is saved on the card before; the start carries only the lane that was seen');
 });
 
 test('lane tag: the name may be cut short, but the state and the provider are a part of their own that never shrinks', () => {
@@ -1010,7 +1153,7 @@ test('start step: it says what runs, offers only read access for agy, and warns 
   assert.equal(page.laneStartPlan(lcard('code-full')).modeNote, 'This lane has no sandbox: in write mode it has full access.');
   assert.equal(page.laneStartPlan(lcard('code-full')).readOnly, false);
   assert.equal(page.laneStartPlan(lcard('gone')).provider, '', 'an unknown lane names no provider');
-  assert.match(html, /'This card becomes a thread: a background ' \+ \(lp0\.provider \? lp0\.provider \+ ' session' : 'session'\) \+ ' on lane ' \+ lp0\.name/);
+  assert.match(html, /'This card becomes a thread: a background ' \+ \(lp\.provider \? lp\.provider \+ ' session' : 'session'\) \+ ' on lane ' \+ lp\.name/);
   assert.match(html, /a background Claude session working on this card’s title and note\./, 'the usual step still says Claude');
 });
 

@@ -763,6 +763,32 @@ test('an answer that arrives in a repo card file (a git pull) wakes nothing and 
   assert.doesNotMatch(again.stdout, /the second/);
 });
 
+test('a Notify click on a repo card, which writes only this machine\'s overlay, wakes the waiting session', async (t) => {
+  const w = twoDevices(t);
+  const { A } = w;
+  const { requestNotify } = await import('../server/notify.mjs');
+  const { touchSession } = await import('../server/sessions.mjs');
+  const card = await as(A, async () => {
+    core.enableRepo(A.dir);
+    await touchSession(A.dir, S1, {});
+    const c = await core.addCard(A.dir, { title: 'Look at this' });
+    await core.saveConfig(A.dir, 'project', { wake: true });
+    return c;
+  });
+  const before = await as(A, () => wake.filesSignature(A.dir));
+  const waiter = startWaiter(t, A);
+  await sleep(600);
+  assert.equal(waiter.child.exitCode, null, 'nothing to wake for yet');
+  // the owner moves the card on the board, then clicks Notify Claude: the move writes the card file, the click only the overlay
+  await as(A, () => core.updateCard(A.dir, card.id, { status: 'in_progress' }, { source: 'user' }));
+  await sleep(400);
+  await as(A, () => requestNotify(A.dir, card.id, S1));
+  assert.notEqual(await as(A, () => wake.filesSignature(A.dir)), before, 'the overlay is part of the waiter\'s fingerprint');
+  assert.equal(await Promise.race([waiter.done, sleep(8000).then(() => 'timeout')]), 2, `the waiter woke the session; stderr: ${waiter.stderr()}`);
+  const r = await promptHook(A);
+  assert.match(JSON.parse(r.stdout.trim()).hookSpecificOutput.additionalContext, new RegExp(`look at card ${card.id}`));
+});
+
 // ---------------------------------------------------------------- the projects home
 
 test('forgetting a project never deletes the repo\'s files, and a missing .claude/thread/ folder returns the project to the local store', async (t) => {

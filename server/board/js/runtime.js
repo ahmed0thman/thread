@@ -115,7 +115,7 @@
   async function api(method, path, body) {
     const { res, text } = await request(method, path, body);
     const data = parseJson(text);
-    if (!res.ok) throw new Error((data && data.error) ? data.error : 'Request failed (status ' + res.status + ')');
+    if (!res.ok) { const err = new Error((data && data.error) ? data.error : 'Request failed (status ' + res.status + ')'); err.status = res.status; throw err; }
     return data;
   }
   function pp(key, rest) { return '/api/p/' + encodeURIComponent(key) + '/' + rest; }

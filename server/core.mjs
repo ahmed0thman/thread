@@ -1065,15 +1065,22 @@ function refuseThreadFields(card, cards) {
   if (has.length) throw new Error(`A card with acceptance criteria or a Blocked by list cannot be started as a thread; clear them first (${card.id} has ${has.join(' and ')}).`);
 }
 
+// The page showed one lane and the card has another by now. The board maps it to HTTP 409.
+export class StaleCardError extends Error {
+  constructor(message) { super(message); this.status = 409; }
+}
+
 // Turns a task or idea card into a thread in place: same id, title, note and source.
 // Nobody writes a brief on the board, so in brief mode the card's note is the brief.
 // A card that has a lane runs on it; the lane is read from the card, never from the caller.
-export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mode = 'read', extraDirs, context, agent } = {}) {
+// `expectLane` is the lane the caller was shown ('' for none): the start is refused when the card's is another. Left out, nothing is checked.
+export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mode = 'read', extraDirs, context, agent, expectLane } = {}) {
   refuseInsideThread('start');
   requireTasks(readConfig(projectDirArg));
   const existing = cardById(readState(projectDirArg).cards, cardId);
   if (existing && existing.kind !== 'thread' && existing.kind !== 'milestone') refuseThreadFields(existing, readState(projectDirArg).cards);
   const cardLane = existing && existing.kind !== 'thread' && existing.kind !== 'milestone' && typeof existing.lane === 'string' ? existing.lane : '';
+  if (expectLane !== undefined && expectLane !== cardLane) throw new StaleCardError('the card\'s lane changed since you looked at it; look at it again and then start it');
   const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief: existing && existing.note, agent, lane: cardLane });
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, cardId);

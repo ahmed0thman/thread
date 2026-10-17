@@ -281,6 +281,20 @@
     if (!create) body.appendChild(cutNote);
     if (msField) body.appendChild(msField);
     syncMsField();
+    // the lane a task or idea runs on when it is started as a thread (a saved task or idea only; the tunnel cannot change it, so it is not offered there)
+    const fLane = !create && !isMs ? h('select', 'input') : null;
+    const laneField = fLane ? field('Lane', fLane, 'f-lane') : null;
+    if (laneField) {
+      laneField.append(h('span', 'foot-note', 'Starting this card as a thread runs it on this lane. Its CLI sends the card and the files it reads to that provider. Only approved lanes can be picked.'));
+      body.appendChild(laneField);
+    }
+    const LE = fLane ? laneEditor(fLane) : null;
+    function syncLaneField(c) {
+      if (!LE) return;
+      LE.sync(c);
+      laneField.hidden = isRemote() || !laneOffered(c);
+    }
+    if (fLane) syncLaneField(card);
     // the fields of a task or idea: type, priority, labels, blockers and criteria; a new card offers the first three, a milestone none
     const newKind = () => (fKind.value === 'bug' ? 'task' : fKind.value);
     const fxKeys = () => (create ? fieldKeys(newKind(), true).filter((k) => k !== 'type') : fieldKeys(card.kind, false));
@@ -310,6 +324,7 @@
     P.isDirty = () => {
       if (fTitle.value !== P.base.title || fNote.value !== P.base.note || (fStatus && fStatus.value !== P.base.status)) return true;
       if (fMs && fMs.value !== P.base.parent) return true;
+      if (LE && LE.dirty()) return true;
       if (FX && Object.keys(fieldsPatch(P.base.fields, FX.values(), fxKeys())).length) return true;
       return create ? fKind.value !== P.base.kind : false;
     };
@@ -374,6 +389,7 @@
             if (fNote.value !== P.base.note) patch.note = fNote.value;
             if (fStatus && fStatus.value !== P.base.status) patch.status = fStatus.value;
             if (fMs && fMs.value !== P.base.parent) patch.parent = fMs.value;   // '' takes the card out of its milestone
+            if (LE) Object.assign(patch, LE.patch());   // a lane only when it was changed: null takes it off
             if (FX) {
               const fp = fieldsPatch(P.base.fields, FX.values(), fxKeys());
               // the Type select is the card's kind and type together
@@ -392,6 +408,7 @@
             wrote();
             P.base = { title: saved.title, note: saved.note || '', status: saved.status, kind: saved.kind, type: fieldValues(saved).type, parent: saved.parent || '', fields: isMs ? fieldValues(saved) : cardValues(saved) };
             if (FX) FX.set(P.base.fields);
+            if (LE) { LE.saved(saved); laneField.hidden = isRemote() || !laneOffered(saved); }
             P.baseUpdatedAt = saved.updatedAt;
             P.latestUpdatedAt = saved.updatedAt;
             if (fTitle.value === saved.title) fTitle.value = saved.title; else if (fTitle.value.trim() === saved.title) fTitle.value = saved.title;
@@ -410,6 +427,7 @@
       noteEditing = false; syncNote();
       if (fStatus) fStatus.value = P.base.status;
       if (fMs) fMs.value = P.base.parent;
+      if (LE) LE.reset();
       if (fKind) fKind.value = P.base.kind;
       if (FX) { FX.set(P.base.fields); FX.show(fxKeys()); }
       syncMsField();
@@ -424,10 +442,12 @@
     function syncStart() {
       if (create) return;   // a new card has no saved card to start from
       const savedCard = findCard(P.target) || card;
-      const lp = laneStartPlan(savedCard);
+      const lp = laneStartPlan(savedCard, P.startLane);   // the lane chosen in the start step, else the card's
       const cardWhy = cardThreadStartWhy(savedCard);
-      const why = isRO() ? READONLY_WHY : P.isDirty() ? 'Save or discard your changes first' : cardWhy || (lp && lp.blocked ? lp.blocked : '');
-      if (startBtn) { startBtn.disabled = !!why; startBtn.title = why; }
+      // A lane that cannot run stops the step's own Start button, not the one that opens the step: there the lane can be changed.
+      const open = isRO() ? READONLY_WHY : P.isDirty() ? 'Save or discard your changes first' : cardWhy;
+      const why = open || (lp && lp.blocked ? lp.blocked : '');
+      if (startBtn) { startBtn.disabled = !!open; startBtn.title = open; }
       if (startWhyEl) { startWhyEl.textContent = cardWhy; startWhyEl.hidden = !cardWhy; }
       if (goBtn) { setOff(goBtn, !!why); whyEl.textContent = why; }
     }
@@ -456,20 +476,27 @@
         box.appendChild(l);
         return r;
       });
-      return { box, value: () => radios.find((r) => r.checked).value };
+      return { box, value: () => radios.find((r) => r.checked).value, set: (v) => { const r = radios.find((x) => x.value === v); if (r) r.checked = true; } };
     }
 
+    // The start step's first line, for the lane plan it will run on (null: a normal thread on Claude).
+    const startIntro = (lp) => (lp ? 'This card becomes a thread: a background ' + (lp.provider ? lp.provider + ' session' : 'session') + ' on lane ' + lp.name + ', working on this card’s title and note.' : 'This card becomes a thread: a background Claude session working on this card’s title and note.');
+
     function renderFoot(focusFirst) {
+      // The start step is drawn again when the card or the lanes change: what was chosen in it (session, mode, context, agent) carries over.
+      const carry = P.starting && P.startState ? P.startState() : null;
+      P.startState = null;
       foot.replaceChildren();
       if (isRemote()) P.starting = P.confirmDelete = false;
       startBtn = goBtn = whyEl = startWhyEl = notifyBtn = null;
       if (P.starting) {
         const step = h('div', 'start-step');
-        const lp0 = laneStartPlan(findCard(P.target) || card);
-        step.appendChild(h('p', null, lp0 ? 'This card becomes a thread: a background ' + (lp0.provider ? lp0.provider + ' session' : 'session') + ' on lane ' + lp0.name + ', working on this card’s title and note.' : 'This card becomes a thread: a background Claude session working on this card’s title and note.'));
+        const intro = h('p');
+        step.appendChild(intro);
         const list = startSessions();
-        const cancel = plainBtn('Cancel', null, () => { P.starting = false; renderFoot(); startBtn.focus(); });
+        const cancel = plainBtn('Cancel', null, () => { P.starting = false; P.startLane = undefined; renderFoot(); startBtn.focus(); });
         if (!list.length) {
+          intro.textContent = startIntro(laneStartPlan(findCard(P.target) || card, P.startLane));
           step.appendChild(h('p', 'muted', 'No Claude session has been seen in this project yet. Open the project in Claude Code and send one message, then try again.'));
           step.appendChild(h('div', 'start-btns')).appendChild(cancel);
           if (focusFirst) cancel.focus();
@@ -480,51 +507,80 @@
             o.value = id;
             sel.appendChild(o);
           });
+          if (carry && list.some(([id]) => id === carry.session)) sel.value = carry.session;
           step.appendChild(field('Started from session', sel, 'f-start-session'));
 
-          // A card with a lane runs on it: no Full copy and no agent, and read-only only when the lane is.
-          const lp = laneStartPlan(findCard(P.target) || card);
-          let ctx = null;
-          if (lp) {
-            const lt = h('p', 'lane-start');
-            lt.append(shape('s-hex'), h('span', null, lp.line));
-            step.appendChild(lt);
-            if (lp.detail) step.appendChild(h('p', 'foot-note', lp.detail));
-            step.appendChild(h('p', 'foot-note', 'The lane’s own CLI runs it and sends the brief, and the files it reads, to that provider.'));
-          } else {
-            ctx = radioGroup('start-context', 'Context', [['brief', 'Brief'], ['full', 'Full copy']]);
-            const ctxNote = h('p', 'foot-note', CONTEXT_NOTE.brief);
-            ctxNote.id = 'f-start-context-note';
-            ctx.box.setAttribute('aria-describedby', ctxNote.id);
-            ctx.box.appendChild(ctxNote);
-            ctx.box.addEventListener('change', () => { ctxNote.textContent = CONTEXT_NOTE[ctx.value()]; });
+          // The lane to run on: the card's own, preselected. Another choice is saved on the card when Start is pressed. Not offered when
+          // there are no lanes to read and the card has none.
+          // `shown` is the card's lane as this step was drawn: Start tells the server which lane the person saw (expectLane).
+          const cardNow = findCard(P.target) || card;
+          const shown = laneOf(cardNow);
+          let laneSel = null;
+          if (laneOffered(cardNow) || P.startLane) {   // a lane picked here stays on show even when the lanes can no longer be read
+            laneSel = h('select', 'input');
+            // a lane the lanes no longer know stays in the list as not found, selected, never as Claude (no lane)
+            fillLaneSelect(laneSel, laneChoices([shown, P.startLane], true), P.startLane !== undefined ? P.startLane : shown);
+            step.appendChild(field('Lane', laneSel, 'f-start-lane'));
           }
+          const dyn = h('div', 'start-dyn');
+          step.appendChild(dyn);
 
-          const mode = radioGroup('start-mode', 'Mode', lp && lp.readOnly ? [['read', 'Read-only']] : [['read', 'Read-only'], ['write', 'Can edit files']]);
-          mode.box.appendChild(h('p', 'foot-note', lp ? lp.modeNote || 'Edits the same files as your main session.' : 'Edits the same files as your main session.'));
-          const opts = h('div', 'start-opts');
-          if (ctx) opts.appendChild(ctx.box);
-          opts.appendChild(mode.box);
-          step.appendChild(opts);
+          // What depends on the lane chosen: its line, the context, the mode and the agent. Drawn again when the lane choice changes.
+          let pick = null;
+          function drawDyn(keep) {
+            // A card with a lane runs on it: no Full copy and no agent, and read-only only when the lane is.
+            const lp = laneStartPlan(findCard(P.target) || card, P.startLane);
+            intro.textContent = startIntro(lp);
+            dyn.replaceChildren();
+            let ctx = null;
+            if (lp) {
+              const lt = h('p', 'lane-start');
+              lt.append(shape('s-hex'), h('span', null, lp.line));
+              dyn.appendChild(lt);
+              if (lp.detail) dyn.appendChild(h('p', 'foot-note', lp.detail));
+              dyn.appendChild(h('p', 'foot-note', 'The lane’s own CLI runs it and sends the brief, and the files it reads, to that provider.'));
+            } else {
+              ctx = radioGroup('start-context', 'Context', [['brief', 'Brief'], ['full', 'Full copy']]);
+              const ctxNote = h('p', 'foot-note', CONTEXT_NOTE.brief);
+              ctxNote.id = 'f-start-context-note';
+              ctx.box.setAttribute('aria-describedby', ctxNote.id);
+              ctx.box.appendChild(ctxNote);
+              ctx.box.addEventListener('change', () => { ctxNote.textContent = CONTEXT_NOTE[ctx.value()]; });
+              if (keep) { ctx.set(keep.context); ctxNote.textContent = CONTEXT_NOTE[ctx.value()]; }
+            }
 
-          // The agents of this project and of the user; if they cannot be listed, "Same as session" is still there.
-          const agentSel = h('select', 'input');
-          const same = h('option', null, 'Same as session');
-          same.value = '';
-          agentSel.appendChild(same);
-          if (!lp) step.appendChild(field('Agent', agentSel, 'f-start-agent'));
-          const pk = selKey;
-          if (!lp) api('GET', pp(pk, 'agents')).then((r) => {
-            if (panel !== P || !agentSel.isConnected) return;
-            ((r && r.agents) || []).forEach((a) => {
-              const o = h('option', null, agentLabel(a));
-              o.value = a.name;
-              if (a.description) o.title = a.description;
-              agentSel.appendChild(o);
-            });
-          }).catch(() => { /* the list is optional */ });
+            const mode = radioGroup('start-mode', 'Mode', lp && lp.readOnly ? [['read', 'Read-only']] : [['read', 'Read-only'], ['write', 'Can edit files']]);
+            if (keep) mode.set(keep.mode);
+            mode.box.appendChild(h('p', 'foot-note', lp ? lp.modeNote || 'Edits the same files as your main session.' : 'Edits the same files as your main session.'));
+            const opts = h('div', 'start-opts');
+            if (ctx) opts.appendChild(ctx.box);
+            opts.appendChild(mode.box);
+            dyn.appendChild(opts);
 
-          goBtn = actionBtn('Start', 'primary', 'start:' + selKey + ':' + card.id, () => doStart({ sessionId: sel.value, mode: mode.value(), context: ctx ? ctx.value() : 'brief', agent: lp ? '' : agentSel.value }));
+            // The agents of this project and of the user; if they cannot be listed, "Same as session" is still there.
+            const agentSel = h('select', 'input');
+            const same = h('option', null, 'Same as session');
+            same.value = '';
+            agentSel.appendChild(same);
+            if (!lp) dyn.appendChild(field('Agent', agentSel, 'f-start-agent'));
+            const pk = selKey;
+            if (!lp) api('GET', pp(pk, 'agents')).then((r) => {
+              if (panel !== P || !agentSel.isConnected) return;
+              ((r && r.agents) || []).forEach((a) => {
+                const o = h('option', null, agentLabel(a));
+                o.value = a.name;
+                if (a.description) o.title = a.description;
+                agentSel.appendChild(o);
+              });
+              if (keep && keep.agent) agentSel.value = keep.agent;
+            }).catch(() => { /* the list is optional */ });
+            pick = () => ({ mode: mode.value(), context: ctx ? ctx.value() : 'brief', agent: lp ? '' : agentSel.value });
+          }
+          drawDyn(carry);
+          P.startState = () => ({ session: sel.value, ...pick() });
+          if (laneSel) laneSel.addEventListener('change', () => { const keep = pick(); P.startLane = laneSel.value; drawDyn(keep); syncStart(); });
+
+          goBtn = actionBtn('Start', 'primary', 'start:' + selKey + ':' + card.id, () => doStart({ sessionId: sel.value, ...pick(), shown, picked: P.startLane }));
           whyEl = h('span', 'foot-note');
           whyEl.setAttribute('role', 'status');
           step.appendChild(h('div', 'start-btns')).append(goBtn, cancel, whyEl);
@@ -589,7 +645,7 @@
           foot.appendChild(notifyBtn);
         }
         if (!isMs && !away) {      // a milestone cannot be a thread
-          startBtn = plainBtn('Start as thread', null, () => { P.starting = true; renderFoot(true); });
+          startBtn = plainBtn('Start as thread', null, () => { P.starting = true; P.startLane = undefined; renderFoot(true); });
           startWhyEl = h('span', 'foot-note');
           startWhyEl.setAttribute('role', 'status');
           foot.append(startBtn, startWhyEl);
@@ -616,14 +672,31 @@
     }
 
     // The server turns the card into a thread under the same id; updatePanel then swaps this page for the workspace.
-    async function doStart({ sessionId, mode, context, agent }) {
+    // A lane chosen in the start step ('' for none) is saved on the card first, since the server starts a card on its own lane; if the start
+    // is then refused, the card keeps the lane that was chosen. `shown` is the card's lane as the step showed it: the card not changing it
+    // since is checked by the server (expectLane), so the thread never runs on a lane the person did not see.
+    async function doStart({ sessionId, mode, context, agent, shown, picked }) {
       clearError();
       const pk = selKey;
+      const L = startLaneArgs(shown, picked);
+      let stale = false;
       await runAction('start:' + pk + ':' + card.id, async () => {
-        try { const started = await api('POST', pp(pk, 'cards/' + encodeURIComponent(card.id) + '/start'), { sessionId, mode, context, agent: agent || undefined }); wrote(); applyCard(started, pk); }
-        catch (e) { showError(e.message); }
+        try {
+          if (L.save) {
+            const saved = await api('PATCH', pp(pk, 'cards/' + encodeURIComponent(card.id)), { lane: L.lane || null });
+            P.startLane = undefined;
+            wrote(); applyCard(saved, pk);
+          }
+        } catch (e) { showError(e.message); return; }
+        try { const started = await api('POST', pp(pk, 'cards/' + encodeURIComponent(card.id) + '/start'), { sessionId, mode, context, agent: agent || undefined, expectLane: L.expectLane }); wrote(); applyCard(started, pk); }
+        catch (e) { showError(e.message); stale = e.status === 409; }
       });
-      poll();
+      if (stale) {
+        // the card's lane is not the one the step showed: look at the card again, and draw the step for what it has now
+        P.startLane = undefined;
+        await poll();
+        if (panel === P && P.starting) renderFoot();
+      } else poll();
     }
 
     async function doDelete(id) {
@@ -645,7 +718,7 @@
       if (ro === roShown) return;
       roShown = ro;
       roNote.hidden = !ro;
-      [fTitle, fNote, fStatus, fMs, fKind].forEach((f) => { if (f) { f.disabled = ro; f.title = ro ? READONLY_WHY : ''; } });
+      [fTitle, fNote, fStatus, fMs, fLane, fKind].forEach((f) => { if (f) { f.disabled = ro; f.title = ro ? READONLY_WHY : ''; } });
       noteEdit.disabled = ro; noteEdit.title = ro ? READONLY_WHY : '';
       if (FX) FX.setDisabled(ro, READONLY_WHY);
       if (ro) P.confirmDelete = P.starting = P.notifying = false;
@@ -681,6 +754,7 @@
         if (clean) P.base[k] = nb[k];
       });
       syncMsField();
+      syncLaneField(c);
       if (FX) {
         // the fields follow the server too, one by one, where the user has not touched them
         const nv = cardValues(c), cur = FX.values();
@@ -719,7 +793,7 @@
       metaCreated.replaceChildren(timeEl(c.createdAt));
       metaUpdated.replaceChildren(timeEl(c.updatedAt));
       if (metaDl) laneNodes = showLaneRows(metaDl, laneNodes, c);
-      const ls = laneSig(c);
+      const ls = laneSig(c) + JSON.stringify(laneChoices(laneOf(c), true));   // the start step's lane choice follows the lanes too
       if (P.laneSig !== undefined && P.laneSig !== ls) { if (P.starting) renderFoot(); else syncStart(); }   // the lane changed: the start step, or the button, follows
       P.laneSig = ls;
       // Notify Claude comes and goes with the card (Claude lists it, or it is edited again), and its label with the request
