@@ -459,7 +459,7 @@
       ctl.last = card;
       const items = isChat() ? [] : waitsOf(card);
       const ro = isRO();
-      const sig = JSON.stringify([items, ro, items.map((w) => (w.askedBy ? sessionLabel(w.askedBy) : ''))]);
+      const sig = JSON.stringify([items, ro, items.map((w) => (w.askedBy ? sessionLabel(w.askedBy) : '')), items.map((w) => refSig(w.text))]);
       if (sig === ctl.sig) return;
       ctl.sig = sig;
       const open = items.filter((w) => w.state === 'open');

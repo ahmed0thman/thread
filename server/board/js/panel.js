@@ -110,7 +110,10 @@
         || Array.prototype.find.call(elPane.querySelectorAll('a[href]'), (a) => a.getAttribute('href') === href) || null;   // a link in the Milestones or the Summary
     }
     else if (rf && rf.el) target = rf.el;
-    (target || elNewBtn).focus({ preventScroll: true });
+    waitFocus = null;
+    pendingVisit = null;
+    refMute = true;      // a reference that gets the focus back is not a keyboard visit: no preview
+    try { (target || elNewBtn).focus({ preventScroll: true }); } finally { refMute = false; }
   }
 
   // page: the form fills the view (no board behind it to click on)
@@ -176,7 +179,9 @@
       const first = panel.initialFocus ? panel.initialFocus() : panel.root;
       (first || panel.root).focus({ preventScroll: true });
       if (atWaits && panel.focusWaits) panel.focusWaits();   // the gear menu's "Answer waiting items"
+      if (waitFocus && waitFocus.card === target) revealWait();   // a reference to a waiting item was clicked
     }
+    waitFocus = null;
   }
 
   // a chat-only project shows its threads only; a task card is as good as missing
@@ -203,6 +208,7 @@
     const ctx = [current.config, milestoneChoices()];
     if (card.lane || (card.thread && card.thread.lane)) ctx.push(laneSig(card));
     if (card.kind === 'task' || card.kind === 'idea') ctx.push([workerRows(), workerOffered(card), !!lanes, !!agents, isRemote()]);   // the Worker field and the start step's worker choice
+    ctx.push(refSig([card.note].concat(waitsOf(card).map((w) => w.text)).join('\n')));   // the card and item ids in its texts that are links now
     if (card.kind === 'milestone') ctx.push(childrenOf(current.cards, card.id).map((k) => [k.id, k.kind, k.title, k.status, k.thread && k.thread.runState]));
     return ctx;
   }

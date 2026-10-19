@@ -1,0 +1,25 @@
+/* references to cards and waiting items: the link in the text, its preview, and the mark on the item a click lands on */
+a.cref {
+  display: inline; padding: 0 2px; border-radius: 5px; background: var(--accent-bg); color: var(--accent);
+  font: 500 0.88em var(--mono); text-decoration: underline dotted; text-underline-offset: 3px; white-space: nowrap;
+}
+a.cref:hover { background: var(--surface-2); text-decoration-style: solid; }
+.cref-pop {
+  position: fixed; z-index: 65; left: 0; top: 0; width: max-content; max-width: min(320px, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3);
+  background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--r3); box-shadow: var(--shadow-md);
+  font: 13px/1.45 var(--sans); white-space: normal; animation: fade-in 0.12s ease-out;
+}
+.cp-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cp-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cp-state { font-size: 12px; font-weight: 600; color: var(--muted); }
+.cp-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.cp-text { margin: 0; overflow-wrap: anywhere; }
+.cp-meta, .cp-note { margin: 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.cref-pop .btn { align-self: flex-end; }
+.ref-flash { outline: 2px solid var(--focus); outline-offset: 2px; animation: ref-flash 2.4s ease-out; }
+@keyframes ref-flash { from { background-color: var(--accent-bg); } to { background-color: transparent; } }
+@media (forced-colors: active) {
+  a.cref { color: LinkText; text-decoration: underline; }
+  .cref-pop { border: 1px solid CanvasText; }
+}

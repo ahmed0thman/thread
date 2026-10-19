@@ -206,20 +206,32 @@
     // The note of a saved card is shown as Markdown with an Edit button; Edit swaps in the textarea above, which Save and Cancel
     // handle as before. A new card, and a card with no note, open straight in the textarea.
     const noteField = field('Note', fNote, 'f-note');
-    const noteView = h('div', 'note-view');
+    const noteLabel = noteField.querySelector('label');
+    // the reading frame: a header with the name and the Edit button, then the text (the label above is for the textarea, so it shows only there)
+    const noteView = h('section', 'note-view');
+    noteView.setAttribute('aria-labelledby', 'f-note-title');
+    const noteTitle = h('h3', 'note-title', 'Note');
+    noteTitle.id = 'f-note-title';
     const noteEdit = h('button', 'btn small', 'Edit');
     noteEdit.type = 'button';
     noteEdit.id = 'f-note-edit';
     noteEdit.setAttribute('aria-controls', 'f-note');
+    noteEdit.setAttribute('aria-label', 'Edit note');
+    const noteHead = h('div', 'note-head');
+    noteHead.append(noteTitle, noteEdit);
+    const noteBody = h('div', 'note-body');
+    noteView.append(noteHead, noteBody);
     noteField.append(noteView);
     let noteEditing = create, noteShown = null;
     function syncNote() {
       const edit = noteEditing || !fNote.value.trim();
       fNote.hidden = !edit;
+      noteLabel.hidden = !edit;
       noteView.hidden = edit;
-      if (edit || noteShown === fNote.value) return;
-      noteShown = fNote.value;
-      noteView.replaceChildren(clampable(renderMarkdown(noteShown), 'note-text', 'note:' + selKey + ':' + (card ? card.id : 'new')), noteEdit);
+      const seen = fNote.value + '\0' + refSig(fNote.value);
+      if (edit || noteShown === seen) return;
+      noteShown = seen;
+      noteBody.replaceChildren(clampable(renderMarkdown(fNote.value), 'note-text', 'note:' + selKey + ':' + (card ? card.id : 'new')));
     }
     noteEdit.addEventListener('click', () => { noteEditing = true; syncNote(); fNote.focus(); });
     body.appendChild(noteField);
@@ -371,11 +383,11 @@
       const c = h('div', 'callout warn');
       c.setAttribute('role', 'alert');
       c.appendChild(h('span', 'grow', 'You have unsaved changes. Discard them and close?'));
-      const keep = plainBtn('Keep editing', 'small', () => { warnSlot.replaceChildren(); fTitle.focus(); });
+      const keep = plainBtn('Keep editing', 'small', () => { dropPendingVisit(); warnSlot.replaceChildren(); fTitle.focus(); });
       const discard = plainBtn('Discard changes', 'small danger', () => {
         resetFields();
         warnSlot.replaceChildren();
-        navigateClose();
+        if (!takePendingVisit()) navigateClose();   // a followed reference waits: go there, else close
       });
       c.append(keep, discard);
       warnSlot.replaceChildren(c);

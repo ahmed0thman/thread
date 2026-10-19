@@ -197,7 +197,7 @@ test('markdown: a bold line that is only a section name is a heading; a bold lea
   assert.equal(md('**Decisions**\n- a'), '<h4>Decisions</h4><ul><li>a</li></ul>');
   const root = load().api.renderMarkdown('**Decisions**\n\n**Open:**\n\n**Decided:** we use X\n\n**Whatever**\n\n**Risks** are many\n\n- **Found:** a thing');
   assert.deepEqual(tagged(root, 'h4').map((x) => x.className), ['l3 tone-decided', 'l3 tone-open']);
-  assert.deepEqual(tagged(root, 'strong').map((x) => x.className), ['tone-decided', '', 'tone-warn', 'tone-found']);
+  assert.deepEqual(tagged(root, 'strong').map((x) => x.className), ['tone-decided', 'lead', 'tone-warn', 'tone-found']);
   assert.deepEqual(tagged(root, 'p').map((x) => x.textContent), ['Decided: we use X', 'Whatever', 'Risks are many']);
 });
 

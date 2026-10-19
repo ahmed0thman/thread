@@ -143,22 +143,60 @@
       return { kind: failed ? 'error' : TOOL_KIND[e.name] || 'did', label: (TOOL_VERB[e.name] || e.name) + (failed ? ' failed' : ''), text: e.summary || '' };
     });
   }
-  // The card's history for the page, newest first: [{ text, at }]. A card from before the history has its creation as the one entry.
-  function historyRows(card, labelOf) {
+  // The card's history for the page, newest first. Each event: { kind, wk, who, worker, what, from, to, at, text }. `kind` picks the marker
+  // (created, moved, done = moved into a finished stage, edited, worked, asked); `wk` is the kind of waiting item for an 'asked'; `what` is the
+  // action without the actor; `from`/`to` are stage labels; `text` is the whole sentence. `finished(stageId)` says whether a stage is the done one
+  // or a later one. A card from before the history has its creation as the one entry; an entry of a type this page does not know is skipped.
+  function historyEvents(card, labelOf, finished) {
     const list = Array.isArray(card.history) ? card.history.filter((x) => x && typeof x === 'object') : [];
-    // a Claude entry says which worker did the work, when the entry names one: 'Claude (agent:worker)'
-    const who = (x) => (x.by === 'user' ? 'You' : 'Claude' + (typeof x.worker === 'string' && x.worker ? ' (' + x.worker + ')' : ''));
     const ASKED = { question: 'asked you a question', choice: 'asked you to choose', todo: 'asked you to do something', review: 'asked you to review it' };
-    const rows = [];
+    const isDone = (x) => typeof finished === 'function' && !!finished(x.to) && !finished(x.from);
+    const out = [];
     list.forEach((x) => {
-      if (x.type === 'created') rows.push({ text: who(x) + ' created it' + (x.to ? ' in ' + labelOf(x.to) : ''), at: x.at });
-      else if (x.type === 'moved') rows.push({ text: who(x) + ' moved it from ' + labelOf(x.from) + ' to ' + labelOf(x.to), at: x.at });
-      else if (x.type === 'edited') rows.push({ text: who(x) + ' edited the ' + (Array.isArray(x.fields) && x.fields.length ? x.fields.join(', ') : 'card'), at: x.at });
-      else if (x.type === 'worked') rows.push({ text: 'Worked on by ' + who(x), at: x.at });
-      else if (x.type === 'waiting') rows.push({ text: who(x) + ' ' + (ASKED[x.kind] || 'raised a waiting item'), at: x.at });
+      const who = x.by === 'user' ? 'You' : 'Claude';
+      // only a Claude entry says which worker did the work, when the entry names one: 'Claude (agent:worker)'; a user entry never does
+      const worker = who === 'Claude' && typeof x.worker === 'string' && x.worker ? x.worker : '';
+      const whoW = who + (worker ? ' (' + worker + ')' : '');
+      const base = { who, worker, at: x.at };
+      if (x.type === 'created') out.push({ ...base, kind: 'created', what: 'created it' + (x.to ? ' in' : ''), to: x.to ? labelOf(x.to) : '', text: whoW + ' created it' + (x.to ? ' in ' + labelOf(x.to) : '') });
+      else if (x.type === 'moved') out.push({ ...base, kind: isDone(x) ? 'done' : 'moved', what: 'moved it', from: labelOf(x.from), to: labelOf(x.to), text: whoW + ' moved it from ' + labelOf(x.from) + ' to ' + labelOf(x.to) });
+      else if (x.type === 'edited') { const what = 'edited the ' + (Array.isArray(x.fields) && x.fields.length ? x.fields.join(', ') : 'card'); out.push({ ...base, kind: 'edited', what, text: whoW + ' ' + what }); }
+      else if (x.type === 'worked') out.push({ ...base, kind: 'worked', what: 'worked on it', text: 'Worked on by ' + whoW });
+      else if (x.type === 'waiting') { const what = ASKED[x.kind] || 'raised a waiting item'; out.push({ ...base, kind: 'asked', wk: ASKED[x.kind] ? x.kind : '', what, text: whoW + ' ' + what }); }
     });
-    if (!list.some((x) => x.type === 'created')) rows.unshift({ text: (card.source === 'user' ? 'You' : 'Claude') + ' created it', at: card.createdAt });
-    return rows.reverse();
+    if (!list.some((x) => x.type === 'created')) {
+      const who = card.source === 'user' ? 'You' : 'Claude';
+      out.unshift({ kind: 'created', who, worker: '', what: 'created it', at: card.createdAt, text: who + ' created it' });
+    }
+    return out.reverse();
+  }
+  // The same, as the plain rows { text, at }.
+  function historyRows(card, labelOf) { return historyEvents(card, labelOf).map((e) => ({ text: e.text, at: e.at })); }
+  const HIST_SHOWN = 8;   // events the timeline shows before "Show all"
+  // The day of a time as the timeline groups by it: a local calendar date; '' for a time that does not parse.
+  function dayKey(iso) { const d = new Date(iso); return isNaN(d) ? '' : d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
+  // "Today", "Yesterday", else "Oct 15" (with the year when it is not this one); '' for a time that does not parse.
+  function dayLabel(iso, now) {
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    const n = new Date(now);
+    if (dayKey(iso) === dayKey(n)) return 'Today';
+    if (dayKey(iso) === dayKey(new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1, 12))) return 'Yesterday';
+    return d.toLocaleDateString(undefined, d.getFullYear() === n.getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  // The events cut to what is shown and grouped by day: { groups: [{ key, label, events }], total, hidden }. One group with no label when
+  // the whole history is on one day. `all` shows every event; otherwise the newest HIST_SHOWN.
+  function historyTimeline(events, all, now) {
+    const shown = all ? events : events.slice(0, HIST_SHOWN);
+    const days = new Set(events.map((e) => dayKey(e.at)));
+    const groups = [];
+    shown.forEach((e) => {
+      const key = days.size > 1 ? dayKey(e.at) : '';
+      let g = groups[groups.length - 1];
+      if (!g || g.key !== key) { g = { key, label: key ? dayLabel(e.at, now) : '', events: [] }; groups.push(g); }
+      g.events.push(e);
+    });
+    return { groups, total: events.length, hidden: events.length - shown.length };
   }
   // ---- end sub-agent runs ----
 
@@ -260,13 +298,60 @@
         side.appendChild(b);
       });
       side.appendChild(h('h3', 'dg-h', 'History'));
-      const ul = h('ul', 'hist-list');
-      historyRows(c, label).forEach((row) => {
-        const li = h('li');
-        li.append(h('span', null, row.text), timeEl(row.at));
-        ul.appendChild(li);
+      const box = h('div', 'hist-tl');
+      side.appendChild(box);
+      renderHistory(box, c);
+    }
+    // One event of the timeline: the marker (a shape, decoration), the action, the stages of a move as two chips, the worker as a muted chip
+    // and the time. The text reads alone without the marker, the rail and the arrow.
+    function histEvent(e) {
+      const li = h('li', 'hist-ev');
+      li.dataset.hk = e.kind;
+      if (e.wk) li.dataset.wk = e.wk;
+      const mark = h('span', 'hist-mark');
+      mark.setAttribute('aria-hidden', 'true');
+      mark.appendChild(shape(e.wk ? { question: 's-wq', choice: 's-wc', todo: 's-wt', review: 's-wr' }[e.wk] : { created: 's-ring', moved: 's-tri', done: 's-check', edited: 's-square', worked: 's-hex', asked: 's-wq' }[e.kind] || 's-circle'));
+      const body = h('div', 'hist-body');
+      const line = h('p', 'hist-what');
+      line.append(h('span', 'hist-who', e.who), ' ' + e.what);
+      if (e.kind === 'created' && e.to) line.append(' ', h('span', 'stagechip', e.to));
+      if (e.worker) { const w = h('span', 'hist-worker', e.worker); w.title = 'Worker: ' + e.worker; line.append(' ', w); }
+      body.appendChild(line);
+      if (e.from) {
+        const flow = h('p', 'hist-flow');
+        const arrow = h('span', 'hist-arrow', '→');
+        arrow.setAttribute('aria-hidden', 'true');
+        flow.append(h('span', 'sr-only', 'from '), h('span', 'stagechip', e.from), arrow, h('span', 'sr-only', 'to '), h('span', 'stagechip', e.to));
+        body.appendChild(flow);
+      }
+      li.append(mark, body, timeEl(e.at));
+      return li;
+    }
+    // The timeline: newest first, in groups by day when the history spans days, the newest HIST_SHOWN until "Show all" is pressed.
+    function renderHistory(box, c) {
+      const t = historyTimeline(historyEvents(c, label, (id) => stageFinishedIn(cfg(), id)), !!P.histAll, Date.now());
+      box.replaceChildren();
+      t.groups.forEach((g) => {
+        if (g.label) box.appendChild(h('h4', 'hist-day', g.label));
+        const ol = h('ol', 'hist-list');
+        g.events.forEach((e) => ol.appendChild(histEvent(e)));
+        box.appendChild(ol);
       });
-      side.appendChild(ul);
+      if (t.total > HIST_SHOWN) {
+        const more = h('button', 'btn small hist-more', P.histAll ? 'Show fewer' : 'Show all ' + t.total + ' events');
+        more.type = 'button';
+        more.dataset.fid = 'hist-more';
+        more.setAttribute('aria-expanded', P.histAll ? 'true' : 'false');
+        more.addEventListener('click', () => {
+          P.histAll = !P.histAll;
+          const card = findCard(P.target);
+          if (!card) return;
+          renderHistory(box, card);
+          const again = box.querySelector('[data-fid="hist-more"]');
+          if (again) again.focus({ preventScroll: true });
+        });
+        box.appendChild(more);
+      }
     }
 
     // ----- centre: each run as a turn -----

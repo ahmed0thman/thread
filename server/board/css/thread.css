@@ -14,9 +14,43 @@
 .run-top .pill { margin-left: auto; }
 .run-title { overflow-wrap: anywhere; font-size: 13.5px; }
 .run-sub { font-size: 12.5px; color: var(--muted); }
-.hist-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
-.hist-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 var(--s3); }
-.hist-list time { color: var(--muted); }
+/* the card's history as a timeline: a rail down the left, one marker (a shape, never colour alone) per event, newest first. The rail and the
+   markers are decoration (aria-hidden); the text of each event reads alone. Columns: marker | what happened | time. */
+.hist-tl { font-size: 12.5px; line-height: 1.4; }
+.hist-list { list-style: none; margin: 0; padding: 0; }
+.hist-ev { position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; column-gap: var(--s2); padding-bottom: 14px; }
+.hist-ev::before, .hist-day::before { content: ""; position: absolute; left: 8px; top: 9px; bottom: -9px; width: 2px; border-radius: 1px; background: var(--border-strong); opacity: 0.45; }
+.hist-tl > ol:last-of-type > .hist-ev:last-child::before { display: none; }
+.hist-ev:last-child { padding-bottom: 6px; }
+.hist-mark { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; height: 18px; background: var(--bg); }
+.hist-body { min-width: 0; }
+.hist-what, .hist-flow { margin: 0; overflow-wrap: anywhere; }
+.hist-who { font-weight: 600; }
+.hist-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; }
+.hist-arrow { color: var(--muted); }
+.stagechip {
+  display: inline-block; max-width: 100%; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--pill);
+  background: var(--surface); color: var(--text); font-size: 11.5px; line-height: 16px; overflow-wrap: anywhere;
+}
+.hist-worker {
+  display: inline-block; max-width: 100%; padding: 0 6px; border-radius: var(--r1); background: var(--surface-2); color: var(--muted);
+  font: 400 11px/16px var(--mono); overflow-wrap: anywhere; vertical-align: 1px;
+}
+.hist-ev time { padding-top: 0; font-size: 12px; color: var(--muted); white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+.hist-day { position: relative; margin: 0; padding: 2px 0 8px 26px; font: 600 11.5px/1.4 var(--sans); letter-spacing: 0.02em; color: var(--muted); }
+.hist-day:first-child::before { top: 50%; }
+.hist-day::before { top: 0; bottom: 0; }
+.hist-more { margin: 2px 0 0 26px; }
+[data-hk="created"] { --k: var(--found); }
+[data-hk="moved"] { --k: var(--did); }
+[data-hk="done"] { --k: var(--fin); }
+[data-hk="edited"] { --k: var(--changed); }
+[data-hk="worked"] { --k: var(--decided); }
+[data-hk="asked"]:not([data-wk]) { --k: var(--open); }
+@media (forced-colors: active) {
+  .hist-ev::before, .hist-day::before { forced-color-adjust: none; background: GrayText; opacity: 1; }
+  .hist-mark { background: Canvas; }
+}
 .run-stop { align-self: flex-start; }
 .run-quiet { margin: 0; }
 

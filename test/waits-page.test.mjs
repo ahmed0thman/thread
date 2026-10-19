@@ -51,6 +51,7 @@ function waitsPage(over = {}) {
     renderMarkdown: (t) => { const e = mk('div', 'md'); e.textContent = t; return e; },
     clampable: (content, cls) => { const e = mk('div', 'clamp' + (cls ? ' ' + cls : '')); e.appendChild(content); return e; },
     sessionLabel: (id) => `session ${String(id).slice(0, 8)}`,
+    refSig: () => '',
     sessionInfo: (id) => (state.sessions && state.sessions[id]) || null,
     timeEl: (iso) => { const t = mk('time'); t.textContent = `at ${iso}`; return t; },
     copyBtn: (text, what, labelText) => { const b = mk('button', 'btn small'); b.textContent = labelText || 'Copy'; b.setAttribute('aria-label', labelText || 'Copy ' + what); b.copies = text; b.addEventListener('click', () => state.copies.push(text)); return b; },

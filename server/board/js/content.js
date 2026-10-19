@@ -8,13 +8,65 @@
   // relative path, a javascript: URL) is only a marked span with the target in its tooltip, never an href. Bare URLs stay text.
   const WEB_URL_RE = /^https?:\/\/[^\s<>"']+$/i;
   const INLINE_RE = /(`+)([^`]+?)\1|\[([^\]]+)\]\(\s*([^()\s]*(?:\([^()\s]*\)[^()\s]*)*)\s*\)|\*\*([^*]+?)\*\*|__([^_]+?)__/g;
-  // mode 'plain': a link is just its text (a single line inside a button); 'nested': inside a link's text, where a link is left as written
+  // A card id (c37, c8k2x1; the shape of CARD_ID_SRC in server/fields.mjs) or a waiting item id (c37.w2) in running text is a link when the
+  // card is on this board (and, for an item, when the card has it). The first group is what may stand before it: not a word, a path, an
+  // address, an e-mail, an assignment or a drive letter path. A word with "://" in it (a web address) is never searched.
+  const REF_RE = /(^|[^\w./#@=?&\\~:-])(c(?=[a-z]*[0-9])[0-9a-z]+)(\.w[0-9]+)?(?![\w-]|\.\w)/g;
+  // the cards by id, built again when the page gets a new list of them; a chat-only project shows its threads only (shownCard)
+  let refIdx = { src: null, n: -1, map: null };
+  function refCard(id) {
+    if (typeof current === 'undefined' || !current || !Array.isArray(current.cards)) return null;
+    if (refIdx.src !== current.cards || refIdx.n !== current.cards.length) refIdx = { src: current.cards, n: current.cards.length, map: new Map(current.cards.map((c) => [c.id, c])) };
+    const c = refIdx.map.get(id) || null;
+    return c && typeof isChat === 'function' && isChat() && typeof shownCard === 'function' ? shownCard(id) : c;
+  }
+  // The references in a text that are links now: [{ at, end, id, wid }]
+  function refsIn(text) {
+    const out = [];
+    if (typeof current === 'undefined' || !/c[0-9a-z]*[0-9]/.test(text)) return out;
+    const chat = typeof isChat === 'function' && isChat();
+    const re = new RegExp(REF_RE.source, 'g');
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const card = refCard(m[2]);
+      const wid = m[3] ? m[2] + m[3] : '';
+      if (!card || (wid && (chat || !waitsOf(card).some((w) => w.id === wid)))) continue;
+      const at = m.index + m[1].length;
+      let from = at, to = re.lastIndex;
+      while (from > 0 && !/\s/.test(text[from - 1])) from--;
+      while (to < text.length && !/\s/.test(text[to])) to++;
+      if (text.slice(from, to).indexOf('://') >= 0) continue;
+      out.push({ at, end: re.lastIndex, id: m[2], wid });
+    }
+    return out;
+  }
+  function refEl(id, wid) {
+    const a = h('a', 'cref', wid || id);
+    a.setAttribute('href', hashFor(selKey, id));
+    a.dataset.card = id;
+    if (wid) a.dataset.wait = wid;
+    return a;
+  }
+  function textRefs(parent, text) {
+    let last = 0;
+    refsIn(text).forEach((r) => {
+      if (r.at > last) parent.appendChild(document.createTextNode(text.slice(last, r.at)));
+      parent.appendChild(refEl(r.id, r.wid));
+      last = r.end;
+    });
+    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  }
+  // Which references in a text are links now, as text: a text drawn again only when this changes (a card or an item may appear later).
+  function refSig(text) { return refsIn(String(text || '')).map((r) => r.wid || r.id).join(' '); }
+  // mode 'plain': a link is just its text (a single line inside a button); 'nested': inside a link's text, where a link is left as written.
+  // Both leave a card id as text; in the other mode a known id is a link of its own (see textRefs).
   function inline(parent, text, mode) {
+    const words = (t) => (mode ? parent.appendChild(document.createTextNode(t)) : textRefs(parent, t));
     const re = new RegExp(INLINE_RE.source, 'g');
     let last = 0, m;
     while ((m = re.exec(text)) !== null) {
       if (mode === 'nested' && m[3] !== undefined) { re.lastIndex = m.index + 1; continue; }
-      if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+      if (m.index > last) words(text.slice(last, m.index));
       if (m[2] !== undefined) parent.appendChild(h('code', null, m[2]));
       else if (m[3] !== undefined && mode === 'plain') inline(parent, m[3], 'nested');
       else if (m[3] !== undefined) {
@@ -28,7 +80,7 @@
       else parent.appendChild(h('strong', null, m[6]));
       last = re.lastIndex;
     }
-    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+    if (last < text.length) words(text.slice(last));
   }
   function inlineEl(tag, cls, text) { const e = h(tag, cls); inline(e, text); return e; }
 
@@ -49,7 +101,7 @@
     const m = /^\*\*([^*]+?)\*\*/.exec(text);
     const tone = m && sectionTone(m[1]);
     const lead = el.childNodes[0];
-    if (tone && lead && lead.tagName === 'STRONG') lead.className = 'tone-' + tone;
+    if (m && lead && lead.tagName === 'STRONG') lead.className = tone ? 'tone-' + tone : 'lead';
   }
   // One line of text with its Markdown markers removed, for the places that show a single plain line (a tile, a chip, a list cell).
   function plainMd(text) {
@@ -262,6 +314,15 @@
       measure();
     });
     if (key && clampOpen.has(key)) { paint(true); btn.hidden = false; }
+    // focus (the Tab key) reaching something below the fold: the browser would scroll the hidden part into view, so open the text instead
+    body.addEventListener('focusin', (e) => {
+      if (box.dataset.open || !box.dataset.over || !e.target.getBoundingClientRect) return;
+      const r = e.target.getBoundingClientRect(), b = body.getBoundingClientRect();
+      if (r.bottom <= b.bottom + 1 && r.top >= b.top - 1) { body.scrollTop = 0; return; }
+      btn.click();
+      body.scrollTop = 0;
+      if (e.target.scrollIntoView) e.target.scrollIntoView({ block: 'nearest' });
+    });
     box.append(body, btn);
     if (typeof ResizeObserver === 'function') new ResizeObserver(measure).observe(body);
     return box;

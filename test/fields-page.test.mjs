@@ -388,6 +388,58 @@ test('the history names the worker of an entry, shows what a worker did and what
   assert.deepEqual(plain(historyRows({ source: 'user', createdAt: 'T0', history: [{ at: 'T1', by: 'claude', type: 'moved', from: 'new', to: 'review' }] }, labelOf)).map((r) => r.text), ['Claude moved it from New to Review', 'You created it']);
 });
 
+test('the history timeline: marker kinds, a move into a finished stage, groups by day and the cut at eight', () => {
+  const { historyEvents, historyTimeline, dayLabel, HIST_SHOWN } = vm.runInNewContext(`${block('sub-agent runs')}; ({ historyEvents, historyTimeline, dayLabel, HIST_SHOWN })`);
+  assert.equal(HIST_SHOWN, 8);
+  const labelOf = (id) => ({ new: 'New', work: 'Working', done: 'Done', released: 'Released' })[id] || id;
+  const finished = (id) => id === 'done' || id === 'released';
+  const at = (day, hour) => new Date(2026, 9, day, hour, 0, 0).toISOString();
+  const card = { source: 'user', createdAt: at(10, 9), history: [
+    { at: at(10, 9), by: 'user', type: 'created', to: 'new' },
+    { at: at(11, 9), by: 'claude', type: 'moved', from: 'new', to: 'work', worker: 'agent:worker' },
+    { at: at(11, 10), by: 'claude', type: 'waiting', wait: 'c1.w1', kind: 'review' },
+    { at: at(12, 9), by: 'claude', type: 'moved', from: 'work', to: 'done' },
+    { at: at(12, 10), by: 'user', type: 'moved', from: 'done', to: 'released' },
+    { at: at(12, 11), by: 'claude', type: 'from-a-later-version' },
+  ] };
+  const ev = plain(historyEvents(card, labelOf, finished));
+  assert.deepEqual(ev.map((e) => e.kind), ['moved', 'done', 'asked', 'moved', 'created']);   // Done to Released is no "done"; the unknown type is skipped
+  assert.deepEqual([ev[1].from, ev[1].to, ev[4].to, ev[2].wk], ['Working', 'Done', 'New', 'review']);
+  assert.equal(ev[3].worker, 'agent:worker');
+  assert.equal(ev[3].text, 'Claude (agent:worker) moved it from New to Working');
+  // without a finished() every move is a plain move; a card from before the history has its creation as the one event
+  assert.deepEqual(plain(historyEvents(card, labelOf)).map((e) => e.kind), ['moved', 'moved', 'asked', 'moved', 'created']);
+  assert.deepEqual(plain(historyEvents({ source: 'claude', createdAt: 'T0' }, labelOf)).map((e) => [e.kind, e.who]), [['created', 'Claude']]);
+
+  // days: Today, Yesterday, then a date; a history on one day has one group with no label
+  const now = new Date(2026, 9, 13, 15, 0, 0).getTime();
+  assert.equal(dayLabel(at(13, 1), now), 'Today');
+  assert.equal(dayLabel(at(12, 23), now), 'Yesterday');
+  assert.equal(dayLabel(at(10, 9), now), new Date(2026, 9, 10).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }));
+  assert.equal(dayLabel('not a time', now), '');
+  const t = plain(historyTimeline(ev, false, now));
+  assert.deepEqual(t.groups.map((g) => [g.label, g.events.length]), [['Yesterday', 2], [dayLabel(at(11, 9), now), 2], [dayLabel(at(10, 9), now), 1]]);
+  assert.deepEqual([t.total, t.hidden], [5, 0]);
+  const same = plain(historyTimeline(ev.slice(0, 2).map((e, i) => ({ ...e, at: at(12, 9 + i) })), false, now));
+  assert.deepEqual(same.groups.map((g) => [g.label, g.events.length]), [['', 2]]);
+
+  // more than eight events: the newest eight until all are asked for; the groups follow what is shown
+  const many = Array.from({ length: 12 }, (_, i) => ({ kind: 'edited', who: 'You', worker: '', what: 'edited the note', text: '', at: at(1 + Math.floor(i / 3), 12 - i) })).reverse();
+  const cut = plain(historyTimeline(many, false, now));
+  assert.deepEqual([cut.total, cut.hidden, cut.groups.reduce((n, g) => n + g.events.length, 0)], [12, 4, 8]);
+  assert.equal(cut.groups.length > 1, true);
+  const all = plain(historyTimeline(many, true, now));
+  assert.deepEqual([all.total, all.hidden, all.groups.reduce((n, g) => n + g.events.length, 0)], [12, 0, 12]);
+  assert.deepEqual(plain(historyTimeline(many.slice(0, 8), false, now)).hidden, 0);
+});
+
+test('the timeline markup is a real list with decorative markers, a time element, and a Show all button', () => {
+  assert.match(html, /h\('ol', 'hist-list'\)/);
+  assert.match(html, /mark\.setAttribute\('aria-hidden', 'true'\)/);
+  assert.match(html, /more\.setAttribute\('aria-expanded'/);
+  assert.match(html, /'Show all ' \+ t\.total \+ ' events'/);
+});
+
 // ---------------------------------------------------------------- the Type select of a task or idea page: Task, Bug or Idea
 
 test('the Type select is one choice for a task or idea: Idea is the kind, Bug is a task with the type field', () => {

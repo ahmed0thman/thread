@@ -135,7 +135,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Card title.' },
-        note: { type: 'string', description: 'Optional longer note.' },
+        note: { type: 'string', description: 'Optional longer note. The board shows Markdown: write a long note as short sections (a "### " heading or a bold lead such as "**On return:**" for each part, lists on their own lines), and a card id or waiting-item id in the text, such as "c37" or "c37.w2", becomes a link.' },
         status: { type: 'string', description: `Column: ${STATUS_NOTE}. Defaults to the board's start stage. Not for a milestone: it has no stage (it is done when all its cards are done), so a status is refused.` },
         kind: { type: 'string', enum: KINDS, description: 'Defaults to "task".' },
         parent: PARENT_PROP,
@@ -154,7 +154,7 @@ const TOOLS = [
       properties: {
         id: ID_PROP,
         title: { type: 'string', description: 'New title.' },
-        note: { type: 'string', description: 'New note (replaces the old one).' },
+        note: { type: 'string', description: 'New note (replaces the old one). The board shows Markdown: write a long note as short sections (a "### " heading or a bold lead such as "**On return:**" for each part, lists on their own lines), and a card id or waiting-item id in the text, such as "c37" or "c37.w2", becomes a link.' },
         status: { type: 'string', description: `New column: ${STATUS_NOTE}. Not for a milestone: it has no stage (it is done when all its cards are done), so a status is refused.` },
         kind: { type: 'string', enum: ['task', 'idea'], description: 'Turn a task into an idea, or an idea into a task (an idea does not count towards its milestone until it is a task). Threads and milestones never change kind, and a card cannot become a milestone.' },
         parent: { type: 'string', description: 'The id of the milestone card this card belongs to, or an empty string to take it out of its milestone.' },

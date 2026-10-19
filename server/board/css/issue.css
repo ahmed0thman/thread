@@ -79,6 +79,25 @@
 .verify-note .ap-crit { flex: 1 1 100%; font-size: 12.5px; }
 .verify-note .ap-crit li { overflow-wrap: anywhere; }
 
-/* a saved card's note, shown as Markdown with an Edit button that swaps in the textarea */
-.note-view { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2); min-width: 0; padding: var(--s2) var(--s3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r2); }
-.note-view .clamp { align-self: stretch; min-width: 0; }
+/* a saved card's note: a reading surface. A header with the name and the Edit button, then the text as Markdown. Edit swaps in the textarea. */
+.note-view { display: flex; flex-direction: column; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r3); box-shadow: var(--shadow-sm); overflow: hidden; }
+.note-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); padding: 6px var(--s2) 6px var(--s4); background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.note-title { margin: 0; font: 600 12px/1.2 var(--sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.note-head .btn { flex: none; }
+.note-body { min-width: 0; padding: var(--s3) var(--s4) var(--s3); }
+.note-body .clamp { min-width: 0; }
+.note-text .md { font-size: 15px; line-height: 1.6; }
+.note-text .md > * + * { margin-top: 10px; }
+.note-text .md p { max-width: 70ch; }
+.note-text .md h4 { margin-top: var(--s4); padding-bottom: 3px; border-bottom: 1px solid var(--border); font-size: 15px; font-weight: 650; letter-spacing: 0.01em; }
+.note-text .md h4.l1 { font-size: 17px; }
+.note-text .md > h4:first-child { margin-top: 0; }
+.note-text .md strong { font-weight: 650; }
+.note-text .md strong.lead { color: var(--accent); }   /* a bold lead ("**On return:**"); a known section name has its own tone colour */
+.note-text .md ul, .note-text .md ol { padding-left: 1.35em; }
+.note-text .md li + li { margin-top: 6px; }
+.note-text .md li::marker { color: var(--muted); }
+.note-text .md code { font-size: 0.86em; padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); overflow-wrap: anywhere; }
+.note-text .md pre code { padding: 0; border: 0; }
+.note-text .clamp-body { max-height: 26em; }
+.note-text .clamp-toggle { margin-top: 6px; padding: 4px 0; font-size: 13px; }
