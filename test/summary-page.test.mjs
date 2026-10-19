@@ -16,7 +16,7 @@ const block = (name) => {
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
 const S = vm.runInNewContext(
-  `${block('tokens and agents')}\n${block('milestones and stages')}\n${block('summary')}\n({ summaryModel, weekEdges, weekOf, completedAt, stageTimes, median, chartScale, spanText, derivedWorker })`,
+  `${block('tokens and agents')}\n${block('milestones and stages')}\n${block('milestone map model')}\n${block('summary')}\n({ summaryModel, weekEdges, weekOf, completedAt, stageTimes, median, chartScale, spanText, derivedWorker })`,
   {},
 );
 
@@ -36,7 +36,7 @@ const CUSTOM = {
 };
 let n = 0;
 const card = (over = {}) => ({ id: 'c' + (++n), kind: 'task', title: 't', status: 'new', createdAt: ago(30 * DAY), updatedAt: ago(30 * DAY), ...over });
-const model = (cards, config = DEFAULT, now = NOW) => plain(S.summaryModel(cards, config, now));
+const model = (cards, config = DEFAULT, now = NOW, filters) => plain(S.summaryModel(cards, config, now, filters));
 
 // ---------------------------------------------------------------- the tiles
 
@@ -338,8 +338,8 @@ test('each milestone has its own state and progress, counted by the done stage a
   const m = model(cards, CUSTOM);
   assert.equal(m.milestones.length, 6);
   assert.equal(m.milestonesMore, 2);
-  // in the Milestones view's order (open, empty, done), cut after six: the done one is the first to go
-  assert.deepEqual(m.milestones.map((x) => x.id), ['c100', 'c101', 'c102', 'c104', 'c105', 'c106']);
+  // in the Milestones view's number order, whatever the state, cut after six
+  assert.deepEqual(m.milestones.map((x) => x.id), ['c100', 'c101', 'c102', 'c103', 'c104', 'c105']);
   assert.deepEqual(m.milestones[0], { id: 'c100', title: 'Milestone 0', state: 'open', done: 1, total: 2 });
   assert.deepEqual(m.milestones[2], { id: 'c102', title: 'Milestone 2', state: 'empty', done: 0, total: 0 }, 'an idea does not count');
   const done = model([ms[3], card({ parent: 'c103', status: 'shipped' })], CUSTOM).milestones[0];
@@ -349,14 +349,13 @@ test('each milestone has its own state and progress, counted by the done stage a
   assert.equal(model([ms[0], card({ parent: 'c100', status: 'live' })], later).milestones[0].state, 'done');
 });
 
-test('the milestones panel lists open milestones first, then empty ones, then done ones, before it keeps six', () => {
-  const ms = Array.from({ length: 8 }, (_, i) => ({ id: 'c' + (200 + i), kind: 'milestone', title: 'M' + i, status: 'new' }));
-  const kid = (i, status) => card({ parent: 'c' + (200 + i), status });
-  // c200, c203 and c206 are done, c204 and c207 open, the rest empty
-  const cards = [...ms, kid(0, 'shipped'), kid(3, 'shipped'), kid(4, 'doing'), kid(6, 'shipped'), kid(7, 'todo')];
-  const m = model(cards, CUSTOM);
-  assert.deepEqual(m.milestones.map((x) => [x.id, x.state]), [['c204', 'open'], ['c207', 'open'], ['c201', 'empty'], ['c202', 'empty'], ['c205', 'empty'], ['c200', 'done']]);
-  assert.equal(m.milestonesMore, 2, 'the two done ones that did not fit');
+test('the milestones panel lists the milestones in number order, M10 after M2 and a title with no number last, before it keeps six', () => {
+  const titles = ['M10', 'Holiday sale', 'M2', 'M0', 'M1', 'M9', 'M3', 'M11'];
+  const ms = titles.map((t, i) => ({ id: 'c' + (200 + i), kind: 'milestone', title: t, status: 'new' }));
+  const m = model([...ms, card({ parent: 'c200', status: 'shipped' }), card({ parent: 'c203', status: 'doing' })], CUSTOM);
+  assert.deepEqual(m.milestones.map((x) => x.title), ['M0', 'M1', 'M2', 'M3', 'M9', 'M10']);
+  assert.equal(m.milestonesMore, 2, 'M11 and the one with no number');
+  assert.deepEqual(m.milestones.map((x) => x.state), ['open', 'empty', 'empty', 'empty', 'empty', 'done']);
 });
 
 test('old cards with no history, no workedBy, no runs, no waits and no times do not break the numbers', () => {
@@ -410,14 +409,17 @@ function summaryPage(cards, config = DEFAULT, over = {}) {
     waitKindMark: (kind) => { const m = doc.createElement('span'); m.className = 'pill'; m.dataset.wk = kind; m.textContent = kind; return m; },
     progressEl: (p) => { const e = doc.createElement('div'); e.className = 'ms-prog'; e.textContent = p.done + '/' + p.total; return e; },
     msStateTag: (state) => { const e = doc.createElement('span'); e.className = 'tag ms-st'; e.textContent = state; return e; },
+    plainBtn(text, cls, onClick) { const b = env.h('button', 'btn' + (cls ? ' ' + cls : ''), text); b.addEventListener('click', onClick); return b; },
+    maybeRenderPane: () => { pane.replaceChildren(); page.renderSummary(); },
     ...over,
   };
-  const src = `${block('card link')}\n${block('tokens and agents')}\n${block('milestones and stages')}\n${block('summary')}\n${block('summary page')}\nDate.now = () => ${NOW};\n({ renderSummary })`;
+  const src = `${block('card link')}\n${block('tokens and agents')}\n${block('milestones and stages')}\n${block('milestone map model')}\n${block('summary')}\n${block('summary page')}\nDate.now = () => ${NOW};\n({ renderSummary })`;
   const ctx = vm.createContext(env);
   const page = vm.runInContext(src, ctx);
   return { page, pane, env, ctx, doc };
 }
 
+const fakeStore = (init = {}) => { const m = { ...init }; return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); }, m }; };
 const demoCards = () => [
   card({ id: 'c1', title: '<img src=x onerror=alert(1)>', status: 'doing', type: 'bug', createdAt: ago(2 * DAY), workedBy: ['agent:worker'], runs: [{ agentType: 'worker', usage: usage(4000, 1000) }],
     waits: [{ id: 'c1.w1', kind: 'review', text: '<b>Please</b> check the bug fix', state: 'open', askedAt: ago(3 * HOUR) }] }),
@@ -449,21 +451,224 @@ test('a waiting tile with nothing waiting is not a link, and a bug tile is marke
   assert.match(t.pane.textContent, /Nothing is waiting for you\./);
 });
 
-test('the chart is an SVG with a bar for each non-zero count, numbers on them, axis labels as text and a legend', () => {
+test('the chart is a line chart: three lines with a marker on each week, axis labels as text, a legend with a line style and a marker for each, and the numbers as a table', () => {
   const t = summaryPage(demoCards(), CUSTOM);
   t.page.renderSummary();
   const svg = t.pane.querySelector('svg');
-  assert.equal(svg.getAttribute('viewBox'), '0 0 400 210');
+  assert.equal(svg.getAttribute('viewBox'), '0 0 420 248');
   assert.equal(svg.getAttribute('role'), 'img');
-  assert.match(svg.getAttribute('aria-label'), /3 created, 1 done/);
+  assert.match(svg.getAttribute('aria-label'), /3 created and 1 done in all; open went from 0 to 2 cards/);
   assert.equal(svg.ns, 'http://www.w3.org/2000/svg');
-  assert.equal(svg.querySelectorAll('rect.bar-created').length, 2, 'two weeks have created cards');
-  assert.equal(svg.querySelectorAll('rect.bar-done').length, 1);
-  assert.equal(svg.querySelectorAll('text.tick').length, 5 + 8, 'five values on the side, a date under each week');
-  assert.equal(svg.querySelectorAll('text.val').length, 3);
-  assert.equal(svg.querySelectorAll('title').length, 8, 'each week names its numbers');
-  assert.match(t.pane.querySelector('.sum-flow').textContent, /Created.*Done/);
-  assert.equal(t.pane.querySelectorAll('.swatch').length, 2);
+  assert.deepEqual(['created', 'done', 'open'].map((k) => svg.querySelectorAll('polyline.ln-' + k).length), [1, 1, 1]);
+  assert.equal(svg.querySelectorAll('polyline.ln-created')[0].getAttribute('points').split(' ').length, 8, 'a point for each week');
+  assert.deepEqual(['created', 'done', 'open'].map((k) => svg.querySelectorAll('.pt-' + k).length), [8, 8, 8]);
+  assert.equal(svg.querySelectorAll('circle.pt-created').length, 8, 'created are circles');
+  assert.equal(svg.querySelectorAll('path.pt-done').length + svg.querySelectorAll('path.pt-open').length, 16, 'done and open are other shapes');
+  assert.notEqual(svg.querySelector('path.pt-done').getAttribute('d'), svg.querySelector('path.pt-open').getAttribute('d'));
+  assert.equal(svg.querySelectorAll('text.tick').length, 5 + 3 + 8, 'five values on the side of the flow, three of the backlog, a date under each week');
+  assert.equal(t.pane.querySelectorAll('.sum-legend .sum-key').length, 3);
+  assert.equal(t.pane.querySelectorAll('.sum-legend .ln-open').length, 1);
+  assert.match(t.pane.querySelector('.sum-flow').textContent, /Created.*Done.*Open at week end/);
+  const table = t.pane.querySelector('table.sum-table');
+  assert.equal(table.hidden, true, 'the table is closed until asked for');
+  assert.equal(table.querySelectorAll('tbody tr').length, 8);
+  assert.deepEqual(table.querySelectorAll('tbody tr')[5].querySelectorAll('td').map((x) => x.textContent), ['1', '0', '1']);
+  const btn = t.pane.querySelector('.sum-table-btn');
+  assert.equal(btn.getAttribute('aria-expanded'), 'false');
+  btn.click();
+  assert.equal(table.hidden, false);
+  assert.equal(btn.getAttribute('aria-expanded'), 'true');
+  assert.equal(btn.textContent, 'Hide table');
+});
+
+test('a week shows its dates and its three numbers on hover, by the pointer or the arrow keys, with a guide line and a marked point', async () => {
+  const t = summaryPage(demoCards(), CUSTOM);
+  t.page.renderSummary();
+  const box = t.pane.querySelector('.sum-chart');
+  const svg = box.querySelector('svg');
+  const tip = box.querySelector('.sum-tip');
+  assert.equal(box.tabIndex, 0, 'the chart takes the focus');
+  assert.equal(tip.hidden, true);
+  svg.rect = { left: 100, width: 420 };                       // one unit of the chart is one pixel
+  box.fire('pointermove', { clientX: 100 + 34 + 8 + 5 * (420 - 34 - 10 - 16) / 7 });
+  assert.equal(tip.hidden, false);
+  assert.match(tip.textContent, /^Week of Sep 28 to Oct 4Created1Done0Open at week end1$/);
+  assert.equal(box.querySelector('line.guide').getAttribute('class'), 'guide on');
+  assert.equal(svg.querySelectorAll('.on').length, 4, 'the guide and the three points of that week');
+  box.fire('pointerleave', { pointerType: 'mouse' });
+  assert.equal(tip.hidden, true);
+  assert.equal(box.querySelector('line.guide').getAttribute('class'), 'guide');
+  assert.equal(svg.querySelectorAll('.on').length, 0);
+  // the keyboard: the focus shows the current week, the arrows move, Escape and the blur put it away
+  box.fire('focus');
+  assert.match(tip.textContent, /^Week of Oct 12 to Oct 18Created2Done1Open now2$/);
+  const key = (k) => box.fire('keydown', { key: k });
+  assert.equal(key('ArrowLeft').defaultPrevented, true);
+  assert.match(tip.textContent, /^Week of Oct 5 to Oct 11/);
+  key('ArrowRight'); key('ArrowRight');
+  assert.match(tip.textContent, /Oct 12 to Oct 18/, 'it stops at the current week');
+  key('Home');
+  assert.match(tip.textContent, /^Week of Aug 24 to Aug 30/);
+  key('ArrowLeft');
+  assert.match(tip.textContent, /^Week of Aug 24 to Aug 30/, 'and at the first');
+  assert.equal(key('a').defaultPrevented, false);
+  key('Escape');
+  assert.equal(tip.hidden, true);
+  box.fire('focus');
+  box.doc.activeElement = null;
+  box.fire('blur');
+  await Promise.resolve();
+  assert.equal(tip.hidden, true);
+  // a tooltip opens to the right of the guide when there is room and to the left when not, and never outside the chart
+  box.offsetWidth = 420; tip.offsetWidth = 100;
+  key('End');
+  assert.match(tip.className, /to-left/);
+  assert.ok(parseFloat(tip.style.left) >= 0 && parseFloat(tip.style.left) + 100 <= 420, 'inside: ' + tip.style.left);
+  key('Home');
+  assert.match(tip.className, /to-right/);
+  box.offsetWidth = 150; tip.offsetWidth = 140;                 // a chart barely wider than its tooltip
+  for (const k of ['End', 'Home', 'ArrowRight', 'ArrowRight', 'End']) {
+    key(k);
+    assert.ok(parseFloat(tip.style.left) >= 0 && parseFloat(tip.style.left) + 140 <= 150, k + ': ' + tip.style.left);
+  }
+});
+
+test('the chart keeps the focus and the week shown through a redraw, tells a screen reader about keyboard moves only, and lets go of a touch', async () => {
+  const t = summaryPage(demoCards(), CUSTOM);
+  t.page.renderSummary();
+  let box = t.pane.querySelector('.sum-chart');
+  assert.equal(box.dataset.id, 'sum-chart', 'the pane finds it again by this');
+  assert.equal(box.querySelector('.sum-tip').getAttribute('aria-hidden'), 'true');
+  const live = () => box.querySelector('.sr-only').textContent;
+  assert.equal(box.querySelector('.sum-tip').getAttribute('role'), null, 'the tooltip itself is not a live region');
+  box.querySelector('svg').rect = { left: 0, width: 420 };
+  box.fire('pointermove', { clientX: 100 });
+  assert.equal(live(), '', 'the mouse says nothing');
+  box.fire('keydown', { key: 'ArrowLeft' });
+  assert.match(live(), /^Week of .*: Created \d+, Done \d+, Open( at week end| now) \d+$/);
+  box.fire('keydown', { key: 'Home' });
+  const shown = box.querySelector('.sum-tip').textContent;
+  assert.match(box.querySelector('.sr-only').textContent, /^Week of Aug 24 to Aug 30/);
+  // the data changed: the pane is drawn again, and the same week is shown
+  t.pane.replaceChildren();
+  t.page.renderSummary();
+  box = t.pane.querySelector('.sum-chart');
+  assert.equal(box.querySelector('.sum-tip').hidden, false);
+  assert.equal(box.querySelector('.sum-tip').textContent, shown);
+  assert.equal(box.querySelector('line.guide').getAttribute('class'), 'guide on');
+  // a new focus on the chart gives the week back; a different range forgets it
+  box.fire('keydown', { key: 'Escape' });
+  t.pane.replaceChildren();
+  t.page.renderSummary();
+  assert.equal(t.pane.querySelector('.sum-tip').hidden, true);
+  box = t.pane.querySelector('.sum-chart');
+  box.fire('keydown', { key: 'Home' });
+  t.pane.querySelector('select[data-id="sum-range"]').value = '12';
+  t.pane.querySelector('select[data-id="sum-range"]').fire('change');
+  assert.equal(t.pane.querySelector('.sum-tip').hidden, true, 'week 0 of 8 is not week 0 of 12');
+  // touch: a cancelled swipe, and a touch that ends on a chart that has not the focus, put the tooltip away
+  box = t.pane.querySelector('.sum-chart');
+  box.querySelector('svg').rect = { left: 0, width: 420 };
+  box.fire('pointerdown', { clientX: 200, pointerType: 'touch' });
+  assert.equal(box.querySelector('.sum-tip').hidden, false);
+  box.fire('pointercancel', { pointerType: 'touch' });
+  assert.equal(box.querySelector('.sum-tip').hidden, true);
+  box.fire('pointerdown', { clientX: 200, pointerType: 'touch' });
+  box.fire('pointerup', { pointerType: 'touch' });
+  assert.equal(box.querySelector('.sum-tip').hidden, true, 'not focused: nothing to keep');
+  box.fire('pointerdown', { clientX: 200, pointerType: 'touch' });
+  box.focus();
+  box.fire('pointerup', { pointerType: 'touch' });
+  assert.equal(box.querySelector('.sum-tip').hidden, false, 'a tap that focused the chart keeps it until the next touch elsewhere');
+  box.doc.activeElement = null;
+  box.fire('blur');
+  await Promise.resolve();
+  assert.equal(box.querySelector('.sum-tip').hidden, true);
+  // a blur that comes from the redraw taking the chart out of the page does not forget the week
+  box.fire('keydown', { key: 'Home' });
+  box.fire('blur');
+  t.pane.replaceChildren();
+  await Promise.resolve();
+  t.page.renderSummary();
+  assert.equal(t.pane.querySelector('.sum-tip').hidden, false);
+});
+
+test('the last week is labelled open now, in the tooltip and the table', () => {
+  const t = summaryPage(demoCards(), CUSTOM);
+  t.page.renderSummary();
+  const rows = t.pane.querySelectorAll('.sum-table tbody tr');
+  assert.match(rows[7].querySelector('th').textContent, /\(open now\)$/);
+  assert.doesNotMatch(rows[6].querySelector('th').textContent, /open now/);
+  t.pane.querySelector('.sum-chart').fire('keydown', { key: 'ArrowLeft' });
+  assert.match(t.pane.querySelector('.sum-tip').textContent, /Open now/);
+  t.pane.querySelector('.sum-chart').fire('keydown', { key: 'ArrowLeft' });
+  assert.match(t.pane.querySelector('.sum-tip').textContent, /Open at week end/, 'a finished week');
+  assert.match(t.pane.querySelector('.sum-chart').getAttribute('aria-label'), /Home and End.*Escape/);
+});
+
+test('a filter that nothing offers is dropped for good; a set filter always has its select; Clear filters gives the focus to the first select', () => {
+  const store = fakeStore();
+  const t = summaryPage(shop(), CUSTOM, { sessionStorage: store });
+  t.page.renderSummary();
+  const set = (id, v) => { const s = t.pane.querySelector('select[data-id="' + id + '"]'); s.value = v; s.fire('change'); };
+  set('sum-label', 'ui');
+  assert.equal(JSON.parse(store.m['thread.summary.filters']).k1.label, 'ui');
+  // the label is gone from the cards: the filter filters nothing, is not kept, and does not come back with a card that has the label
+  t.env.current.cards = shop().map((c) => ({ ...c, labels: [] }));
+  t.pane.replaceChildren();
+  t.page.renderSummary();
+  assert.equal(JSON.parse(store.m['thread.summary.filters']).k1.label, '', 'written back');
+  t.env.current.cards = shop();
+  t.pane.replaceChildren();
+  t.page.renderSummary();
+  assert.equal(t.pane.querySelector('select[data-id="sum-label"]').value, '');
+  assert.equal(t.pane.querySelector('.toolbar-note').textContent, '');
+  // one label only: no select, until it is set
+  const one = shop().map((c) => ({ ...c, labels: c.id === 's1' ? ['api'] : [] }));
+  const u = summaryPage(one, CUSTOM, { sessionStorage: fakeStore({ 'thread.summary.filters': JSON.stringify({ k1: { label: 'api' } }) }) });
+  u.page.renderSummary();
+  assert.equal(u.pane.querySelectorAll('select[data-id="sum-label"]').length, 1, 'set, so drawn');
+  assert.match(u.pane.querySelector('.tb-count').textContent, /1 of 5/);
+  const w = summaryPage(one, CUSTOM);
+  w.page.renderSummary();
+  assert.equal(w.pane.querySelectorAll('select[data-id="sum-label"]').length, 0, 'one option and not set: not drawn');
+  // a project with no cards keeps what it had
+  const keep = fakeStore({ 'thread.summary.filters': JSON.stringify({ k1: { type: 'bug' } }) });
+  const e = summaryPage([], CUSTOM, { sessionStorage: keep });
+  e.page.renderSummary();
+  assert.equal(JSON.parse(keep.m['thread.summary.filters']).k1.type, 'bug');
+  // Clear filters: the button is gone after the redraw, the focus goes to the range select
+  set('sum-type', 'bug');
+  t.pane.querySelector('.toolbar-note .btn').focus();
+  t.pane.querySelector('.toolbar-note .btn').click();
+  assert.equal(t.doc.activeElement.dataset.id, 'sum-range');
+  assert.equal(t.doc.activeElement.parent.parent.className.includes('sum-filters'), true);
+});
+
+test('the result count is one live region for the page\'s life, and a worker filter keeps that worker\'s row only', () => {
+  const t = summaryPage(shop(), CUSTOM);
+  t.page.renderSummary();
+  const note = t.pane.querySelector('.toolbar-note');
+  assert.equal(note.getAttribute('aria-live'), 'polite');
+  const s = t.pane.querySelector('select[data-id="sum-type"]');
+  s.value = 'bug'; s.fire('change');
+  assert.equal(t.pane.querySelector('.toolbar-note'), note, 'the same element, updated in place');
+  assert.match(note.textContent, /1 of 5 cards/);
+  const m = model(shop(), CUSTOM, NOW, { worker: 'agent:worker' });
+  assert.deepEqual(m.workers.map((r) => r.name), ['agent:worker']);
+  assert.equal(m.workersMore, 0);
+  assert.equal(model(shop(), CUSTOM, NOW, {}).workers.length > 1, true);
+});
+
+test('the chart names fewer weeks when there are many, always the current one, and the table keeps them all', () => {
+  const t = summaryPage(demoCards(), CUSTOM, { sessionStorage: fakeStore({ 'thread.summary.filters': JSON.stringify({ k1: { range: 26 } }) }) });
+  t.page.renderSummary();
+  const svg = t.pane.querySelector('svg');
+  const dates = svg.querySelectorAll('text.tick').slice(8).map((x) => x.textContent);
+  assert.ok(dates.length >= 6 && dates.length < 14, 'thinned: ' + dates.length);
+  assert.equal(dates[dates.length - 1], 'Oct 12');
+  assert.equal(svg.querySelectorAll('.pt-created').length, 26);
+  assert.equal(t.pane.querySelectorAll('.sum-table tbody tr').length, 26);
 });
 
 test('the worker rows have a bar for done cards and one for tokens, each with its number', () => {
@@ -544,10 +749,10 @@ test('a project with no cards shows zero tiles, says so and links to the Board',
 });
 
 test('a project with cards but nothing in a panel says so in that panel', () => {
-  const t = summaryPage([card({ status: 'todo', createdAt: ago(300 * DAY) })], CUSTOM);
+  const t = summaryPage([card({ status: 'shipped', createdAt: ago(310 * DAY), updatedAt: ago(300 * DAY) })], CUSTOM);
   t.page.renderSummary();
   const text = (cls) => t.pane.querySelector('.' + cls).textContent;
-  assert.match(text('sum-flow'), /Nothing was created or finished in these weeks\./);
+  assert.match(text('sum-flow'), /Nothing was created or finished in these weeks, and nothing is open\./);
   assert.match(text('sum-who'), /No work by a recorded worker yet\./);
   assert.match(text('sum-wait'), /Nothing is waiting for you\./);
   assert.match(text('sum-ms'), /No milestones in this project yet\./);
@@ -558,7 +763,202 @@ test('a project with cards but nothing in a panel says so in that panel', () => 
 
 test('the Summary view is drawn by the pane, redrawn when its numbers change, and has its own style and script pieces', () => {
   assert.match(html, /else if \(viewSel === 'summary'\) renderSummary\(\);/);
-  assert.match(html, /if \(viewSel === 'summary'\) return JSON\.stringify\(\['summary', selKey, summaryModel\(current\.cards, cfg\(\), Date\.now\(\)\)\]\);/);
+  assert.match(html, /if \(viewSel === 'summary'\) return JSON\.stringify\(\['summary', selKey, summaryModel\(current\.cards, cfg\(\), Date\.now\(\), sumFilters\(\)\)\]\);/);
   assert.match(html, /\.sum-cols \{/);
   assert.doesNotMatch(html, /Summary analytics come in a later update/);
+});
+
+// ---------------------------------------------------------------- the filters and the line chart's numbers
+
+const NO_MS = ':none';
+const shop = () => [
+  { id: 'm1', kind: 'milestone', title: 'Launch', status: 'todo', createdAt: ago(60 * DAY), updatedAt: ago(DAY) },
+  { id: 'm2', kind: 'milestone', title: 'Checkout', status: 'todo', createdAt: ago(50 * DAY), updatedAt: ago(DAY) },
+  card({ id: 's1', parent: 'm1', type: 'bug', priority: 'high', labels: ['api'], status: 'doing', createdAt: ago(3 * DAY), workedBy: ['agent:worker'],
+    waits: [{ id: 's1.w1', kind: 'question', text: 'q', state: 'open', askedAt: ago(DAY) }] }),
+  card({ id: 's2', parent: 'm1', labels: ['ui'], status: 'shipped', createdAt: ago(20 * DAY), updatedAt: ago(2 * DAY), workedBy: ['agent:worker', 'lane:codex'] }),
+  card({ id: 's3', parent: 'm2', kind: 'idea', priority: 'low', labels: ['ui', 'api'], status: 'todo', createdAt: ago(40 * DAY) }),
+  card({ id: 's4', status: 'shipped', createdAt: ago(90 * DAY), updatedAt: ago(10 * DAY), workedBy: ['main'] }),
+  card({ id: 's5', status: 'qa', createdAt: ago(5 * DAY), runs: [{ agentType: 'reviewer', usage: usage(10, 5) }] }),
+];
+const ids = (m) => m.cards;
+
+test('the filters offer what the cards have, and a select needs more than one real option', () => {
+  const ch = model(shop(), CUSTOM).choices;
+  assert.deepEqual(ch.milestones, [['m2', 'Checkout'], ['m1', 'Launch']]);
+  assert.deepEqual(ch.workers, ['agent:reviewer', 'agent:worker', 'lane:codex', 'main']);
+  assert.deepEqual(ch.types.map((t) => t[0]), ['task', 'bug', 'idea']);
+  assert.deepEqual(ch.priorities.map((t) => t[0]), ['high', 'normal', 'low']);
+  assert.deepEqual(ch.labels, ['api', 'ui']);
+  const t = summaryPage(shop(), CUSTOM);
+  t.page.renderSummary();
+  assert.deepEqual(t.pane.querySelectorAll('.sum-filters select').map((x) => x.dataset.id), ['sum-range', 'sum-milestone', 'sum-worker', 'sum-type', 'sum-priority', 'sum-label']);
+  const plain1 = summaryPage([card({ status: 'todo' }), card({ status: 'todo' })], CUSTOM);
+  plain1.page.renderSummary();
+  assert.deepEqual(plain1.pane.querySelectorAll('.sum-filters select').map((x) => x.dataset.id), ['sum-range'], 'one kind of everything: only the range');
+  assert.equal(plain1.pane.querySelectorAll('.sum-filters .btn').length, 0, 'no Clear filters while nothing is set');
+  const empty = summaryPage([], CUSTOM);
+  empty.page.renderSummary();
+  assert.equal(empty.pane.querySelectorAll('.sum-filters').length, 0, 'no filters in a project with no cards');
+});
+
+test('each filter keeps the cards that match, and everything the Summary counts follows', () => {
+  const f = (over) => model(shop(), CUSTOM, NOW, over);
+  assert.equal(f({}).cards, 5);
+  assert.equal(f({}).total, 5);
+  const ms = f({ milestone: 'm1' });
+  assert.deepEqual([ms.cards, ms.total, ms.filtering], [2, 5, true]);
+  assert.deepEqual(ms.tiles, { open: 1, working: 1, workingLabel: 'Doing', doneRecent: 1, bugs: 1, waiting: 1 });
+  assert.deepEqual(ms.milestones.map((x) => x.id), ['m1'], 'a milestone filter lists that milestone only');
+  assert.equal(f({ milestone: NO_MS }).cards, 2);
+  assert.deepEqual(f({ milestone: NO_MS }).milestones, []);
+  assert.equal(f({ type: 'bug' }).cards, 1);
+  assert.equal(f({ type: 'idea' }).cards, 1);
+  assert.equal(f({ type: 'task' }).cards, 3);
+  assert.equal(f({ priority: 'high' }).cards, 1);
+  assert.equal(f({ priority: 'normal' }).cards, 3, 'a card with no priority is normal');
+  assert.equal(f({ label: 'ui' }).cards, 2);
+  assert.equal(f({ worker: 'agent:worker' }).cards, 2);
+  assert.equal(f({ worker: 'agent:reviewer' }).cards, 1, 'a worker is also one of the sub-agent runs');
+  const both = f({ label: 'ui', type: 'idea' });
+  assert.deepEqual([both.cards, both.tiles.open], [1, 1], 'filters add up');
+  assert.deepEqual(both.workers, []);
+  assert.deepEqual(f({ worker: 'main' }).workers.map((r) => [r.name, r.done]), [['main', 1]], 'Work by worker counts the cards that are left');
+  assert.deepEqual(f({ type: 'bug' }).waits.map((w) => w.card), ['s1']);
+  assert.deepEqual(f({ type: 'task' }).waits, []);
+  assert.deepEqual(f({ type: 'bug' }).milestones.map((x) => x.id), ['m1'], 'a card filter leaves the milestones with no matching card out');
+  assert.deepEqual(f({ type: 'bug' }).milestones[0], { id: 'm1', title: 'Launch', state: 'open', done: 1, total: 2 }, 'and does not change their own progress');
+  assert.equal(f({ milestone: 'gone', label: 'nope', worker: 'x', type: 'epic', priority: 'urgent' }).filtering, false, 'a value nothing offers filters nothing');
+  assert.equal(f({ milestone: 'gone' }).cards, 5);
+  assert.equal(f({ milestone: 'gone' }).filters.milestone, '');
+});
+
+test('the lately-done tile always counts seven days; the time range does not touch it, nor the cards', () => {
+  const cards = [card({ status: 'shipped', updatedAt: ago(2 * DAY) }), card({ status: 'shipped', updatedAt: ago(20 * DAY) })];
+  for (const range of [4, 8, 12, 26]) {
+    const m = model(cards, CUSTOM, NOW, { range });
+    assert.equal(m.tiles.doneRecent, 1, 'range ' + range);
+    assert.equal(m.cards, 2);
+    assert.equal(m.filtering, false);
+  }
+});
+
+test('the time range sets the number of weekly buckets: 4, 8, 12 or 26, and anything else is 8', () => {
+  const cards = [
+    card({ createdAt: iso(local(2026, 10, 12)) }),
+    card({ createdAt: iso(local(2026, 9, 22)) }),                    // 3 weeks back
+    card({ createdAt: iso(local(2026, 7, 20)) }),                    // 12 weeks back
+    card({ createdAt: iso(local(2026, 4, 21)) }),                    // 25 weeks back
+    card({ createdAt: iso(local(2026, 4, 12)) }),                    // 26 weeks back: older than the 26 shown
+  ];
+  const at = (range) => model(cards, DEFAULT, NOW, { range }).weeks;
+  assert.deepEqual([4, 8, 12, 26].map((r) => at(r).length), [4, 8, 12, 26]);
+  assert.equal(at(4).reduce((n, w) => n + w.created, 0), 2);
+  assert.equal(at(8).reduce((n, w) => n + w.created, 0), 2);
+  assert.equal(at(12).reduce((n, w) => n + w.created, 0), 2, 'twelve weeks back is the 13th');
+  assert.equal(at(26).reduce((n, w) => n + w.created, 0), 4);
+  assert.equal(at(26)[25].start, local(2026, 10, 12).getTime(), 'the current week is last whatever the range');
+  assert.equal(at(4)[0].start, local(2026, 9, 21).getTime());
+  for (const bad of [undefined, 0, 5, '8x', -4, null]) assert.equal(model(cards, DEFAULT, NOW, { range: bad }).weeks.length, 8);
+  assert.equal(model(cards, DEFAULT, NOW, { range: '12' }).weeks.length, 12, 'a stored number comes back as text');
+  assert.equal(model(cards, DEFAULT, NOW).weeks.length, 8);
+  assert.deepEqual(model(cards, DEFAULT, NOW, { range: 26 }).weeks.map((w) => w.end).slice(0, 2), [at(26)[1].start, at(26)[2].start]);
+});
+
+test('open at the end of a week: created before it and not completed before it, with the backlog from before the chart counted', () => {
+  const cards = [
+    card({ createdAt: iso(local(2026, 1, 5)), status: 'new' }),                                     // old, still open: open in every week
+    card({ createdAt: iso(local(2026, 1, 5)), status: 'done', history: [{ at: iso(local(2026, 1, 5)), type: 'created', to: 'new' }, { at: iso(local(2026, 10, 1, 9)), type: 'moved', from: 'new', to: 'done' }] }), // open until the week of 28 Sep
+    card({ createdAt: iso(local(2026, 10, 7)), status: 'new' }),                                    // created in the week of 5 Oct
+    card({ createdAt: iso(local(2026, 10, 7)), status: 'done', updatedAt: iso(local(2026, 10, 8)) }), // created and completed in the same week: never open at a week's end
+    card({ createdAt: iso(local(2026, 10, 12)), status: 'new' }),                                   // created on a Monday 00:00: that week's
+    card({ createdAt: iso(local(2026, 10, 11, 23, 59)), status: 'done', updatedAt: iso(local(2026, 10, 12)) }), // completed exactly at the edge: still open at the end of the week before
+    card({ createdAt: null, status: 'new' }),                                                       // no creation time: not counted
+    card({ createdAt: iso(local(2026, 1, 5)), status: 'done', updatedAt: 'x' }),                    // finished, but nothing says when: not counted
+    { id: 'c70', kind: 'milestone', title: 'M', status: 'new', createdAt: iso(local(2026, 1, 5)), updatedAt: iso(local(2026, 1, 5)) },
+  ];
+  const m = model(cards, DEFAULT, NOW, { range: 8 });
+  // weeks of Aug 24, Aug 31, Sep 7, Sep 14, Sep 21, Sep 28, Oct 5, Oct 12
+  assert.deepEqual(m.weeks.map((w) => w.open), [2, 2, 2, 2, 2, 1, 3, 3]);
+  assert.deepEqual(m.weeks.map((w) => w.created), [0, 0, 0, 0, 0, 0, 3, 1]);
+  assert.deepEqual(m.openScale, { top: 4, ticks: [0, 1, 2, 3, 4] });
+  assert.equal(model(cards, DEFAULT, NOW, { range: 4 }).weeks[3].open, m.weeks[7].open, 'the same last week in any range');
+  assert.equal(m.weeks[7].open, m.tiles.open - 1, 'the last week is the Open tile less the card that has no creation time');
+  // a longer range sees the same cards at the same weeks
+  const long = model(cards, DEFAULT, NOW, { range: 26 }).weeks;
+  assert.deepEqual(long.slice(-8).map((w) => w.open), m.weeks.map((w) => w.open));
+  assert.equal(long[0].open, 2);
+  // the filters apply to the backlog too
+  const fl = model(shop(), CUSTOM, NOW, { type: 'bug' }).weeks;
+  assert.deepEqual([fl[7].open, fl[0].open], [1, 0]);
+  assert.equal(model(shop(), CUSTOM, NOW, { range: 12 }).weeks[0].open, 1, 'old cards are the backlog the chart starts from');
+  assert.equal(model([], CUSTOM).weeks.every((w) => w.open === 0), true);
+});
+
+test('the filter bar sets, shows and clears filters, redraws the Summary and keeps them for the project in sessionStorage', () => {
+  const store = fakeStore();
+  const t = summaryPage(shop(), CUSTOM, { sessionStorage: store });
+  t.page.renderSummary();
+  const sel = (id) => t.pane.querySelector('select[data-id="' + id + '"]');
+  assert.equal(sel('sum-range').value, '8');
+  assert.deepEqual(sel('sum-range').querySelectorAll('option').map((o) => o.textContent), ['Last 4 weeks', 'Last 8 weeks', 'Last 12 weeks', 'Last 26 weeks']);
+  assert.deepEqual(sel('sum-milestone').querySelectorAll('option').map((o) => o.textContent), ['All milestones', 'Checkout', 'Launch', 'No milestone']);
+  assert.equal(t.pane.querySelector('.toolbar-note').textContent, '', 'nothing is set: no count, no button');
+  // a card filter: the count, the accent look, the redraw, the tiles
+  let s = sel('sum-type');
+  s.value = 'bug';
+  s.fire('change');
+  assert.equal(sel('sum-type').value, 'bug');
+  assert.match(sel('sum-type').className, /is-set/);
+  assert.doesNotMatch(sel('sum-label').className, /is-set/);
+  assert.equal(t.pane.querySelector('.tb-count').textContent, '1 of 5 cards');
+  assert.match(t.pane.querySelector('.home-head').textContent, /5 cards/, 'the heading keeps the project\'s total');
+  assert.deepEqual(t.pane.querySelectorAll('.sum-tile-n').map((x) => x.textContent), ['1', '1', '0', '1', '1']);
+  assert.deepEqual(JSON.parse(store.m['thread.summary.filters']), { k1: { range: 8, milestone: '', worker: '', type: 'bug', priority: '', label: '' } });
+  // the range is a filter too: Clear filters shows, the count does not
+  s = sel('sum-type'); s.value = ''; s.fire('change');
+  assert.equal(t.pane.querySelector('.tb-count'), null);
+  s = sel('sum-range'); s.value = '26'; s.fire('change');
+  assert.equal(t.pane.querySelectorAll('.sum-svg .pt-created').length, 26);
+  assert.equal(t.pane.querySelector('.tb-count'), null, 'the range does not change which cards count');
+  const clear = t.pane.querySelector('.toolbar-note .btn');
+  assert.equal(clear.textContent, 'Clear filters');
+  s = sel('sum-label'); s.value = 'ui'; s.fire('change');
+  s = sel('sum-priority'); s.value = 'low'; s.fire('change');
+  assert.equal(t.pane.querySelector('.tb-count').textContent, '1 of 5 cards');
+  t.pane.querySelector('.toolbar-note .btn').click();
+  assert.equal(sel('sum-range').value, '8');
+  assert.equal(sel('sum-label').value, '');
+  assert.equal(t.pane.querySelector('.toolbar-note').textContent, '');
+  assert.equal(JSON.parse(store.m['thread.summary.filters']).k1.range, 8);
+  // another page of the same session: the same filters, kept for this project
+  s = sel('sum-milestone'); s.value = NO_MS; s.fire('change');
+  const again = summaryPage(shop(), CUSTOM, { sessionStorage: store });
+  again.page.renderSummary();
+  assert.equal(again.pane.querySelector('select[data-id="sum-milestone"]').value, NO_MS);
+  assert.equal(again.pane.querySelector('.tb-count').textContent, '2 of 5 cards');
+  assert.match(again.pane.querySelector('.sum-ms').textContent, /no milestone is listed/);
+  const other = summaryPage(shop(), CUSTOM, { sessionStorage: store, selKey: 'k2' });
+  other.page.renderSummary();
+  assert.equal(other.pane.querySelector('.tb-count'), null, 'another project has its own');
+});
+
+test('filters that cannot be stored or read still work, and a stored value that makes no sense filters nothing', () => {
+  const broken = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
+  const t = summaryPage(shop(), CUSTOM, { sessionStorage: broken });
+  t.page.renderSummary();
+  const s = t.pane.querySelector('select[data-id="sum-type"]');
+  s.value = 'bug';
+  s.fire('change');
+  assert.equal(t.pane.querySelector('.tb-count').textContent, '1 of 5 cards', 'kept in memory');
+  const none = summaryPage(shop(), CUSTOM);          // no sessionStorage at all
+  none.page.renderSummary();
+  assert.equal(none.pane.querySelectorAll('.sum-tile').length, 5);
+  const junk = summaryPage(shop(), CUSTOM, { sessionStorage: fakeStore({ 'thread.summary.filters': '{"k1":{"range":"x","type":7,"label":"zzz"}}' }) });
+  junk.page.renderSummary();
+  assert.equal(junk.pane.querySelector('select[data-id="sum-range"]').value, '8');
+  assert.equal(junk.pane.querySelector('.toolbar-note').textContent, '');
+  const notJson = summaryPage(shop(), CUSTOM, { sessionStorage: fakeStore({ 'thread.summary.filters': 'nope' }) });
+  notJson.page.renderSummary();
+  assert.equal(notJson.pane.querySelectorAll('.sum-tile').length, 5);
 });

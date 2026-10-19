@@ -27,7 +27,7 @@ const CUSTOM = {
 
 const lib = vm.runInNewContext(
   `${block('working now')}\n${block('milestones and stages')}\n${block('list model')}\n${block('milestone view model')}\n`
-  + '({ rowType, workerText, listRows, LIST_COLS, LIST_DEFAULT_SORT, sortRows, nextSort, listFilter, listFiltering, listChoices, milestoneStats, milestonesShown, milestonesOrdered, msStateOf, listRowSig, NO_MS })',
+  + '({ rowType, workerText, listRows, LIST_COLS, LIST_DEFAULT_SORT, sortRows, nextSort, listFilter, listFiltering, listChoices, milestoneStats, milestonesShown, msTitleCmp, msStateOf, listRowSig, NO_MS })',
   {},
 );
 
@@ -331,7 +331,7 @@ test('the Type filter "Bug" matches every card with type bug, whatever its kind,
   // the select offers Bug when only an idea has the type
   assert.deepEqual(plain(lib.listChoices(rows([card('c1', { kind: 'idea', type: 'bug' })]))).types, ['bug', 'idea']);
   // and the Summary's open-bug tile counts the same cards that are not in the done stage
-  const sum = vm.runInNewContext(`${block('tokens and agents')}\n${block('milestones and stages')}\n${block('summary')}\n({ summaryModel })`, {});
+  const sum = vm.runInNewContext(`${block('tokens and agents')}\n${block('milestones and stages')}\n${block('milestone map model')}\n${block('summary')}\n({ summaryModel })`, {});
   const open = lib.listFilter(rs, { type: 'bug' }).filter((r) => r.card.status !== CONFIG.roles.done).length;
   assert.equal(sum.summaryModel(cards, CONFIG, Date.parse('2026-10-14T00:00:00Z')).tiles.bugs, open);
 });
@@ -372,7 +372,7 @@ test('the Milestones key is made of what the view shows: an edit to a card it do
   assert.notEqual(edit('c1', { title: 'Launch 2' }), base);
   assert.notEqual(shownKey([...SHOWN(), card('c6', { parent: 'c2' })]), base);
   assert.notEqual(shownKey(SHOWN(), { ...CONFIG, stages: CONFIG.stages.map((st) => (st.id === 'in_progress' ? { ...st, label: 'Doing' } : st)) }), base, 'the name of a stage');
-  assert.match(html, /function milestonesPaneKey\(\) \{ return JSON\.stringify\(\['milestones', selKey, current \? milestonesShown\(/);
+  assert.match(html, /function milestonesPaneKey\(\) \{[\s\S]*?JSON\.stringify\(\['milestones', selKey, u\.mode,[^\n]*milestonesShown\(list, current\.cards, conf\)/);
   assert.doesNotMatch(html, /milestonesPaneKey[^\n]*currentKey/);
 });
 
@@ -396,15 +396,16 @@ test('the List key is made of the rows: a change no row shows keeps it, and one 
 });
 
 test('the Summary key is its model: an unrelated edit does not change it, a shown number does', () => {
-  const sum = vm.runInNewContext(`${block('tokens and agents')}\n${block('milestones and stages')}\n${block('summary')}\n({ summaryModel })`, {});
+  const sum = vm.runInNewContext(`${block('tokens and agents')}\n${block('milestones and stages')}\n${block('milestone map model')}\n${block('summary')}\n({ summaryModel })`, {});
   const now = Date.parse('2026-10-14T12:00:00Z');
   const key = (cards) => JSON.stringify(sum.summaryModel(cards, CONFIG, now));
   const base = key(SHOWN());
   const edit = (id, over) => key(SHOWN().map((c) => (c.id === id ? { ...c, ...over } : c)));
-  assert.equal(edit('c5', { note: 'n', labels: ['y'], title: 'Renamed' }), base);
+  assert.equal(edit('c5', { note: 'n', title: 'Renamed' }), base);
+  assert.notEqual(edit('c5', { labels: ['y'] }), base, 'a label is an option of the Label filter');
   assert.equal(edit('c3', { history: [], updatedAt: '2026-10-20T00:00:00.000Z' }), base);
   assert.notEqual(edit('c3', { type: 'bug' }), base, 'an open bug is a tile');
-  assert.match(html, /JSON\.stringify\(\['summary', selKey, summaryModel\(current\.cards, cfg\(\), Date\.now\(\)\)\]\)/);
+  assert.match(html, /JSON\.stringify\(\['summary', selKey, summaryModel\(current\.cards, cfg\(\), Date\.now\(\), sumFilters\(\)\)\]\)/);
 });
 
 test('Escape in the search box is followed by the List after the board has cleared the box', () => {
@@ -445,7 +446,7 @@ test('a card in a stage after the done stage counts as done in the Milestones vi
   assert.deepEqual(idsOf(st.open), ['c4']);
 });
 
-test('the Milestones view lists open milestones first, then empty ones, then done ones, each group by title', () => {
+test('a milestone is open, empty or done by its counted cards, worked out on the page', () => {
   const cards = [
     card('c1', { kind: 'milestone', title: 'A done one' }), card('c2', { parent: 'c1', status: 'done' }),
     card('c3', { kind: 'milestone', title: 'An empty one' }), card('c4', { parent: 'c3', kind: 'idea' }),
@@ -455,7 +456,6 @@ test('the Milestones view lists open milestones first, then empty ones, then don
     card('c11', { kind: 'milestone', title: 'Another empty one' }),
   ];
   const ms = cards.filter((c) => c.kind === 'milestone');
-  assert.deepEqual(idsOf(lib.milestonesOrdered(ms, cards, CONFIG)), ['c5', 'c9', 'c3', 'c11', 'c1', 'c7']);
   assert.deepEqual(ms.map((m) => lib.msStateOf(m, cards, CONFIG)), ['done', 'empty', 'open', 'done', 'open', 'empty']);
   // the page works the state out from the cards it holds, so it agrees with the progress beside it even when the server's msState is stale
   assert.equal(lib.msStateOf({ ...ms[0], msState: 'open' }, cards, CONFIG), 'done', 'a stale server state is not used');
@@ -608,7 +608,7 @@ test('a milestone row shows its state and progress where the stage would be, and
 // ---------------------------------------------------------------- the Milestones view's links
 
 function milestonesPage(cards) {
-  const doc = { activeElement: null, createElement: (tag) => new FakeEl(doc, tag) };
+  const doc = { activeElement: null, createElement: (tag) => new FakeEl(doc, tag), createElementNS: (ns, tag) => new FakeEl(doc, tag) };
   doc.body = new FakeEl(doc, 'body');
   const pane = new FakeEl(doc, 'main');
   doc.body.append(pane);
@@ -626,6 +626,7 @@ function milestonesPage(cards) {
     fmtMs: (ms) => Math.round(ms / 1000) + 's',
     waitTag: () => null,
     goView: () => {}, milestoneSel: '',
+    MS_STATE_SHAPE: { empty: 's-dring', open: 's-ring', done: 's-circle' },
   };
   const start = html.indexOf('  function milestonesPaneKey');
   const end = html.indexOf('  // ---------- projects home');
@@ -649,7 +650,7 @@ test('a card or milestone link in the Milestones view opens the card page on a p
   }
   assert.equal(t.opened.length, 2);
   // the key follows what is drawn
-  assert.match(t.page.milestonesPaneKey(), /^\["milestones","k1",\[\["c1","Launch","open","",2,1,0,1,0,\[\["c2","Open one","New",""\]\]\]\]\]$/);
+  assert.match(t.page.milestonesPaneKey(), /^\["milestones","k1","map","c1",\[\["c1","Launch","open","",2,1,0,1,0,\[\["c2","Open one","New",""\]\]\]\],\[\]\]$/);
 });
 
 test('a card with a running agent has a dot in the Milestones view, named for screen readers, and the key follows it', () => {
@@ -703,5 +704,5 @@ test('milestones in one state go by title with numbers compared as numbers, not 
   const cards = [ms('cq7z2a', 'M10: Billing'), ms('c3kd9x', 'M2: Channels'), ms('ca1b2c', 'M1: Setup'), ms('cz9y8x', 'm3: Inbox')];
   cards.push(...cards.map((m, i) => card('k' + i, { parent: m.id })));
   const list = cards.filter((c) => c.kind === 'milestone');
-  assert.deepEqual(lib.milestonesOrdered(list, cards, CONFIG).map((m) => m.title), ['M1: Setup', 'M2: Channels', 'm3: Inbox', 'M10: Billing']);
+  assert.deepEqual(list.slice().sort(lib.msTitleCmp).map((m) => m.title), ['M1: Setup', 'M2: Channels', 'm3: Inbox', 'M10: Billing']);
 });

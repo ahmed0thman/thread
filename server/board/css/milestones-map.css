@@ -1,0 +1,104 @@
+/* ---------- the Milestones view's map ---------- */
+.ms-head { flex-wrap: wrap; }
+.ms-modes { display: inline-flex; gap: 2px; margin-left: auto; }
+.ms-glance { display: flex; flex-wrap: wrap; gap: 4px var(--s4); margin: 0 0 var(--s3); font-size: 14px; }
+.ms-glance > span:first-child { font-weight: 600; }
+
+/* the map scrolls sideways inside its own box, never the page */
+.ms-map-box {
+  overflow-x: auto; overflow-y: hidden; max-width: 100%; margin-bottom: var(--s2);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r3);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px); background-size: 18px 18px;
+}
+.ms-map { position: relative; }
+.ms-edges { position: absolute; left: 0; top: 0; overflow: visible; }
+.ms-edge { color: var(--border-strong); }
+.ms-edge path, .ms-edge-order { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.ms-edge .ms-arrow { fill: currentColor; stroke: none; }
+.ms-edge-met { color: var(--fin); }
+.ms-edge-path { color: var(--accent); }
+.ms-edge-path path:not(.ms-arrow) { stroke-width: 3.5; }
+.ms-edge-cycle path:not(.ms-arrow) { stroke-dasharray: 6 5; }
+.ms-edge-cycle { color: var(--fail); }
+.ms-edge-order { color: var(--border-strong); stroke-dasharray: 2 6; }
+.ms-count { fill: var(--surface); stroke: currentColor; stroke-width: 1.5; }
+.ms-count-text { fill: var(--text); font: 600 11px/1 var(--sans, system-ui), system-ui, sans-serif; }
+
+.ms-nodes { list-style: none; margin: 0; padding: 0; }
+.ms-node-wrap { position: absolute; width: 140px; }
+.ms-lane-label { position: absolute; margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.ms-node {
+  display: flex; flex-direction: column; align-items: center; gap: 3px; width: 140px; min-height: 118px; padding: 4px 6px 6px;
+  border: 1px solid transparent; border-radius: var(--r3); background: none; color: var(--text); font: inherit; text-align: center; cursor: pointer;
+}
+.ms-node:hover { background: var(--surface-2); }
+.ms-node:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ms-node.is-sel { background: var(--accent-bg); border-color: var(--accent); }
+.ms-node.on-path:not(.is-sel) { border-color: var(--accent); border-style: dashed; }
+.ms-ring { flex: none; }
+.ms-ring-bg { fill: var(--surface); stroke: var(--border); stroke-width: 5; }
+.ms-ring-fill { fill: none; stroke: var(--milestone); stroke-width: 5; stroke-linecap: round; }
+.ms-node-done .ms-ring-fill { stroke: var(--fin); }
+.ms-node-done .ms-ring-bg { fill: var(--fin-bg); }
+.ms-node-empty .ms-ring-bg { stroke-dasharray: 4 4; stroke-width: 3; }
+.ms-node.is-now .ms-ring-bg { stroke: var(--accent); stroke-width: 5; }
+.ms-ring-text { fill: var(--text); font: 600 13px/1 var(--mono); }
+.ms-node-title {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 100%;
+  font: 400 14px/1.25 var(--serif); overflow-wrap: anywhere;
+}
+.ms-node-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.ms-node-meta > .shape { width: 9px; height: 9px; }
+.ms-node-done .ms-node-meta > .shape { color: var(--fin); }
+.ms-node-open .ms-node-meta > .shape { color: var(--milestone); }
+.ms-node-wait { display: inline-flex; align-items: center; gap: 2px; padding: 0 5px; border-radius: var(--r1); color: var(--danger, var(--fail)); background: var(--fail-bg); font-weight: 600; }
+.ms-node-wait .shape { width: 8px; height: 8px; color: var(--k); }
+.ms-node-flag { font-size: 11px; font-weight: 600; line-height: 16px; padding: 0 6px; border-radius: var(--r1); color: var(--on-accent, #fff); background: var(--accent); }
+.ms-node-flag-wait { color: var(--muted); background: var(--surface-2); font-weight: 500; }
+
+.ms-legend { display: flex; flex-wrap: wrap; gap: 4px var(--s4); margin: 0 0 var(--s4); font-size: 12px; }
+.ms-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.ms-legend-line { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--border-strong); }
+.ms-line-cycle { border-top-style: dashed; border-color: var(--fail); }
+.ms-line-order { border-top-style: dotted; }
+
+/* the picked milestone, under the map */
+.ms-detail {
+  display: flex; flex-direction: column; gap: var(--s3); min-width: 0; max-width: 760px; padding: var(--s4);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r3);
+}
+.ms-detail .ms-prog .ms-bar { max-width: none; }
+.ms-detail > .wait-tag { align-self: flex-start; }
+.ms-rel { display: flex; flex-direction: column; gap: 4px; }
+.ms-rel-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); margin: 0; font-size: 13.5px; }
+.ms-rel-k { min-width: 84px; color: var(--muted); font-size: 12.5px; }
+.ms-rel-far { color: var(--text); }
+.ms-why summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.ms-why-list { list-style: none; margin: var(--s2) 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.ms-why-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--s2); }
+.ms-why-ms { font: 600 12px/18px var(--mono); color: var(--milestone); }
+.ms-why-card { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; color: inherit; text-decoration: none; border-radius: var(--r1); }
+.ms-why-card:hover .ms-why-text { text-decoration: underline; }
+.ms-why-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.ms-why-done, .ms-why-k { font-size: 12px; }
+.ms-item > .ms-rel-row { font-size: 12.5px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .ms-node { transition: background-color 0.15s ease, border-color 0.15s ease; }
+}
+@media (forced-colors: active) {
+  .ms-edges, .ms-ring { forced-color-adjust: none; }
+  .ms-edge, .ms-edge-order { color: CanvasText; }
+  .ms-edge-path, .ms-edge-met { color: Highlight; }
+  .ms-count { fill: Canvas; }
+  .ms-count-text, .ms-ring-text { fill: CanvasText; }
+  .ms-ring-bg { fill: Canvas; stroke: CanvasText; }
+  .ms-ring-fill { stroke: Highlight; }
+  .ms-node { border-color: CanvasText; }
+  .ms-node.is-sel { border: 3px solid Highlight; }
+  .ms-node-flag { border: 1px solid CanvasText; }
+  .ms-legend-line { border-color: CanvasText; }
+}
+@media print {
+  .ms-map-box { overflow: visible; }
+}

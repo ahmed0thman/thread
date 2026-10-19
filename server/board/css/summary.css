@@ -20,7 +20,7 @@
 .sum-panel { min-width: 0; padding: var(--s4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r3); }
 .sum-title { margin: 0; font: 400 17px/1.3 var(--serif); }
 .sum-sub { margin: 2px 0 var(--s3); font-size: 12.5px; }
-.sum-title + .sum-none, .sum-title + ul, .sum-title + .sum-svg { margin-top: var(--s3); }
+.sum-title + .sum-none, .sum-title + ul { margin-top: var(--s3); }
 .sum-none { margin: 0; }
 .sum-more { display: inline-block; margin: var(--s2) 0 0; font-size: 12.5px; }
 p.sum-more { color: var(--muted); }
@@ -30,19 +30,66 @@ p.sum-more { color: var(--muted); }
 .sum-empty { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s3); padding: var(--s5); margin-bottom: var(--s4); background: var(--surface); border: 1px dashed var(--border-strong); border-radius: var(--r3); }
 .sum-empty p { margin: 0; }
 
-/* created and done per week */
-.sum-svg { display: block; width: 100%; max-width: 560px; height: auto; overflow: visible; }
-.sum-svg text { font: 11px var(--sans); fill: var(--muted); }
-.sum-svg text.val { fill: var(--text); font-size: 10.5px; font-weight: 600; }
+/* the filters under the heading: the Board's and List's select and result note, in the pane */
+.sum-filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); min-width: 0; margin-bottom: var(--s4); }
+.sum-filters .input { min-height: 36px; }
+.sum-filters .sel { display: inline-flex; flex: none; min-width: 0; }
+.sum-filters .sel select.input { width: auto; min-width: 150px; max-width: 220px; text-overflow: ellipsis; color: var(--text); }
+.sum-filters .sel select.input option { color: var(--text); background: var(--surface); }
+.sum-filters .sel select.input.is-set { border-color: var(--accent); color: var(--accent); font-weight: 500; }
+.sum-filters .toolbar-note .btn { min-height: 28px; padding: 0 6px; border-color: transparent; background: transparent; color: var(--accent); font-size: 12.5px; text-decoration: underline; text-underline-offset: 2px; }
+.sum-filters .toolbar-note .btn:hover:not(:disabled) { background: var(--accent-bg); }
+
+/* created, done and open by week: a line chart */
+.sum-chart { position: relative; max-width: 520px; border-radius: var(--r2); touch-action: pan-y; }
+.sum-svg { display: block; width: 100%; max-width: 520px; height: auto; overflow: visible; }
+.sum-svg text { font: 12px var(--sans); fill: var(--muted); }
+.sum-svg text.cap { font-size: 12px; font-weight: 500; }
 .sum-svg line.grid { stroke: var(--border); stroke-dasharray: 2 3; }
 .sum-svg line.axis { stroke: var(--border-strong); }
-.sum-svg .bar-created { fill: var(--did-bg); stroke: var(--did); stroke-width: 1.5; }
-.sum-svg .bar-done { fill: var(--fin); }
+.sum-svg line.guide { stroke: var(--muted); stroke-width: 1; opacity: 0; pointer-events: none; }
+.sum-svg line.guide.on { opacity: 1; }
+.sum-svg .ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.sum-svg .ln-created { stroke: var(--did); }
+.sum-svg .ln-done { stroke: var(--fin); }
+.sum-svg .ln-open { stroke: var(--decided); stroke-dasharray: 6 4; }
+.sum-svg .pt { stroke-width: 1.5; }
+.sum-svg .pt-created { stroke: var(--did); fill: var(--surface); }
+.sum-svg .pt-done { stroke: var(--fin); fill: var(--fin); }
+.sum-svg .pt-open { stroke: var(--decided); fill: var(--decided); stroke-linejoin: round; }
+.sum-svg .pt.on { stroke-width: 3; }
+.sum-tip {
+  position: absolute; top: 4px; z-index: 1; min-width: 9.5em; max-width: 100%; padding: 6px 10px; pointer-events: none;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--r2); box-shadow: var(--shadow-md); font-size: 12.5px;
+}
+.sum-tip-head { margin-bottom: 2px; font-weight: 600; white-space: nowrap; }
+.sum-tip-row { display: flex; justify-content: space-between; gap: var(--s4); }
 .sum-legend { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); margin-top: var(--s2); font-size: 12.5px; }
 .sum-key { display: inline-flex; align-items: center; gap: 6px; }
-.swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
-.swatch.created { background: var(--did-bg); border: 1.5px solid var(--did); }
-.swatch.done { background: var(--fin); }
+.sum-swatch { flex: none; overflow: visible; }
+.sum-swatch .ln { fill: none; stroke-width: 2; stroke-linecap: round; }
+.sum-swatch .ln-created { stroke: var(--did); }
+.sum-swatch .ln-done { stroke: var(--fin); }
+.sum-swatch .ln-open { stroke: var(--decided); stroke-dasharray: 6 4; }
+.sum-swatch .pt { stroke-width: 1.5; }
+.sum-swatch .pt-created { stroke: var(--did); fill: var(--surface); }
+.sum-swatch .pt-done { stroke: var(--fin); fill: var(--fin); }
+.sum-swatch .pt-open { stroke: var(--decided); fill: var(--decided); }
+.sum-table-btn { margin-top: var(--s3); }
+.sum-table { margin-top: var(--s2); width: 100%; max-width: 560px; border-collapse: collapse; font-size: 12.5px; }
+.sum-table th, .sum-table td { padding: 3px 8px 3px 0; border-bottom: 1px solid var(--border); text-align: left; font-weight: 400; }
+.sum-table thead th { color: var(--muted); font-weight: 500; }
+.sum-table th.tnum, .sum-table td { text-align: right; }
+.sum-table th:first-child { text-align: left; }
+/* forced colours: the scheme's colours replace ours, so the lines are told apart by their dashes and markers alone */
+@media (forced-colors: active) {
+  .sum-svg .ln, .sum-swatch .ln, .sum-svg .pt, .sum-swatch .pt { stroke: CanvasText; }
+  .sum-svg .pt-done, .sum-svg .pt-open, .sum-swatch .pt-done, .sum-swatch .pt-open { fill: CanvasText; }
+  .sum-svg .pt-created, .sum-swatch .pt-created { fill: Canvas; }
+  .sum-svg .ln-done, .sum-swatch .ln-done { stroke-dasharray: 2 3; }
+  .sum-svg line.guide { stroke: CanvasText; }
+  .sum-tip { border-color: CanvasText; }
+}
 
 /* work by worker */
 .sum-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }

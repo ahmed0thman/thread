@@ -1596,9 +1596,9 @@ test('the Board draws no milestone and counts none; the Milestone filter and the
   assert.match(html, /fillSelect\(elMilestone, \[\['', 'All milestones'\]\]\.concat\(choices, \[\[NO_MS, 'No milestone'\]\]\), milestoneSel\);/, 'the filter still lists the milestones');
 });
 
-test('the Milestones view shows a state tag and the waiting items of a milestone\'s cards, and sorts open, empty, done', () => {
+test('the Milestones view shows a state tag and the waiting items of a milestone\'s cards, in number order', () => {
   assert.match(html, /a\.append\(h\('span', 'idchip', m\.id\), h\('span', 'ms-item-title', m\.title\), msStateTag\(msStateOf\(m, current\.cards, conf\)\)\);/);
-  assert.match(html, /const list = milestonesOrdered\(milestoneCards\(\), current\.cards, conf\);/);
+  assert.match(html, /const list = milestonesByNumber\(milestoneCards\(\)\);/);
   assert.match(html, /const MS_ORDER = \{ open: 0, empty: 1, done: 2 \};/);
   assert.match(html, /const wt = waitTag\(milestoneWaits\(current\.cards, m\.id\), 'milestone'\);/);
   assert.doesNotMatch(html, /if \(prog\) el\.appendChild\(progressEl\(prog\)\)/, 'the board face has no milestone progress');

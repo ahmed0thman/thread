@@ -427,7 +427,7 @@
   // 'empty' (no counted cards), 'open' (one is not finished) or 'done' (all are). Always worked out here from the cards the page holds,
   // never taken from the server's msState: that can lag behind a card the page has just changed, and the progress beside it must agree.
   const MS_STATE_LABEL = { empty: 'Empty', open: 'Open', done: 'Done' };
-  const MS_ORDER = { open: 0, empty: 1, done: 2 };    // the order the Milestones view and the List's Stage sort put them in
+  const MS_ORDER = { open: 0, empty: 1, done: 2 };    // the order the List's Stage sort puts them in
   function msStateOf(m, cards, config) {
     const p = progressOf(cards, m.id, config);
     return p.total === 0 ? 'empty' : p.done === p.total ? 'done' : 'open';
@@ -437,10 +437,6 @@
   function msTitleCmp(a, b) {
     return String(a.title || '').localeCompare(String(b.title || ''), undefined, { numeric: true, sensitivity: 'base' })
       || (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0);
-  }
-  // The milestones in the order the view lists them: open first, then empty, then done; each group by title (msTitleCmp).
-  function milestonesOrdered(list, cards, config) {
-    return list.map((m, i) => ({ m, i, r: MS_ORDER[msStateOf(m, cards, config)] })).sort((a, b) => a.r - b.r || msTitleCmp(a.m, b.m) || a.i - b.i).map((x) => x.m);
   }
   // [{ stage, cards }] in stage order; a stage with no card is left out
   function groupByStage(cards, stages) {

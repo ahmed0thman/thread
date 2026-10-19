@@ -179,7 +179,7 @@
     if (!selKey || !current || !viewSel || showsBoard()) return '';
     if (viewSel === 'milestones') return milestonesPaneKey();
     if (viewSel === 'list') return listPaneKey();
-    if (viewSel === 'summary') return JSON.stringify(['summary', selKey, summaryModel(current.cards, cfg(), Date.now())]);
+    if (viewSel === 'summary') return JSON.stringify(['summary', selKey, summaryModel(current.cards, cfg(), Date.now(), sumFilters())]);
     return JSON.stringify([viewSel, selKey]);
   }
   function maybeRenderPane() { if (paneKey() !== paneSig) renderPane(); }
