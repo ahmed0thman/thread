@@ -43,7 +43,7 @@ const SETUP_HINT = 'The thread plugin has not been set up. Tell the user once, w
 function waitNote(core, projectDir, sessionId) {
   try {
     if (!core || !projectDir || core.readConfig(projectDir).mode === 'chat') return '';
-    let out = '\nWhen you finish work that needs the user\'s check, have a question, or need the user to do something, raise it with wait_add on the card for that work, and say only a one-line pointer in the chat, for example "Waiting on you: c37.w2".';
+    let out = '\nPut each task on the board before you start it (board_add, or board_update the card). Every question, choice, review request or to-do for the user goes through wait_add on that card, with one line in the chat such as "Waiting on you: c37.w2"; never only in the chat.';
     const n = core.countUndeliveredElsewhere(projectDir, sessionId);
     if (n > 0) out += `\n${n} answered waiting item${n === 1 ? '' : 's'} on the board ${n === 1 ? 'was' : 'were'} asked by another session and not delivered; wait_list reads ${n === 1 ? 'it' : 'them'} if relevant.`;
     return out;

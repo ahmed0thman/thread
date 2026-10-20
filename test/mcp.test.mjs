@@ -32,6 +32,30 @@ test('initialize echoes protocolVersion and names the server thread', async (t) 
   assert.ok(r.result.capabilities && 'tools' in r.result.capabilities);
 });
 
+test('initialize carries the usage guide: the full one for a board project, the thread part for a chat-only one', async (t) => {
+  const e = setupThreadEnv(t);
+  const c = start(t, e);
+  const r = await c.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'x', version: '1' } });
+  const ins = r.result.instructions;
+  assert.equal(typeof ins, 'string');
+  for (const word of ['board_add', 'wait_add', 'Waiting on you: c37.w2', 'answered_in_chat', '[c12]', 'worker', 'board_list', 'thread_report', 'never mark', 'did not verify']) {
+    assert.ok(ins.toLowerCase().includes(word.toLowerCase()), `instructions say ${word}`);
+  }
+  assert.ok(ins.length < 1800, `short: ${ins.length}`);
+
+  await core.saveConfig(e.projectDir, 'project', { mode: 'chat' });
+  const chat = start(t, e);
+  const cr = await chat.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'x', version: '1' } });
+  const cins = cr.result.instructions;
+  assert.match(cins, /thread_report/);
+  assert.doesNotMatch(cins, /board_add|wait_add|board_update/);
+  assert.ok(cins.length < ins.length);
+
+  const side = start(t, e, { THREAD_DEPTH: '1' });
+  const sr = await side.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'x', version: '1' } });
+  assert.equal('instructions' in sr.result, false);
+});
+
 test('tools/list returns exactly the 18 tools, each with an object inputSchema', async (t) => {
   const e = setupThreadEnv(t);
   const c = start(t, e);

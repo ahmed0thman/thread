@@ -1,7 +1,7 @@
 {
   "name": "thread",
-  "version": "0.21.0",
-  "description": "Manage AI agents and project tasks from a local board in Claude Code. See active workers, track task states and milestone progress, answer questions and approve work across sub-agents, side threads and delegation lanes.",
+  "version": "0.22.0",
+  "description": "Manage AI agents and project tasks from a local board in Claude Code. See active workers, track tasks and the route to each milestone, answer questions and approve work across sub-agents, side threads and delegation lanes, with Claude keeping the board up to date.",
   "author": {
     "name": "Ahmed Hisham"
   },

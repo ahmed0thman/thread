@@ -1,10 +1,12 @@
 ---
 name: track
-description: Use when the user gives a new instruction or changes an earlier one while other work is in progress, so it is kept on the board; also when you finish work that needs the user to check it, have a question for them, or need them to do something, so it is raised as a waiting item.
+description: Use before you start a task the user asked for, before you ask the user any question, when the user gives a new instruction or changes an earlier one mid-task, and when you finish work that needs their check or need them to do something, so each is kept on the board or raised as a waiting item.
 ---
 
-Keep the board in step with the work.
+Keep the board in step with the work. The thread MCP server gives the same rules at session start; this is the full version.
 
+- Before you start work the user asked for, put it on the board: `board_add`, or `board_update` an existing card to the working stage.
+- Never ask the user a question, a choice, a review request or a to-do only in the chat: raise it with `wait_add` on the card for that work (see the waiting items below) and keep working on whatever the answer does not block. A question you cannot do anything without may also be asked in the chat, but still record it with `wait_add`.
 - When the user gives a new instruction or changes an old one mid-task, capture it as a card with the `board_add` tool instead of dropping the current task. Say in one line that you noted it.
 - Move cards with the `board_update` tool as work changes. The stage ids come from `board_list` (a board can have its own stages): the stage for work in progress when you start, the stage for the user's check when it needs that, the blocked stage when you cannot continue, the done stage when it finishes.
 - When the work belongs to a milestone, add the card under it with `parent` (find the milestone with `board_list`).

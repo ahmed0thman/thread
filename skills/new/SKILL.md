@@ -4,7 +4,7 @@ description: Start a side thread, a background Claude session that gets a short 
 argument-hint: "[--full] [--agent <name>] [--model <name>] [--effort <level>] [--lane <name>] [--write] [--parent <id>] what the thread should do"
 ---
 
-Start a side thread for the task the user described in the arguments.
+Start a side thread for the task the user described in the arguments. For a card that should not start a thread now, use `/thread:add` instead.
 
 Flags may appear anywhere in the arguments. Remove them from the task text.
 

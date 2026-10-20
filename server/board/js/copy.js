@@ -1,23 +1,5 @@
   // ---------- thread workspace ----------
 
-  function copyText(text) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text).then(() => true, () => legacyCopy(text));
-    }
-    return Promise.resolve(legacyCopy(text));
-  }
-  function legacyCopy(text) {
-    try {
-      const ta = h('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      ta.remove();
-      return ok;
-    } catch (e) { return false; }
-  }
   async function copyOrWarn(text) {
     const ok = await copyText(text);
     if (!ok) showError('Could not copy to the clipboard. Select the text and copy it by hand.');

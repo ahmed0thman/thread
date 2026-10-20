@@ -200,7 +200,7 @@ const TOOLS = [
       properties: {
         card: { type: 'string', description: 'The id of the card this belongs to, for example "c37". A task, idea or thread card; not a milestone.' },
         kind: { type: 'string', enum: core.WAIT_KINDS, description: '"question": the user types an answer. "choice": the user picks from choices. "todo": the user does something, then ticks Done. "review": the user checks your work and answers Approve or Request changes.' },
-        text: { type: 'string', description: 'What you need, written so it stands alone. Up to 2000 characters. The board shows Markdown: put steps and lists on their own lines (a numbered or bulleted list, not "1) ... 2) ..." run together in one paragraph) and keep paragraphs short.' },
+        text: { type: 'string', description: 'What you need, written so it stands alone. Up to 2000 characters. The board shows Markdown: put steps and lists on their own lines (a numbered or bulleted list, not "1) ... 2) ..." run together in one paragraph) and keep paragraphs short. Put any command the user should run in a fenced code block (```bash), one command per block, so the board shows it with a Copy button. Name another card by its id (c12), not by a board URL; a plain web address is linked.' },
         choices: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8, description: 'Only for kind "choice": 2 to 8 options, each up to 120 characters.' },
         multi: { type: 'boolean', description: 'Only for kind "choice": true lets the user pick several options, false (default) exactly one.' },
         worker: WORKER_PROP,
@@ -1154,6 +1154,32 @@ async function callTool(params) {
   }
 }
 
+// ---------- instructions ----------
+
+const BOARD_GUIDE = [
+  'thread keeps this project\'s task board; the user reads it on a web page. Use it so nothing is lost and the user is not interrupted.',
+  '- Before you start work the user asked for, put it on the board: board_add, or board_update an existing card to the working stage. An instruction that arrives mid-task becomes a card; do not drop the current task for it.',
+  '- Never put a question, a choice, a review request or a to-do for the user only in the chat. Record it with wait_add on the card for that work (board_add one first if there is none) and write one line in the chat, for example "Waiting on you: c37.w2". Keep working on whatever the answer does not block. If you can do nothing at all until the answer, you may also ask in the chat, but still call wait_add. Put any command the user should run in its own fenced code block, one command per block: the board shows it with a Copy button. Name another card by its id (c12), not by a board URL.',
+  '- Answers arrive as lines "The user answered c37.w2 on the board": act on every one. If the user answers in the chat instead, call wait_close with answered_in_chat.',
+  '- Start every Agent call\'s description with the card id in brackets: "[c12] fix the rounding".',
+  '- Move cards as the work moves, with the stage ids and roles from board_list. Never mark a card done that you did not verify; a card with acceptance criteria needs an approved review item first.',
+  '- Pass worker ("main" or "agent:<type>") on board_add, board_update and wait_add. Call board_list at natural stopping points to pick up cards the user added.',
+];
+const THREAD_GUIDE = '- A side question the user starts with /thread:new runs as a background thread (thread_start). Do not wait for it or poll it; call thread_report when the user asks or when the board says a report was requested.';
+const CHAT_GUIDE = 'thread starts side threads: background Claude sessions that work on a separate task. The user starts one with /thread:new. Do not wait for it or poll it; call thread_report when the user asks or when the board says a report was requested.';
+
+// The usage guide sent in the initialize answer, which Claude Code puts in the system prompt. A board project gets the full guide, a
+// chat-only project only the thread part; a side thread gets none (it cannot raise waiting items). Never fails the initialize.
+function serverInstructions() {
+  try {
+    if (process.env.THREAD_DEPTH) return undefined;
+    if (core.readConfig(core.projectDir()).mode === 'chat') return CHAT_GUIDE;
+    return [...BOARD_GUIDE, THREAD_GUIDE].join('\n');
+  } catch {
+    return undefined;
+  }
+}
+
 // ---------- dispatch ----------
 
 async function handleMessage(msg) {
@@ -1178,6 +1204,7 @@ async function handleMessage(msg) {
           protocolVersion: typeof params.protocolVersion === 'string' ? params.protocolVersion : DEFAULT_PROTOCOL,
           capabilities: { tools: {} },
           serverInfo: SERVER_INFO,
+          ...clean({ instructions: serverInstructions() }),
         });
         break;
       case 'ping':

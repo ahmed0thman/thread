@@ -58,10 +58,82 @@
   }
   // Which references in a text are links now, as text: a text drawn again only when this changes (a card or an item may appear later).
   function refSig(text) { return refsIn(String(text || '')).map((r) => r.wid || r.id).join(' '); }
+  // A web address in running text (a bare one, or the target of a [text](url) link) is an <a> that opens in a new tab. The trailing
+  // punctuation of a bare one is not part of it, and a closing bracket only when it has no opening one in the address (a Wikipedia
+  // address with (parentheses) keeps them). Whatever the address, an access token in it (?t=, &t= or a leading #t=) is dropped from
+  // everything shown or linked (redactToken). An address of this board (host 127.0.0.1 or localhost on any port, or the host of this
+  // page, which covers the tunnel) is never opened in a new tab, where the token would be missing: a card's page (#/<project>/<card>)
+  // is the same a.cref as a bare card id when that card is in the open project, any other one a link to its hash in this tab.
+  const BARE_URL_RE = /(?<![\w])https?:\/\/[^\s<>"'`]+/gi;
+  // The board's access tokens are hex; a token in the query or at the start of the fragment is cut out, the rest of the address kept valid.
+  function redactToken(text) {
+    let t = String(text);
+    for (let k = 0; k < 3 && /[?&#]t=[0-9a-f]{32,128}/i.test(t); k++) {
+      t = t.replace(/\?t=[0-9a-f]{32,128}&/gi, '?').replace(/[?&]t=[0-9a-f]{32,128}/gi, '').replace(/#t=[0-9a-f]{32,128}\/?/gi, '#/');
+    }
+    return t;
+  }
+  function trimUrl(u) {
+    const open = { ')': '(', ']': '[', '}': '{' };
+    const n = { '(': 0, ')': 0, '[': 0, ']': 0, '{': 0, '}': 0 };
+    for (let k = 0; k < u.length; k++) if (u[k] in n) n[u[k]]++;
+    let end = u.length;
+    while (end > 0) {
+      const c = u[end - 1];
+      if (/[.,;:!?’”»]/.test(c)) end--;
+      else if (open[c] && n[c] > n[open[c]]) { n[c]--; end--; }
+      else break;
+    }
+    return u.slice(0, end);
+  }
+  function webLink(raw, fill) {
+    const clean = redactToken(raw);
+    let u = null;
+    try { u = new URL(clean); } catch (e) { /* kept as written */ }
+    const board = !!u && (/^(127\.0\.0\.1|localhost|\[::1\])$/.test(u.hostname) || (typeof location !== 'undefined' && !!location.host && u.host === location.host));
+    if (board) { u.username = ''; u.password = ''; }
+    const shown = board ? u.href : clean;
+    const put = (el, dflt) => { if (fill) fill(el); else el.textContent = dflt; };
+    const link = (href, tab) => {
+      const a = h('a', fill ? null : 'weburl');
+      a.setAttribute('href', href);
+      if (tab) { a.setAttribute('target', '_blank'); a.setAttribute('rel', 'noopener noreferrer'); }
+      if (!fill) a.setAttribute('title', shown);
+      put(a, shown);
+      return a;
+    };
+    if (!board) return link(shown, true);
+    const m = /^#\/([^/]+)\/(c(?=[a-z]*[0-9])[0-9a-z]+)$/.exec(u.hash);
+    if (!m) return link(u.hash || '#/', false);
+    let key = m[1];
+    try { key = decodeURIComponent(key); } catch (e) { /* as written */ }
+    if (typeof selKey !== 'undefined' && key === selKey && refCard(m[2])) {
+      const a = refEl(m[2]);
+      if (fill) { a.textContent = ''; fill(a); }
+      return a;
+    }
+    return link(hashFor(key, m[2]), false);
+  }
+  // Text that may hold bare web addresses: they are links, what is between them goes through textRefs.
+  function textUrls(parent, text) {
+    if (text.indexOf('://') < 0) { textRefs(parent, text); return; }
+    const re = new RegExp(BARE_URL_RE.source, 'gi');
+    let last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+      const url = trimUrl(m[0]);
+      if (!WEB_URL_RE.test(url)) continue;
+      try { new URL(url); } catch (e) { continue; }
+      if (m.index > last) textRefs(parent, text.slice(last, m.index));
+      parent.appendChild(webLink(url, null));
+      last = m.index + url.length;
+      re.lastIndex = last;
+    }
+    if (last < text.length) textRefs(parent, text.slice(last));
+  }
   // mode 'plain': a link is just its text (a single line inside a button); 'nested': inside a link's text, where a link is left as written.
   // Both leave a card id as text; in the other mode a known id is a link of its own (see textRefs).
   function inline(parent, text, mode) {
-    const words = (t) => (mode ? parent.appendChild(document.createTextNode(t)) : textRefs(parent, t));
+    const words = (t) => (mode ? parent.appendChild(document.createTextNode(redactToken(t))) : textUrls(parent, t));
     const re = new RegExp(INLINE_RE.source, 'g');
     let last = 0, m;
     while ((m = re.exec(text)) !== null) {
@@ -71,10 +143,13 @@
       else if (m[3] !== undefined && mode === 'plain') inline(parent, m[3], 'nested');
       else if (m[3] !== undefined) {
         const web = WEB_URL_RE.test(m[4]);
-        const el = h(web ? 'a' : 'span', web ? null : 'ref');
-        if (web) { el.setAttribute('href', m[4]); el.setAttribute('target', '_blank'); el.setAttribute('rel', 'noopener noreferrer'); }
-        else if (m[4]) el.setAttribute('title', m[4]);
-        inline(el, m[3], 'nested');
+        let el;
+        if (web) el = webLink(m[4], (e) => inline(e, m[3], 'nested'));
+        else {
+          el = h('span', 'ref');
+          if (m[4]) el.setAttribute('title', m[4]);
+          inline(el, m[3], 'nested');
+        }
         parent.appendChild(el);
       } else if (m[5] !== undefined) { const s = h('strong'); inline(s, m[5], mode); parent.appendChild(s); }
       else parent.appendChild(h('strong', null, m[6]));
@@ -105,12 +180,12 @@
   }
   // One line of text with its Markdown markers removed, for the places that show a single plain line (a tile, a chip, a list cell).
   function plainMd(text) {
-    return String(text == null ? '' : text)
+    return redactToken(String(text == null ? '' : text)
       .replace(/^[ \t]*#{1,6}[ \t]+/gm, '')
       .replace(/\[([^\]]+)\]\(\s*[^()\s]*(?:\([^()\s]*\)[^()\s]*)*\s*\)/g, '$1')
       .replace(/(`+)([^`]+?)\1/g, '$2')
       .replace(/\*\*([^*]+?)\*\*/g, '$1')
-      .replace(/__([^_]+?)__/g, '$1');
+      .replace(/__([^_]+?)__/g, '$1'));
   }
 
   // A paragraph with steps run together ("Do this: 1) a 2) b 3) c"): the text before them and the steps, or null.
@@ -192,6 +267,114 @@
     return wrap;
   }
 
+  // Code blocks: a fenced block, or a paragraph that is only one command in backticks. The text is set as text in a <pre> (a card id
+  // in it stays text), next to a Copy button that copies exactly that text. A shell block (by its language, or a lone command) shows a
+  // "$" before it; the "$" is drawn by the style sheet, so it is never part of the text that is copied. No syntax highlighting.
+  const SHELL_LANG_RE = /^(bash|sh|shell|zsh|console|cmd|powershell|ps1)$/i;
+  const PROMPT_LANG_RE = /^(bash|sh|shell|zsh)$/i;   // only these get the "$" (a console block has its own, cmd and PowerShell have other prompts)
+  const COMMAND_WORD_RE = /^(npm|npx|pnpm|yarn|node|git|gh|claude|cd|ls|cat|curl|sudo|brew|pip3?|python3?|docker|bash|echo|rm|cp|mv|mkdir|chmod|deno|bun|cargo|ssh|scp|tar|kubectl|terraform)(\s|$)|^\.\.?\//;
+  // What a paragraph that is only one `code span` is, or null (it stays inline): { text, shell } with the shell look when it starts
+  // with a command word or ./, a plain code block when it only has a space in it (`SELECT * FROM users`). A lone word such as `open`
+  // or `c37`, and code inside a sentence, stay inline.
+  function commandOnly(text) {
+    const m = /^(`+)([^`]+?)\1$/.exec(text.trim());
+    const cmd = m && m[2].trim();
+    if (!cmd || cmd.indexOf('\n') >= 0) return null;
+    if (COMMAND_WORD_RE.test(cmd)) return { text: cmd, shell: true };
+    return /\s/.test(cmd) ? { text: cmd, shell: false } : null;
+  }
+  const CB_SVG_NS = 'http://www.w3.org/2000/svg';
+  function cbIcon(cls, parts) {
+    if (typeof document.createElementNS !== 'function') return h('span', cls);
+    const svg = document.createElementNS(CB_SVG_NS, 'svg');
+    const set = (el, o) => Object.keys(o).forEach((k) => el.setAttribute(k, o[k]));
+    set(svg, { class: 'cb-ico ' + cls, viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false' });
+    parts.forEach((p) => { const el = document.createElementNS(CB_SVG_NS, p[0]); set(el, p[1]); svg.appendChild(el); });
+    return svg;
+  }
+  // shell: it is a command (the button says so); prompt: it also has the "$"
+  function codeBlock(text, lang, shell, prompt) {
+    const box = h('div', 'codeblock' + (prompt ? ' cb-shell' : ''));
+    const pre = h('pre');
+    pre.tabIndex = 0;
+    const code = h('code', null, text);
+    pre.appendChild(code);
+    box.appendChild(pre);
+    if (!text.trim()) return box;
+    const tools = h('div', 'cb-tools');
+    if (lang && /^[\w#+.-]{1,20}$/.test(lang)) tools.appendChild(h('span', 'cb-lang', lang.toLowerCase()));
+    const what = shell ? 'Copy command' : 'Copy code';
+    const btn = h('button', 'cb-copy');
+    btn.type = 'button';
+    btn.setAttribute('title', what);
+    const state = h('span', 'cb-state');
+    state.setAttribute('aria-hidden', 'true');
+    btn.append(
+      cbIcon('cb-ico-copy', [['rect', { x: 8, y: 3, width: 8, height: 4, rx: 1 }], ['path', { d: 'M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2' }]]),
+      cbIcon('cb-ico-ok', [['path', { d: 'M4 12.5l5 5L20 6.5' }]]),
+      state, h('span', 'sr-only', what));
+    const live = h('span', 'sr-only');
+    live.setAttribute('role', 'status');
+    live.setAttribute('aria-live', 'polite');
+    let timer = null;
+    const paint = (kind, label, ms) => {
+      if (kind) btn.dataset.state = kind; else delete btn.dataset.state;
+      state.textContent = label;
+      live.textContent = label;
+      clearTimeout(timer);
+      if (kind) timer = setTimeout(() => paint('', '', 0), ms);
+    };
+    btn.addEventListener('click', async () => {
+      const ok = await copyText(text);
+      if (ok) { paint('copied', 'Copied', 1500); return; }
+      // no clipboard here: select the text so the keyboard can copy it
+      try {
+        const sel = window.getSelection(), range = document.createRange();
+        range.selectNodeContents(code);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch (e) { /* nothing to select with */ }
+      paint('failed', 'Press Ctrl/⌘+C', 4000);
+    });
+    tools.append(btn, live);
+    box.appendChild(tools);
+    return box;
+  }
+  // The clipboard (a secure page: 127.0.0.1 and the https tunnel are), else a hidden textarea and the old copy command. Resolves true when copied.
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(() => true, () => legacyCopy(text));
+    }
+    return Promise.resolve(legacyCopy(text));
+  }
+  function legacyCopy(text) {
+    const prev = document.activeElement;
+    try {
+      const ta = h('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      if (prev && prev.focus) prev.focus();
+      return ok;
+    } catch (e) { return false; }
+  }
+
+  // The fenced block that starts at lines[i]: { lang, text, next } with next the line after its closing fence. The text loses the indent of
+  // the opening fence (up to that many leading spaces on each line), so a block written under a list item is copied as it was meant.
+  function readFence(lines, i) {
+    const m = /^(\s*)(```+|~~~+)(.*)$/.exec(lines[i]);
+    const close = new RegExp('^\\s*' + (m[2][0] === '`' ? '```' : '~~~'));
+    const strip = new RegExp('^\\s{0,' + m[1].length + '}');
+    const lang = m[3].trim().split(/\s+/)[0].replace(/^\{?\.?/, '').replace(/\}$/, '');
+    const buf = [];
+    for (i++; i < lines.length && !close.test(lines[i]); i++) buf.push(lines[i].replace(strip, ''));
+    return { lang, text: buf.join('\n'), next: i + 1 };
+  }
+  const fenceBlock = (f) => codeBlock(f.text, f.lang, SHELL_LANG_RE.test(f.lang), PROMPT_LANG_RE.test(f.lang));
+
   function headingEl(big, text) {
     const tone = sectionTone(text);
     return inlineEl('h4', (big ? 'l1' : 'l3') + (tone ? ' tone-' + tone : ''), text);
@@ -205,6 +388,8 @@
       if (!para.length) return;
       const text = para.join('\n');
       para = [];
+      const cmd = commandOnly(text);
+      if (cmd !== null) { root.appendChild(codeBlock(cmd.text, '', cmd.shell, cmd.shell)); return; }
       const steps = splitSteps(text);
       if (!steps) { const p = inlineEl('p', null, text); leadTone(p, text); root.appendChild(p); return; }
       if (steps.lead) root.appendChild(inlineEl('p', null, steps.lead));
@@ -214,18 +399,12 @@
     };
     while (i < lines.length) {
       const line = lines[i];
-      let m = /^\s*(```+|~~~+)/.exec(line);
+      let m = /^\s*(```+|~~~+)(.*)$/.exec(line);
       if (m) {
         flush();
-        const fence = m[1][0];
-        const buf = [];
-        i++;
-        while (i < lines.length && !new RegExp('^\\s*' + (fence === '`' ? '```' : '~~~')).test(lines[i])) { buf.push(lines[i]); i++; }
-        i++;
-        const pre = h('pre');
-        pre.tabIndex = 0;
-        pre.appendChild(h('code', null, buf.join('\n')));
-        root.appendChild(pre);
+        const f = readFence(lines, i);
+        i = f.next;
+        root.appendChild(fenceBlock(f));
         continue;
       }
       if (/^\s*$/.test(line)) { flush(); i++; continue; }
@@ -252,11 +431,27 @@
         const ordered = !BULLET_RE.test(line);
         const baseIndent = (BULLET_RE.exec(line) || NUM_RE.exec(line))[1].length;
         const list = h(ordered ? 'ol' : 'ul');
-        let lastLi = null, nested = null;
+        let lastLi = null, nested = null, afterFence = false;
         while (i < lines.length) {
           const l = lines[i];
+          if (/^\s*$/.test(l)) {
+            // a blank line goes on with the list when an indented fenced block follows it, or an item follows a fenced block
+            let j = i;
+            while (j < lines.length && /^\s*$/.test(lines[j])) j++;
+            const nx = lines[j];
+            if (lastLi && nx !== undefined && (/^\s+(```|~~~)/.test(nx) || (afterFence && (BULLET_RE.test(nx) || NUM_RE.test(nx))))) { i = j; continue; }
+            break;
+          }
+          if (lastLi && /^\s+(```|~~~)/.test(l)) {
+            const f = readFence(lines, i);
+            lastLi.appendChild(fenceBlock(f));
+            i = f.next;
+            afterFence = true;
+            continue;
+          }
           const bm = BULLET_RE.exec(l), nm = NUM_RE.exec(l);
           const mm = bm || nm;
+          afterFence = false;
           if (mm) {
             const indent = mm[1].length;
             if (indent >= baseIndent + 2 && lastLi) {
@@ -270,7 +465,7 @@
             }
             i++;
           } else if (/^\s+\S/.test(l) && lastLi) {
-            lastLi.appendChild(document.createTextNode(' ' + l.trim()));
+            inline(lastLi, ' ' + l.trim());
             i++;
           } else break;
         }

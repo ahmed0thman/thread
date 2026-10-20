@@ -251,6 +251,7 @@
 .md .tone-warn { color: var(--warn); }
 .md .tone-ok { color: var(--fin); }
 .md a { color: var(--focus); text-decoration: underline; text-underline-offset: 2px; }
+.md a.weburl { overflow-wrap: anywhere; }
 .md .ref { text-decoration: underline dotted var(--border-strong); text-underline-offset: 3px; cursor: help; }
 .md .md-table { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r2); }
 .md table { border-collapse: collapse; width: 100%; font-size: 13px; line-height: 1.45; }
@@ -262,6 +263,27 @@
 .md .al-r { text-align: right; }
 .md pre { padding: var(--s2) var(--s3); background: var(--surface-2); border-radius: var(--r2); overflow-x: auto; font-size: 12.5px; line-height: 1.5; }
 .md pre code { background: none; padding: 0; font-size: inherit; }
+.md .codeblock { display: flex; align-items: flex-start; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r2); }
+.md .codeblock pre { flex: 1 1 auto; min-width: 0; background: none; border-radius: var(--r2); }
+.md .cb-shell::before { content: "$"; flex: none; padding: var(--s2) 0 0 var(--s3); font: 12.5px/1.5 var(--mono); color: var(--muted); user-select: none; }
+.md .cb-shell pre { padding-left: var(--s2); }
+.cb-tools { position: relative; flex: none; display: flex; align-items: center; gap: 6px; padding: 3px 4px 0 var(--s2); }
+.cb-lang { font: 11px/1 var(--mono); color: var(--muted); letter-spacing: 0.02em; user-select: none; }
+.cb-copy { display: inline-flex; align-items: center; gap: 5px; min-width: 28px; height: 28px; padding: 0 6px; justify-content: center; font: 12px/1 var(--sans); color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.cb-copy:hover { color: var(--text); background: var(--bg); border-color: var(--border); }
+.cb-copy .cb-ico-ok { display: none; }
+/* the state text sits over the end of the block beside the button, so the button never changes size */
+.cb-state { display: none; position: absolute; top: 3px; right: 34px; height: 28px; padding: 0 8px; align-items: center; background: var(--surface-2); border-radius: 6px; font: 12px/1 var(--sans); color: var(--muted); white-space: nowrap; }
+.cb-copy[data-state] .cb-state { display: inline-flex; }
+.cb-copy[data-state="copied"], .cb-copy[data-state="copied"] .cb-state { color: var(--fin); }
+.cb-copy[data-state="copied"] .cb-ico-ok { display: inline-block; }
+.cb-copy[data-state="copied"] .cb-ico-copy { display: none; }
+@media (forced-colors: active) {
+  .md .codeblock { border-color: CanvasText; }
+  .cb-copy { border-color: ButtonText; color: ButtonText; }
+  .cb-lang, .md .cb-shell::before { color: CanvasText; }
+  .cb-state { border: 1px solid CanvasText; color: CanvasText; background: Canvas; }
+}
 .md strong { font-weight: 600; }
 /* long text in one message: about 12 lines, a fade, and a Show more button when it overflows */
 .clamp-body { max-height: 19em; overflow: hidden; }

@@ -791,7 +791,8 @@ test('the session start note tells Claude when to raise a waiting item, in tasks
   const e = setupThreadEnv(t);
   const note = context(await sessionStart(e));
   assert.match(note, /^\[thread plugin\] This session's id is /);
-  assert.match(note, /When you finish work that needs the user's check, have a question, or need the user to do something, raise it with wait_add on the card for that work, and say only a one-line pointer in the chat, for example "Waiting on you: c37\.w2"\./);
+  assert.match(note, /Put each task on the board before you start it \(board_add, or board_update the card\)\./);
+  assert.match(note, /Every question, choice, review request or to-do for the user goes through wait_add on that card, with one line in the chat such as "Waiting on you: c37\.w2"; never only in the chat\./);
   assert.ok(note.length < 700, `short: ${note.length}`);
   await core.saveConfig(e.projectDir, 'project', { mode: 'chat' });
   const chat = context(await sessionStart(e));
@@ -905,6 +906,8 @@ test('the track skill loads when work is finished for the user to check, not onl
   assert.match(description, /finish.*check/i);
   assert.match(description, /question/);
   assert.match(description, /do something/);
+  assert.match(description, /before you start a task/);
+  assert.match(description, /before you ask the user any question/);
   assert.ok(description.length < 420, `short: ${description.length}`);
   assert.match(fs.readFileSync(path.join(ROOT, 'skills', 'track', 'SKILL.md'), 'utf8'), /`wait_add`/);
 });
