@@ -13,7 +13,7 @@ import { EFFORTS, cleanEffort, cleanModel, collapse, sameSession, sessionModel }
 import { ChatOnlyError, DEFAULT_STAGES, readConfig } from './config.mjs';
 import { openWaits, reviewApproved } from './waits.mjs';
 import { notifyActive } from './notify.mjs';
-import { CARD_ID_RE, CARD_ID_SRC, FIELD_NAMES, addHistory, cardById, claudeCard, cleanFields, cleanWorker, criteriaCut, criteriaHash, finishedStageIds, gatedByCriteria, hasCriteria, leftDoneAt, liveBlockers, pinLeftDone as pinExit, threadById, watchFinished } from './fields.mjs';
+import { CARD_ID_RE, CARD_ID_SRC, FIELD_NAMES, MAX_DEPENDS, addHistory, cardById, claudeCard, cleanDependsOn, cleanFields, cleanWorker, criteriaCut, criteriaHash, finishedStageIds, gatedByCriteria, hasCriteria, leftDoneAt, liveBlockers, liveDependsOn, pinLeftDone as pinExit, threadById, watchFinished } from './fields.mjs';
 import { codeMapNote } from './codemap.mjs';
 import { RESUME, laneSnapshot, requireRunnableLane, unusableLane } from './lanes.mjs';
 
@@ -23,6 +23,7 @@ export * from './config.mjs';
 export * from './waits.mjs';
 export * from './notify.mjs';
 export * from './fields.mjs';
+export * from './layout.mjs';
 
 // The default stage ids. A project's own stages come from readConfig.
 export const STATUSES = DEFAULT_STAGES.map((s) => s.id);
@@ -434,6 +435,51 @@ function setFields(state, card, fields) {
   return changed;
 }
 
+// The links drawn by hand on the Milestones map (`dependsOn`, milestone cards only): the milestones a milestone waits for. They are a picture of
+// the plan, not a rule: they gate nothing (no thread start, no done gate). Each must be another milestone of the project, and the links among
+// milestones make no loop (a loop of card links is allowed and shown on the map; one of hand links is refused, because the owner or Claude
+// just drew it).
+const msName = (c) => `${c.id} "${clip(c.title, 30)}"`;
+const milestoneOf = (state, id) => state.cards.find((c) => c.id === id && c.kind === 'milestone');
+function checkDependsOn(state, card, ids) {
+  if (card.kind !== 'milestone') throw new Error('depends_on is only for milestones: a task or idea is blocked by other cards with blocked_by');
+  for (const id of ids) {
+    if (id === card.id) throw new Error(`depends_on: ${id} cannot depend on itself`);
+    const m = milestoneOf(state, id);
+    if (!m) {
+      if (cardById(state.cards, id)) throw new Error(`depends_on: ${id} is not a milestone`);
+      throw new Error(`depends_on: milestone not found: ${id}`);
+    }
+  }
+  const links = new Map(state.cards.filter((c) => c.kind === 'milestone').map((c) => [c.id, c.id === card.id ? ids : liveDependsOn(c, state.cards, state.aliases)]));
+  // Only a link that is new can close a loop: a loop that is already there (two clones each drew one, and git merged them) never blocks a change
+  // of the other links, nor taking a link away.
+  const kept = new Set(liveDependsOn(card, state.cards, state.aliases));
+  for (const id of ids) {
+    if (kept.has(id)) continue;
+    // a way from the new dependency back to the card: that is the loop
+    const from = new Map([[id, null]]);
+    const todo = [id];
+    while (todo.length && !from.has(card.id)) {
+      const at = todo.shift();
+      for (const next of links.get(at) || []) if (!from.has(next)) { from.set(next, at); todo.push(next); }
+    }
+    if (from.has(card.id)) {
+      const path = [];
+      for (let x = card.id; x !== null; x = from.get(x)) path.unshift(x);
+      const name = (x) => msName(milestoneOf(state, x));
+      throw new Error(`depends_on: that would make a loop of milestone links: ${name(card.id)} would depend on ${path.map(name).join(', which depends on ')}`);
+    }
+  }
+}
+// Sets (or, with an empty list, removes) a milestone's `dependsOn` after checking it. True when the card changed.
+function setDependsOn(state, card, ids) {
+  if (ids.length) checkDependsOn(state, card, ids);
+  if (JSON.stringify(card.dependsOn ?? []) === JSON.stringify(ids)) return false;
+  if (ids.length) card.dependsOn = ids; else delete card.dependsOn;
+  return true;
+}
+
 // Moving a card that has acceptance criteria into a finished stage (the done stage or a later one) needs the owner's approval of a
 // review item; so does a move from one finished stage to another when the card was never approved (the owner dragged it there). Only
 // Claude's own changes are held to it; the board's are not (its views show such a card as not verified).
@@ -464,7 +510,7 @@ function guardCriteria(card, next) {
   if (!kept) throw new Error(`${card.id}'s acceptance criteria can only be changed by the owner on the board; you may add lines.`);
 }
 
-export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent, lane, agent, type, priority, labels, blockedBy, criteria, worker } = {}) {
+export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent, lane, agent, type, priority, labels, blockedBy, criteria, dependsOn, worker } = {}) {
   const cfg = readConfig(projectDirArg);
   requireTasks(cfg);
   const t = typeof title === 'string' ? title.trim() : '';
@@ -486,12 +532,14 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
     requireAgent(projectDirArg, agentName);
   }
   const fields = cleanFields({ type, priority, labels, blockedBy, criteria });
+  const depends = cleanDependsOn(dependsOn);
   const by = cleanWorker(worker);
   return updateState(projectDirArg, (state) => {
     const claude = source === 'claude';
     const parentId = claude ? claudeId(state, parentId0) : parentId0;
     if (claude && fields.blockedBy) fields.blockedBy = claudeIds(state, fields.blockedBy);
     if (parentId) checkParent(state, parentId, kind);
+    const dependIds = depends && claude ? claudeIds(state, depends) : depends;
     const ts = now();
     const card = {
       id: nextCardId(state),
@@ -508,6 +556,7 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
     if (laneName) card.lane = laneName;
     if (agentName) card.agent = agentName;
     setFields(state, card, fields);
+    if (dependIds) setDependsOn(state, card, dependIds);
     if (source === 'claude') gateDone(state, card, cfg, status);
     addHistory(card, source, { type: 'created', to: status }, ts, by);
     state.cards.push(card);
@@ -524,7 +573,7 @@ function checkKindChange(card, kind) {
   if (kind !== 'task' && kind !== 'idea') throw new Error(`a card can only become a task or an idea, not "${kind.slice(0, 40)}"`);
 }
 
-export async function updateCard(projectDirArg, id, { title, note, status, kind, parent, lane, agent, type, priority, labels, blockedBy, criteria, worker } = {}, { source = 'claude' } = {}) {
+export async function updateCard(projectDirArg, id, { title, note, status, kind, parent, lane, agent, type, priority, labels, blockedBy, criteria, dependsOn, worker } = {}, { source = 'claude' } = {}) {
   const cfg = readConfig(projectDirArg);
   if (title !== undefined) {
     if (typeof title !== 'string' || !title.trim()) throw new Error('title must not be empty');
@@ -539,6 +588,7 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
     requireAgent(projectDirArg, agentName);
   }
   const cleaned = cleanFields({ type, priority, labels, blockedBy, criteria });
+  const depends = cleanDependsOn(dependsOn);
   const by = cleanWorker(worker);
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, id, source === 'claude');
@@ -569,6 +619,9 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
     if (source === 'claude') guardCriteria(card, cleaned.criteria);
     const setNow = setFields(state, card, cleaned);
     if (setNow.length) { changed = true; fields.push(...setNow); }
+    if (depends !== undefined && (depends !== null || card.kind === 'milestone')) {
+      if (setDependsOn(state, card, depends === null ? [] : source === 'claude' ? claudeIds(state, depends) : depends)) { changed = true; fields.push('depends on'); }
+    }
     // the owner changing the criteria on the board is what this machine's record of them follows (fields.criteriaCut); Claude's lines are
     // recorded by the write itself
     if (source === 'user' && state.repoBacked && cleaned.criteria !== undefined && card.kind !== 'milestone') {
@@ -616,6 +669,42 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
 }
 
 /**
+ * Adds or removes one link drawn by hand on the Milestones map: `add` or `remove` is the id of the milestone that milestone `id` depends on. This
+ * is what the board's two routes call: one link at a time, read and written under the lock, so two drags never undo each other. It gates nothing.
+ * Resolves to the milestone card.
+ */
+export async function changeMilestoneLink(projectDirArg, id, { add, remove } = {}, { source = 'user' } = {}) {
+  const cfg = readConfig(projectDirArg);
+  requireTasks(cfg);
+  if ((add === undefined) === (remove === undefined)) throw new Error('give the milestone to add or the one to remove, not both');
+  const other = add === undefined ? remove : add;
+  if (typeof other !== 'string' || !CARD_ID_RE.test(other.trim())) throw new Error('the milestone must be given as a card id like "c4"');
+  return updateState(projectDirArg, (state) => {
+    const card = milestoneOf(state, id);
+    if (!card) throw new Error(`milestone not found: ${id}`);
+    const dep = other.trim();
+    const cur = liveDependsOn(card, state.cards, state.aliases);
+    let next;
+    if (add !== undefined) {
+      if (cur.includes(dep)) throw new Error(`${msName(card)} already depends on ${dep} by a link drawn by hand`);
+      next = [...cur, dep];
+      if (next.length > MAX_DEPENDS) throw new Error(`a milestone can have ${MAX_DEPENDS} links of its own at most`);
+    } else {
+      if (!cur.includes(dep)) throw new Error(`${msName(card)} has no link of its own to ${dep} (a link that comes from cards is changed by editing those cards)`);
+      next = cur.filter((x) => x !== dep);
+    }
+    // a link to a milestone that is gone is dropped by the same write: it is rebuilt from the live ones
+    if (setDependsOn(state, card, next)) {
+      const ts = now();
+      card.updatedAt = ts;
+      if (source === 'user') card.seenByClaude = false;
+      addHistory(card, source, { type: 'edited', fields: ['depends on'] }, ts);
+    }
+    return card;
+  });
+}
+
+/**
  * Removes one card. In a repo-backed project a thread on this machine and a card from the repo can share an id (a card from another device
  * that took a free thread number, or a file named by hand): both are shown, and the card tools take the card. Only the card that is found is
  * removed, never the other; the board's delete cannot tell which one the owner means, so it is refused then. A thread that was started from
@@ -650,7 +739,16 @@ export async function removeCard(projectDirArg, id, { source = 'claude' } = {}) 
       if (now && !(isObject(rec) && rec.startedHash === now.hash)) { state.base.keepFiles.add(card.id); keptFile = true; }
     }
     // The cards under a milestone stay, without a parent (a thread is a card of this machine: it keeps what it has).
-    if (card.kind === 'milestone') for (const c of state.cards) if (c.parent === card.id && !isThread(c)) delete c.parent;
+    if (card.kind === 'milestone') {
+      for (const c of state.cards) if (c.parent === card.id && !isThread(c)) delete c.parent;
+      // and the links drawn to it by hand
+      const ts = now();
+      for (const c of state.cards) if (c.kind === 'milestone' && Array.isArray(c.dependsOn) && c.dependsOn.some((x) => x === card.id || (state.aliases && state.aliases.get(x) === card.id))) {
+        c.dependsOn = c.dependsOn.filter((x) => x !== card.id && !(state.aliases && state.aliases.get(x) === card.id));
+        if (!c.dependsOn.length) delete c.dependsOn;
+        c.updatedAt = ts;
+      }
+    }
     state.cards = state.cards.filter((c) => c !== card);
     return { removed: card.id, shared, keptFile };
   });

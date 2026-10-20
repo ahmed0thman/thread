@@ -500,6 +500,48 @@ test('over the tunnel an agent cannot be set, changed or removed, and a refused 
   assert.equal((await a.get(`${P}/agents`)).status, 200, 'the agents can be read, as before');
 });
 
+test('over the tunnel the milestone links and the map layout cannot be changed, a card edit cannot set links, and the layout can be read; the normal listener can', async (t) => {
+  const b = await boot(t);
+  const m1 = await core.addCard(b.projectDir, { title: 'M1', kind: 'milestone' });
+  const m2 = await core.addCard(b.projectDir, { title: 'M2', kind: 'milestone' });
+  const a = await open(b);
+  const P = `/api/p/${b.key}`;
+  const stored = () => JSON.stringify(core.readState(b.projectDir).cards);
+  const before = stored();
+  const layoutFile = core.projectPaths(b.projectDir).layout;
+  for (const [method, route, body] of [
+    ['POST', `${P}/milestones/${m2.id}/depends-on`, { add: m1.id }],
+    ['POST', `${P}/milestones/${m2.id}/depends-on`, { remove: m1.id }],
+    ['POST', `/api/milestones/${m2.id}/depends-on`, { add: m1.id }],
+    ['PUT', `${P}/milestone-layout`, { set: { [m1.id]: { col: 1, row: 1 } } }],
+    ['DELETE', `${P}/milestone-layout`, undefined],
+    ['PUT', '/api/milestone-layout', { set: { [m1.id]: { col: 1, row: 1 } } }],
+  ]) {
+    const r = await a.write(method, route, body);
+    assert.equal(r.status, 403, `${method} ${route} -> ${r.status} ${r.text}`);
+    assert.match(r.json.error, /^not allowed through the tunnel$/);
+  }
+  assert.equal(stored(), before, 'nothing was written');
+  assert.equal(fs.existsSync(layoutFile), false, 'no layout was saved');
+  // the card route is open to the tunnel but has no key for the links
+  const patch = await a.write('PATCH', `${P}/cards/${m2.id}`, { dependsOn: [m1.id] });
+  assert.equal(patch.status, 400);
+  assert.match(patch.json.error, /unknown key dependsOn/);
+  assert.equal(stored(), before);
+  // reading is as before, and carries the layout (a place on this computer's map, never a secret)
+  const H = { host: `127.0.0.1:${b.port}`, 'x-thread-token': b.token, ...JSON_HDR };
+  const local = await raw(b.port, { method: 'PUT', path: `${P}/milestone-layout`, headers: H, body: JSON.stringify({ set: { [m1.id]: { col: 1, row: 1 } } }) });
+  assert.equal(local.status, 200, local.text);
+  const link = await raw(b.port, { method: 'POST', path: `${P}/milestones/${m2.id}/depends-on`, headers: H, body: JSON.stringify({ add: m1.id }) });
+  assert.equal(link.status, 200, link.text);
+  const state = await a.get(`${P}/state`);
+  assert.equal(state.status, 200);
+  assert.deepEqual(state.json.milestoneLayout, { [m1.id]: { col: 1, row: 1 } });
+  assert.deepEqual(state.json.cards.find((c) => c.id === m2.id).dependsOn, [m1.id]);
+  assert.equal((await a.write('DELETE', `${P}/milestone-layout`)).status, 403, 'and it stays closed once a layout exists');
+  assert.equal((await raw(b.port, { method: 'DELETE', path: `${P}/milestone-layout`, headers: H })).status, 200);
+});
+
 test('on the normal listener the same routes still work as before', async (t) => {
   const b = await boot(t);
   seedThread(b);

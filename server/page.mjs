@@ -37,6 +37,7 @@ export const JS_PIECES = [
   'js/list.js',
   'js/milestones-view.js',
   'js/milestones-map.js',
+  'js/milestones-drag.js',
   'js/home.js',
   'js/board-view.js',
   'js/content.js',

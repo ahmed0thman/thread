@@ -183,14 +183,17 @@ async function handleProject(req, res, projectDir, sub, query, remote = false) {
   const notifym = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/notify$/.exec(sub) : null;
   const approvalm = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/approval$/.exec(sub) : null;
   const isBatch = method === 'POST' && sub === '/waits/answer-batch';
-  const known = isState || isAgents || isLanes || isCardCreate || !!rm || !!stopm || !!waitm || !!notifym || !!approvalm || isBatch || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
+  // The links and the layout of the Milestones map (this machine's owner at the keyboard: closed to the tunnel, see REMOTE_ROUTES)
+  const dependm = method === 'POST' ? /^\/milestones\/([A-Za-z0-9_-]{1,64})\/depends-on$/.exec(sub) : null;
+  const isLayout = (method === 'PUT' || method === 'DELETE') && sub === '/milestone-layout';
+  const known = isState || isAgents || isLanes || isCardCreate || !!rm || !!stopm || !!waitm || !!notifym || !!approvalm || isBatch || !!dependm || isLayout || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
   if (!known) {
     req.resume();
     send(res, 404, { error: 'not found' });
     return;
   }
 
-  const viewOf = (card) => withViews(card, core.readConfig(projectDir), core.readState(projectDir).cards);
+  const viewOf = (card) => { const st = core.readState(projectDir); return withViews(card, core.readConfig(projectDir), st.cards, st.aliases); };
   const present = core.dirExists(projectDir);
   if (!isState && !isAgents && !isLanes && !isActivity && !rm && !present) {
     req.resume();
@@ -208,7 +211,9 @@ async function handleProject(req, res, projectDir, sub, query, remote = false) {
       config: { mode: cfg.mode, stages: cfg.stages, roles: cfg.roles },
       // card files of a repo-backed project that could not be read (a git conflict, invalid JSON): named on the page, never touched
       notices: Array.isArray(state.notices) ? state.notices : [],
-      cards: state.cards.map((c) => withViews(c, cfg, state.cards)),
+      cards: state.cards.map((c) => withViews(c, cfg, state.cards, state.aliases)),
+      // where the owner dragged the milestones on this machine (never in the repo): only the ones that still exist
+      milestoneLayout: layoutOf(projectDir, state),
       sessions: sessionsView(state),
     });
     return;
@@ -282,6 +287,34 @@ async function handleProject(req, res, projectDir, sub, query, remote = false) {
     req.resume();
     const removed = await core.removeCard(projectDir, cm[1], { source: 'user' });
     send(res, 200, removed === true ? { ok: true } : { ok: true, keptFile: true });
+    return;
+  }
+
+  if (dependm) {
+    // One link drawn by hand on the map: { add: <milestone id> } makes this milestone depend on that one, { remove: <id> } takes it away.
+    requireJson(req);
+    const body = await readJsonBody(req);
+    for (const k of Object.keys(body)) if (k !== 'add' && k !== 'remove') throw new HttpError(400, `unknown key ${k.slice(0, 40)}; a milestone link takes: add or remove`);
+    const card = await core.changeMilestoneLink(projectDir, dependm[1], pick(body, ['add', 'remove']), { source: 'user' });
+    send(res, 200, viewOf(card));
+    return;
+  }
+
+  if (isLayout) {
+    // Where the milestones stand on the map, saved on this machine: PUT { set: { <id>: { col, row } } } adds positions, DELETE forgets them all.
+    const cfg = core.readConfig(projectDir);
+    if (cfg.mode === 'chat') throw new core.ChatOnlyError();
+    if (method === 'DELETE') {
+      req.resume();
+      send(res, 200, { layout: await core.resetMilestoneLayout(projectDir) });
+      return;
+    }
+    requireJson(req);
+    const body = await readJsonBody(req);
+    for (const k of Object.keys(body)) if (k !== 'set') throw new HttpError(400, `unknown key ${k.slice(0, 40)}; the layout takes: set`);
+    const st = core.readState(projectDir);
+    const live = new Map(st.cards.filter((c) => c.kind === 'milestone').map((c) => [c.id, String(c.title || c.id)]));
+    send(res, 200, { layout: await core.setMilestoneLayout(projectDir, body.set, live, st.aliases) });
     return;
   }
 
@@ -607,12 +640,17 @@ function makeHandler(homeDir, token, stop, { remote = null, tunnel = null } = {}
   };
 }
 
+// The saved milestone positions of a project that belong to a milestone it still has.
+function layoutOf(projectDir, state) {
+  return core.readMilestoneLayout(projectDir, new Set(state.cards.filter((c) => c.kind === 'milestone').map((c) => c.id)), state.aliases);
+}
+
 // What the board page gets for a card. The status is the stage it is shown in (see
 // core.effectiveStatus), a milestone carries its progress and state (msState), and a thread gets the parsed
 // hand-back (free text, digest sections, step map) on each turn. It also carries workedBy, and verified: false for a
 // card with acceptance criteria that sits in a finished stage (the done stage or a later one) without an approving review. Computed per response; never stored.
 // `cards` are the project's stored cards, for the progress of a milestone.
-function withViews(card, cfg, cards) {
+function withViews(card, cfg, cards, aliases) {
   if (!card) return card;
   const view = { ...card, status: core.effectiveStatus(card, cfg) };
   delete view.localAnswers;   // the same kind of record (answers given here), and when the card last left the finished stages here
@@ -627,6 +665,9 @@ function withViews(card, cfg, cards) {
   // an older plugin version can remove a milestone without clearing its cards
   if (view.parent && !cards.some((c) => c.id === view.parent && c.kind === 'milestone')) delete view.parent;
   if (card.kind === 'milestone') {
+    // the links drawn by hand to milestones that are still there (a file written by hand or an older version can name anything)
+    const links = core.liveDependsOn(card, cards, aliases);
+    if (links.length) view.dependsOn = links; else delete view.dependsOn;
     view.progress = core.milestoneProgress(cards, card.id, cfg);
     view.msState = core.milestoneState(cards, card.id, cfg);
     return threadView(view);

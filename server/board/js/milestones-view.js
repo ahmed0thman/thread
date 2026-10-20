@@ -36,14 +36,17 @@
   // ---- end milestone view model ----
 
 
-  // The key of the pane: the milestones in number order with their numbers and open cards, the map's edges, and what is picked.
+  // The key of the pane: the milestones in number order with their numbers and open cards, the map's edges, what is picked, and where the
+  // milestones stand (the saved layout, a move in progress, a line picked, a reset to confirm).
   function milestonesPaneKey() {
     if (!current) return JSON.stringify(['milestones', selKey, null]);
     const conf = cfg();
     const list = milestonesByNumber(milestoneCards());
     const map = milestoneMap(list, current.cards, conf);
     const u = msUi();
-    return JSON.stringify(['milestones', selKey, u.mode, u.mode === 'map' ? msMapPick(map, u.sel) : '', milestonesShown(list, current.cards, conf), msMapSig(map)]);
+    // a drag in progress keeps the pane as it is: a redraw would take the milestone out of the pointer's hand
+    if (msDrag && typeof paneSig === 'string' && paneSig) return paneSig;
+    return JSON.stringify(['milestones', selKey, u.mode, u.mode === 'map' ? msMapPick(map, u.sel) : '', milestonesShown(list, current.cards, conf), msMapSig(map), msUiSig(u, list)]);
   }
 
   // One milestone as a block: its title (a link to its page) with a state tag, progress, waiting items, `rel` (what it depends on),
@@ -112,11 +115,13 @@
       modes.setAttribute('role', 'group');
       modes.setAttribute('aria-label', 'Show the milestones as');
       [['map', 'Map'], ['cards', 'Cards']].forEach(([v, t]) => {
-        const b = plainBtn(t, 'small ghost', () => { if (u.mode !== v) { u.mode = v; renderPane(); } });
+        const b = plainBtn(t, 'small ghost', () => { if (u.mode !== v) { u.move = null; u.mode = v; renderPane(); } });
         b.setAttribute('aria-pressed', u.mode === v ? 'true' : 'false');
         modes.appendChild(b);
       });
       head.appendChild(modes);
+      const reset = u.mode === 'map' ? msResetControl(list, u) : null;
+      if (reset) head.appendChild(reset);
     }
     wrap.appendChild(head);
     if (!list.length) {
@@ -137,7 +142,10 @@
         : openN ? openN + ' open, none ready' + (stuck.length ? ' (a cycle: ' + stuck.map(msName).join(', ') + ')' : '')
           : 'Nothing is open'));
     if (waits) glance.appendChild(h('span', 'tnum', waits + ' waiting for you'));
-    if (map.mode === 'deps') glance.appendChild(h('span', 'tnum muted', msPlural(map.edges.length, 'dependency', 'dependencies') + ' from ' + msPlural(map.edges.reduce((s, e) => s + e.links.length, 0), 'card link', 'card links')));
+    if (map.mode === 'deps') {
+      const cardLinks = map.edges.reduce((s, e) => s + e.links.length, 0), byHand = map.edges.filter((e) => e.hand).length;
+      glance.appendChild(h('span', 'tnum muted', msPlural(map.edges.length, 'dependency', 'dependencies') + ' from ' + [cardLinks ? msPlural(cardLinks, 'card link', 'card links') : '', byHand ? msPlural(byHand, 'link', 'links') + ' drawn by hand' : ''].filter(Boolean).join(' and ')));
+    }
     wrap.appendChild(glance);
     let after = null;
     if (u.mode === 'map') after = renderMsMap(wrap, map, list, u);

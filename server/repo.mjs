@@ -20,6 +20,8 @@ export const REPO_KINDS = ['task', 'idea', 'milestone'];
 // `approvals`: the approvals given on this machine's board; `localAnswers`: the answers given here (item id → { answeredAt, hash }, and
 // `review: true` for a review item, see waits.mjs); `localLeftDoneAt`: when this machine last saw the card leave the finished stages, `localDoneAt` when it last saw it in them
 // (see fields.watchFinished); `localCriteria`: how many acceptance criteria the owner's board last had on the card, and their hash.
+// A milestone's `dependsOn` (the links drawn by hand on the Milestones map) is not here: it is a shared field, in the card file like `parent`. The
+// owner's positions on that map are not a card field at all (see layout.mjs: this machine's data directory).
 export const LOCAL_KEYS = ['seenByClaude', 'notifyId', 'notifyForRev', 'notifySession', 'notifyRequestedAt', 'notifySeenFor', 'notifyPushedFor', 'runs', 'thread', 'fromRepo', 'approvals', 'localAnswers', 'localLeftDoneAt', 'localDoneAt', 'localCriteria'];
 // The local fields of a waiting item: `askedBy` (the session that asked it) and `deliveredAt`, kept per item id in the overlay (`askers`, `delivered`),
 // and `fromFile`, which only the join sets (an answer that only the repo file has).
@@ -869,6 +871,7 @@ function rewriteCard(c, src, idOf) {
   card.id = idOf(src, c.id);
   if (typeof card.parent === 'string') card.parent = idOf(src, card.parent);
   if (Array.isArray(card.blockedBy)) card.blockedBy = card.blockedBy.map((b) => (typeof b === 'string' ? idOf(src, b) : b));
+  if (Array.isArray(card.dependsOn)) card.dependsOn = card.dependsOn.map((b) => (typeof b === 'string' ? idOf(src, b) : b));   // a milestone's links drawn by hand
   if (Array.isArray(card.waits)) {
     card.waits = card.waits.map((w) => {
       if (!isObject(w) || typeof w.id !== 'string' || !w.id.startsWith(`${c.id}.`)) return w;

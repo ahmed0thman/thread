@@ -59,7 +59,7 @@ export function storeKey(projectDirArg) {
 
 export function projectPaths(projectDirArg) {
   const dir = join(dataDir(), 'projects', storeKey(projectDirArg));
-  return { dir, state: join(dir, 'state.json'), repo: join(dir, 'repo.json'), lock: join(dir, 'state.lock'), logs: join(dir, 'logs') };
+  return { dir, state: join(dir, 'state.json'), repo: join(dir, 'repo.json'), lock: join(dir, 'state.lock'), logs: join(dir, 'logs'), layout: join(dir, 'milestone-layout.json') };
 }
 
 // ---------------------------------------------------------------- private files

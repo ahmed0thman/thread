@@ -2781,3 +2781,174 @@ test('an exit that a file dates a few minutes ahead of this machine is pinned as
   await core.updateCard(e.projectDir, c.id, { note: 'touched' }, { source: 'claude' });   // the write that pins it
   assert.ok(Date.parse(overlayOfCard(e, c.id).localLeftDoneAt) <= Date.now(), 'pinned at this machine\'s now, not at the file\'s time');
 });
+
+// ---------------------------------------------------------------- a milestone's hand-drawn links and the owner's layout of the map
+
+test('a milestone\'s hand-drawn links are a shared field in its card file that another clone reads, never in the overlay; the layout stays on this machine', async (t) => {
+  const w = twoDevices(t);
+  const { A } = w;
+  const made = await as(A, async () => {
+    core.enableRepo(A.dir);
+    const m1 = await core.addCard(A.dir, { title: 'M1: Payments', kind: 'milestone' });
+    const m2 = await core.addCard(A.dir, { title: 'M2: Checkout', kind: 'milestone' });
+    await core.changeMilestoneLink(A.dir, m2.id, { add: m1.id }, { source: 'user' });
+    const live = new Set([m1.id, m2.id]);
+    await core.setMilestoneLayout(A.dir, { [m1.id]: { col: 3, row: 2 } }, live);
+    return { m1: m1.id, m2: m2.id };
+  });
+  const file = JSON.parse(repoText(A.dir, made.m2));
+  assert.deepEqual(file.dependsOn, [made.m1], 'the links are in the card file');
+  assert.equal('dependsOn' in JSON.parse(repoText(A.dir, made.m1)), false);
+  const overlay = (await as(A, () => JSON.parse(fs.readFileSync(core.projectPaths(A.dir).repo, 'utf8')))).overlay || {};
+  assert.equal(JSON.stringify(overlay).includes('dependsOn'), false, 'nothing of it is local');
+  const text = repoText(A.dir, made.m2);
+  for (const bad of [os.homedir(), w.base, w.dataDir, S1]) assert.equal(text.includes(bad), false, 'no path or session id in the file');
+  // the layout is not in the repo at all, and not in the local state file either
+  const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? walk(path.join(dir, d.name)) : [path.join(dir, d.name)]));
+  const inRepo = walk(path.join(A.dir, '.claude', 'thread')).map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+  assert.equal(inRepo.includes('"col"') || inRepo.includes('milestone-layout'), false, 'no position in any repo file');
+  assert.equal(git(A.dir, 'ls-files', '--others', '--exclude-standard').includes('layout'), false);
+  const layoutFile = await as(A, () => core.projectPaths(A.dir).layout);
+  assert.ok(fs.existsSync(layoutFile) && layoutFile.startsWith(A.data), 'in the data folder of this machine');
+  commitAll(A.dir, 'milestones');
+  git(A.dir, 'push', '-q', 'origin', 'main');
+  const B = w.clone('B');
+  const seen = await as(B, () => core.readState(B.dir).cards.find((c) => c.id === made.m2));
+  assert.deepEqual(seen.dependsOn, [made.m1], 'another device reads the links from the file');
+  assert.deepEqual(await as(B, () => core.readMilestoneLayout(B.dir)), {}, 'and has no layout of A\'s');
+  // B removes the link, A pulls it
+  await as(B, () => core.changeMilestoneLink(B.dir, made.m2, { remove: made.m1 }, { source: 'user' }));
+  assert.equal('dependsOn' in JSON.parse(repoText(B.dir, made.m2)), false);
+  commitAll(B.dir, 'unlink');
+  git(B.dir, 'push', '-q', 'origin', 'main');
+  assert.equal(gitTry(A.dir, 'pull', '--no-edit').ok, true);
+  assert.equal(await as(A, () => core.readState(A.dir).cards.find((c) => c.id === made.m2).dependsOn), undefined);
+});
+
+test('a card file that holds nothing sensible in dependsOn is read as no link, and a milestone removed in the repo takes the links to it away with it', async (t) => {
+  const e = oneProject(t);
+  core.enableRepo(e.projectDir);
+  const m1 = await core.addCard(e.projectDir, { title: 'M1', kind: 'milestone' });
+  const m2 = await core.addCard(e.projectDir, { title: 'M2', kind: 'milestone', dependsOn: [m1.id] });
+  const task = await core.addCard(e.projectDir, { title: 'A task' });
+  const bad = [[], 'c1', 5, null, { x: 1 }, ['/etc/passwd', '../x', 7, null, m2.id, 'cnope1', task.id, m1.id, m1.id]];
+  for (const v of bad) {
+    editFile(e.projectDir, m2.id, (d) => { d.dependsOn = v; });
+    const c = core.readState(e.projectDir).cards.find((x) => x.id === m2.id);
+    const live = core.liveDependsOn(c, core.readState(e.projectDir).cards);
+    assert.deepEqual(live, Array.isArray(v) && v.includes(m1.id) ? [m1.id] : [], JSON.stringify(v).slice(0, 40));
+  }
+  // a link written on a task is ignored too
+  editFile(e.projectDir, task.id, (d) => { d.dependsOn = [m1.id]; });
+  assert.deepEqual(core.liveDependsOn(core.readState(e.projectDir).cards.find((x) => x.id === task.id), core.readState(e.projectDir).cards), []);
+  // the board's view shows only the live ones
+  editFile(e.projectDir, m2.id, (d) => { d.dependsOn = [m1.id, 'cnope1', m2.id]; });
+  const b = await startBoardServer(e.projectDir, { port: 0, token: 'a'.repeat(32) });
+  t.after(() => new Promise((r) => { b.server.closeAllConnections?.(); b.server.close(() => r()); }));
+  const key = core.projectKey(e.projectDir);
+  const state = await (await fetch(`http://127.0.0.1:${b.port}/api/p/${key}/state`, { headers: { 'x-thread-token': 'a'.repeat(32) } })).json();
+  assert.deepEqual(state.cards.find((c) => c.id === m2.id).dependsOn, [m1.id]);
+  // removing a milestone from the board rewrites the other milestone's file without the link
+  await core.removeCard(e.projectDir, m1.id, { source: 'user' });
+  assert.deepEqual(JSON.parse(repoText(e.projectDir, m2.id)).dependsOn, ['cnope1', m2.id], 'only the link to it goes; what else the file says is not touched');
+});
+
+test('the one-time copy into the repo gives a milestone\'s links the new ids of the milestones they name', async (t) => {
+  const e = oneProject(t);
+  const m1 = await core.addCard(e.projectDir, { title: 'M1', kind: 'milestone' });
+  const m2 = await core.addCard(e.projectDir, { title: 'M2', kind: 'milestone', dependsOn: [m1.id] });
+  const m3 = await core.addCard(e.projectDir, { title: 'M3', kind: 'milestone', dependsOn: [m1.id, m2.id] });
+  core.enableRepo(e.projectDir);
+  await core.reconcile(e.projectDir);
+  const [n1, n2, n3] = [m1.id, m2.id, m3.id].map((id) => newIdOf(e, id));
+  for (const id of [n1, n2, n3]) assert.match(id, NEW_ID);
+  assert.deepEqual(JSON.parse(repoText(e.projectDir, n2)).dependsOn, [n1]);
+  assert.deepEqual(JSON.parse(repoText(e.projectDir, n3)).dependsOn, [n1, n2]);
+  assert.equal('dependsOn' in JSON.parse(repoText(e.projectDir, n1)), false);
+  const stored = core.readState(e.projectDir).cards.find((c) => c.id === n3);
+  assert.deepEqual(core.liveDependsOn(stored, core.readState(e.projectDir).cards), [n1, n2]);
+});
+
+const OLD_MS_WRITER = path.join(TEST_DIR, 'fixtures', 'old-milestone-writer.mjs');
+for (const ref of ['v0.15.2', 'v0.20.0']) test(`the plugin version at ${ref} keeps a milestone's hand-drawn links in its card file when it renames the milestone and removes another`, async (t) => {
+  const old = oldServerFrom(t, ref);
+  if (!old) return;
+  const e = oneProject(t);
+  core.enableRepo(e.projectDir);
+  const m1 = await core.addCard(e.projectDir, { title: 'M1', kind: 'milestone' });
+  const m2 = await core.addCard(e.projectDir, { title: 'M2', kind: 'milestone', dependsOn: [m1.id] });
+  const m3 = await core.addCard(e.projectDir, { title: 'M3', kind: 'milestone', dependsOn: [m1.id, m2.id] });
+  const before = repoText(e.projectDir, m3.id);
+  // the older version renames M3 and removes M2 (it does not know the link to it)
+  const r = await runNode([OLD_MS_WRITER, old, e.projectDir, m3.id, m2.id], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir }, cwd: e.projectDir });
+  assert.equal(r.code, 0, r.stderr);
+  const file = JSON.parse(repoText(e.projectDir, m3.id));
+  assert.equal(file.title, 'Renamed by the older version', 'the older version did write the file');
+  assert.deepEqual(file.dependsOn, [m1.id, m2.id], 'the links are kept as they were');
+  assert.notEqual(repoText(e.projectDir, m3.id), before);
+  assert.equal(fs.existsSync(path.join(cardsDir(e.projectDir), `${m2.id}.json`)), false, 'M2 is gone');
+  // this version reads the link to the removed milestone as gone
+  const c = core.readState(e.projectDir).cards.find((x) => x.id === m3.id);
+  assert.deepEqual(core.liveDependsOn(c, core.readState(e.projectDir).cards), [m1.id]);
+  // and the file text is the one this version would write for it: the same order of keys
+  const fixed = await core.updateCard(e.projectDir, m3.id, { title: 'M3 again' }, { source: 'user' });
+  assert.deepEqual(fixed.dependsOn, [m1.id, m2.id]);
+  assert.deepEqual(Object.keys(JSON.parse(repoText(e.projectDir, m3.id))).filter((k) => ['dependsOn', 'updatedAt', 'history'].includes(k)), ['updatedAt', 'history', 'dependsOn'], 'a key no older version knows sorts last, alphabetically, in every version');
+});
+
+// ---------------------------------------------------------------- the one-time copy and what a milestone keeps under its old ids
+
+test('the layout and the links saved before the copy into the repo follow the milestones to their new ids', async (t) => {
+  const e = oneProject(t);
+  const m1 = await core.addCard(e.projectDir, { title: 'M1: Payments', kind: 'milestone' });
+  const m2 = await core.addCard(e.projectDir, { title: 'M2: Checkout', kind: 'milestone', dependsOn: [m1.id] });
+  await core.setMilestoneLayout(e.projectDir, { [m1.id]: { col: 4, row: 1 }, [m2.id]: { col: 0, row: 3 } }, new Set([m1.id, m2.id]));
+  core.enableRepo(e.projectDir);
+  await core.reconcile(e.projectDir);
+  const [n1, n2] = [m1.id, m2.id].map((id) => newIdOf(e, id));
+  const st = core.readState(e.projectDir);
+  const live = new Set([n1, n2]);
+  assert.deepEqual(core.readMilestoneLayout(e.projectDir, live, st.aliases), { [n1]: { col: 4, row: 1 }, [n2]: { col: 0, row: 3 } }, 'the places are read under the new ids');
+  assert.deepEqual(core.readMilestoneLayout(e.projectDir, live), {}, 'without the old-to-new map the old ids name nothing');
+  // the board shows it, and the next save writes the new ids and drops the old ones
+  const b = await startBoardServer(e.projectDir, { port: 0, token: TOKEN });
+  t.after(() => new Promise((r) => { b.server.closeAllConnections?.(); b.server.close(() => r()); }));
+  const api = async (method, p, body) => (await fetch(`http://127.0.0.1:${b.port}/api/p/${core.projectKey(e.projectDir)}${p}`, { method, headers: { 'x-thread-token': TOKEN, 'content-type': 'application/json' }, body: body && JSON.stringify(body) })).json();
+  assert.deepEqual((await api('GET', '/state')).milestoneLayout, { [n1]: { col: 4, row: 1 }, [n2]: { col: 0, row: 3 } });
+  const saved = await api('PUT', '/milestone-layout', { set: { [n1]: { col: 5, row: 1 } } });
+  assert.deepEqual(saved.layout, { [n1]: { col: 5, row: 1 }, [n2]: { col: 0, row: 3 } });
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(core.projectPaths(e.projectDir).layout, 'utf8')).positions).sort(), [n1, n2].sort());
+  assert.deepEqual(JSON.parse(repoText(e.projectDir, n2)).dependsOn, [n1]);
+});
+
+const OLD_COPY = path.join(TEST_DIR, 'fixtures', 'old-copy-writer.mjs');
+for (const ref of ['v0.15.2', 'v0.20.0']) test(`when the plugin version at ${ref} makes the copy, a milestone's links (which it leaves under their old ids) and the layout are read under the new ids, and the next change writes the new ones`, async (t) => {
+  const old = oldServerFrom(t, ref);
+  if (!old) return;
+  const e = oneProject(t);
+  const m1 = await core.addCard(e.projectDir, { title: 'M1', kind: 'milestone' });
+  const m2 = await core.addCard(e.projectDir, { title: 'M2', kind: 'milestone', dependsOn: [m1.id] });
+  const m3 = await core.addCard(e.projectDir, { title: 'M3', kind: 'milestone', dependsOn: [m1.id, m2.id] });
+  await core.setMilestoneLayout(e.projectDir, { [m3.id]: { col: 2, row: 2 } }, new Set([m1.id, m2.id, m3.id]));
+  const r = await runNode([OLD_COPY, old, e.projectDir], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir }, cwd: e.projectDir });
+  assert.equal(r.code, 0, r.stderr);
+  const [n1, n2, n3] = [m1.id, m2.id, m3.id].map((id) => newIdOf(e, id));
+  for (const id of [n1, n2, n3]) assert.match(id, NEW_ID);
+  assert.deepEqual(JSON.parse(repoText(e.projectDir, n3)).dependsOn, [m1.id, m2.id], 'the older version left the old ids in the file');
+  const st = core.readState(e.projectDir);
+  const card = (id) => st.cards.find((c) => c.id === id);
+  assert.deepEqual(core.liveDependsOn(card(n3), st.cards), [], 'without the map the old ids name nothing');
+  assert.deepEqual(core.liveDependsOn(card(n3), st.cards, st.aliases), [n1, n2], 'with it they are the new ids');
+  assert.deepEqual(core.readMilestoneLayout(e.projectDir, new Set([n1, n2, n3]), st.aliases), { [n3]: { col: 2, row: 2 } });
+  // the board shows the new ids
+  const b = await startBoardServer(e.projectDir, { port: 0, token: TOKEN });
+  t.after(() => new Promise((rr) => { b.server.closeAllConnections?.(); b.server.close(() => rr()); }));
+  const view = await (await fetch(`http://127.0.0.1:${b.port}/api/p/${core.projectKey(e.projectDir)}/state`, { headers: { 'x-thread-token': TOKEN } })).json();
+  assert.deepEqual(view.cards.find((c) => c.id === n3).dependsOn, [n1, n2]);
+  // a change of the links rewrites the file with the new ids
+  const fixed = await core.changeMilestoneLink(e.projectDir, n3, { remove: n1 });
+  assert.deepEqual(fixed.dependsOn, [n2]);
+  assert.deepEqual(JSON.parse(repoText(e.projectDir, n3)).dependsOn, [n2]);
+  // a loop is seen through the map too: M3 -> M2 and M2 -> M1 (the old id in M2's file), so M1 -> M3 would close it
+  await assert.rejects(core.changeMilestoneLink(e.projectDir, n1, { add: n3 }), /loop of milestone links/);
+});

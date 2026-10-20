@@ -25,6 +25,7 @@ server/
   fields.mjs        card fields (type, priority, labels, blockedBy, criteria), history workers, workedBy; no imports
   runner.mjs        the detached process that runs one thread turn
   codemap.mjs       the note a new thread gets when `codeMap` is on and the project has a Graphify map (graphify-out/GRAPH_REPORT.md); only checks the file exists
+  layout.mjs        the Milestones map's dragged positions, per project and per machine (projects/<key>/milestone-layout.json); never in the repo
   mcp.mjs           the MCP server and its tools
   http.mjs          the board server (loopback only, token, Host and Origin checks); also the remote policy and allowlist of the tunnel's listener
   tunnel.mjs        the opt-in Cloudflare tunnel: finds and runs cloudflared, the pid file, the manager (token, lifetime, listener)

@@ -47,6 +47,7 @@ const CARD_FIELD_PROPS = {
   labels: { type: 'array', items: { type: 'string' }, maxItems: 8, description: 'Up to 8 short labels, each 1 to 24 characters (they are lowercased). Not for milestones.' },
   blocked_by: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'The ids of up to 10 cards that must be finished first, for example ["c4"]. A card cannot be blocked by itself or by a milestone, and a card that has this list cannot be started as a thread. Not for milestones or threads.' },
   criteria: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'Up to 10 acceptance criteria, each up to 200 characters. A card with criteria cannot be moved to the done stage, or any stage after it, until the owner has approved a review item on it: raise one with wait_add (kind "review"). In a project kept in the repo only an approval given on this machine\'s board counts (one that came from another device must be confirmed on the card page here first). Once a card has criteria you can only add lines to them. A card with criteria cannot be started as a thread. Not for milestones or threads.' },
+  depends_on: { type: 'array', items: { type: 'string' }, maxItems: 20, description: 'Only for a milestone: the ids of up to 20 other milestones it depends on, for example ["c4"]. They are drawn as links on the board\'s Milestones map and in board_list as {depends on M2 (c4)}; they only say what the plan is and gate nothing (the cards of a milestone can still be started and finished). A milestone cannot depend on itself, and the links drawn this way never make a loop (such a call is refused). board_update replaces the whole list; an empty list removes the links you drew. Links that come from cards (a card of one milestone blocked by a card of another) are not in this list: they are made by blocked_by on those cards.' },
   worker: WORKER_PROP,
 };
 const CONFIRM_PROP = { type: 'string', description: 'The confirm code from a "CONFIRMATION REQUIRED" answer. Pass it only after the user agreed to continue.' };
@@ -148,7 +149,7 @@ const TOOLS = [
   },
   {
     name: 'board_update',
-    description: 'Change a board card\'s title, note, status, kind (task or idea), milestone, lane, agent, type, priority, labels, blocked_by or criteria. An empty value (an empty list, or an empty string) removes that field, except criteria: once a card has acceptance criteria you may add lines but not remove or change them (only the owner can, on the board). A card with criteria cannot be moved to the done stage, or any stage after it, until the owner approves a review item on it (wait_add, kind "review"; in a project kept in the repo only an approval given or confirmed on this machine\'s board counts); a card moved back out of the finished stages needs a new approval. Thread cards follow their thread and should not be moved by hand. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
+    description: 'Change a board card\'s title, note, status, kind (task or idea), milestone, lane, agent, type, priority, labels, blocked_by or criteria, or (for a milestone) depends_on. An empty value (an empty list, or an empty string) removes that field, except criteria: once a card has acceptance criteria you may add lines but not remove or change them (only the owner can, on the board). A card with criteria cannot be moved to the done stage, or any stage after it, until the owner approves a review item on it (wait_add, kind "review"; in a project kept in the repo only an approval given or confirmed on this machine\'s board counts); a card moved back out of the finished stages needs a new approval. Thread cards follow their thread and should not be moved by hand. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -181,7 +182,7 @@ const TOOLS = [
   },
   {
     name: 'board_list',
-    description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane or a sub-agent shows it in braces, as {lane: name} or {agent: name}; milestones are listed in their own section after the stages, each with its state (empty, open or done) and how many of its cards are done; a card with items waiting for the user shows "(2 waiting)" (wait_list reads them). ' +
+    description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane or a sub-agent shows it in braces, as {lane: name} or {agent: name}; milestones are listed in their own section after the stages, each with its state (empty, open or done) and how many of its cards are done, and "{depends on M2 (c4)}" when links were drawn to other milestones (on the board\'s Milestones map or with depends_on; a picture of the plan that gates nothing); a card with items waiting for the user shows "(2 waiting)" (wait_list reads them). ' +
       'After the title come the marks of its fields, when it has them: "(bug)", "!high" or "!low", "#label" for each label, "{blocked by c4, c7}" for the blockers that are not finished yet (in the done stage or a later one), "[criteria 3]" for its acceptance criteria, and "(done, not verified)" for a finished card whose criteria were never approved (in a project kept in the repo: never approved on this machine\'s board). ' +
       'With parent, list only that milestone and its cards, after a summary line: the report for a milestone. Cards the user added or edited since the last listing are flagged "(new from user)"; in a project kept in the repo, a card that came with a pull (another device, a collaborator) and that this machine has not listed yet is flagged "(new in repo)" instead, since nothing in a file shows the user wrote it. Listing marks them as seen. When the user clicks Notify Claude on such a card for this session, a line at the start of your turn asks you to look at it: list the board then, passing session_id, which is what ends that request (another session listing the board does not).',
     inputSchema: { type: 'object', properties: { parent: { type: 'string', description: 'Optional: a milestone card id; list only that milestone and the cards under it.' }, session_id: SESSION_PROP }, required: [] },
@@ -333,7 +334,7 @@ function clean(obj) {
 // The project-management fields and the worker of a board_add or board_update call, as core takes them. The values are
 // checked there; null and empty values pass through, because they remove a field.
 function cardFieldArgs(args) {
-  return clean({ type: args.type, priority: args.priority, labels: args.labels, blockedBy: args.blocked_by, criteria: args.criteria, worker: optStr(args, 'worker') });
+  return clean({ type: args.type, priority: args.priority, labels: args.labels, blockedBy: args.blocked_by, criteria: args.criteria, dependsOn: args.depends_on, worker: optStr(args, 'worker') });
 }
 
 // The calling session: the session_id argument, else the environment, else unknown.
@@ -406,9 +407,16 @@ function workerTag(c) {
   return typeof c.agent === 'string' && c.agent ? ` {agent: ${core.clip(c.agent, 40)}}` : '';
 }
 
+// A milestone as the board's map names it: the number its title starts with ("M2"), else the title cut short.
+const MS_NUM_RE = /^\s*([A-Za-z]{0,3}\d{1,3}(?:\.\d{1,2})?)(?!\w|\.\w)/;
+function milestoneName(m) {
+  const x = MS_NUM_RE.exec(String(m.title || ''));
+  return x ? x[1] : core.clip(m.title || m.id, 24);
+}
+
 // The compact marks after a card's title in board_list, in this order and only when present: (bug) !high or !low #label
 // {blocked by c4, c7} [criteria N] (done, not verified), the last for a card in a finished stage. `cards` are all the cards, with their shown stage in `status`.
-function fieldMarks(c, cards, cfg) {
+function fieldMarks(c, cards, cfg, aliases) {
   const marks = [];
   if (c.type === 'bug') marks.push('(bug)');
   if (c.priority === 'high' || c.priority === 'low') marks.push(`!${c.priority}`);
@@ -416,6 +424,9 @@ function fieldMarks(c, cards, cfg) {
   // only the blockers that are not finished yet: a card whose blockers are all done is not blocked
   const blockers = core.openBlockers(c, cards, cfg);
   if (blockers.length) marks.push(`{blocked by ${blockers.join(', ')}}`);
+  // a milestone: the links drawn by hand to other milestones (all of them, finished or not: they are the plan, not a gate)
+  const links = core.liveDependsOn(c, cards, aliases);
+  if (links.length) marks.push(`{depends on ${links.map((id) => `${milestoneName(cards.find((x) => x.id === id))} (${id})`).join(', ')}}`);
   if (c.kind !== 'milestone' && core.gatedByCriteria(c)) {
     // a pull cut or dropped the criteria the owner's board had: the card is still held to the gate (fields.criteriaCut)
     marks.push(core.criteriaCut(c) ? `[criteria ${core.hasCriteria(c) ? c.criteria.length : 0}, cut in the repo file: the owner must confirm on the board]` : `[criteria ${c.criteria.length}]`);
@@ -946,7 +957,7 @@ const HANDLERS = {
       const waiting = chat ? 0 : core.openWaits(c).length;   // not shown on a chat-only board
       const wait = waiting ? ` (${waiting} waiting)` : '';
       const note = c.note ? ` — ${core.clip(c.note, 200)}` : '';
-      return `- ${c.id} [${kind}] ${core.clip(c.title, 120)}${fieldMarks(c, all, cfg)}${milestoneTag(all, c)}${workerTag(c)}${done}${wait}${flag}${twin}${note}`;
+      return `- ${c.id} [${kind}] ${core.clip(c.title, 120)}${fieldMarks(c, all, cfg, stateNow.aliases)}${milestoneTag(all, c)}${workerTag(c)}${done}${wait}${flag}${twin}${note}`;
     };
     for (const st of cfg.stages) {
       const inCol = cards.filter((c) => c.kind !== 'milestone' && c.status === st.id);

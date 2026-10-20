@@ -9,6 +9,7 @@ export const PRIORITIES = ['high', 'normal', 'low'];
 export const MAX_LABELS = 8;
 export const MAX_LABEL = 24;
 export const MAX_BLOCKERS = 10;
+export const MAX_DEPENDS = 20;
 export const MAX_CRITERIA = 10;
 export const MAX_CRITERION = 200;
 export const MAX_WORKER = 64;
@@ -118,6 +119,22 @@ export function cleanBlockedBy(v) {
     const t = typeof x === 'string' ? x.trim() : '';
     if (!CARD_ID_RE.test(t)) throw new Error(`blocked_by takes card ids like "c4" or "c8k2x1", not "${String(x).slice(0, 40)}"`);
     if (out.includes(t)) throw new Error(`${t} is given twice in blocked_by`);
+    out.push(t);
+  }
+  return out;
+}
+
+// A milestone's links drawn by hand on the Milestones map (`dependsOn`: the milestones it waits for). The shape only; that the milestones
+// exist and that the links make no loop is checked against the state (checkDependsOn in core.mjs). It is not one of FIELD_NAMES: it belongs
+// to a milestone alone and has routes of its own on the board. An older plugin version ignores the field and keeps it.
+export function cleanDependsOn(v) {
+  if (v === undefined) return undefined;
+  if (isEmpty(v)) return null;
+  const out = [];
+  for (const x of cleanList(v, 'depends_on', MAX_DEPENDS)) {
+    const t = typeof x === 'string' ? x.trim() : '';
+    if (!CARD_ID_RE.test(t)) throw new Error(`depends_on takes milestone card ids like "c4" or "c8k2x1", not "${String(x).slice(0, 40)}"`);
+    if (out.includes(t)) throw new Error(`${t} is given twice in depends_on`);
     out.push(t);
   }
   return out;
@@ -302,6 +319,25 @@ export const criteriaCut = (card) => !!card && isObject(card.approvals) && isObj
 
 /** True when the card is held to the done gate: it has acceptance criteria, or this machine's record says it had more (criteriaCut). */
 export const gatedByCriteria = (card) => hasCriteria(card) || criteriaCut(card);
+
+/**
+ * The milestones a milestone depends on by hand (`dependsOn`) that still exist, in the order stored: a milestone that was removed since, or an id
+ * that is not a milestone, or the milestone itself, is left out. `cards` are the project's cards. `aliases` (old id -> id now, state.aliases of a
+ * project kept in the repo) also reads an id the one-time copy changed: an older plugin version does the copy without knowing this field, so its
+ * card files still hold the old ids; the next write of the links stores the new ones.
+ */
+export function liveDependsOn(card, cards, aliases) {
+  if (!card || card.kind !== 'milestone' || !Array.isArray(card.dependsOn)) return [];
+  const isMs = (id) => cards.some((c) => c && c.id === id && c.kind === 'milestone');
+  const out = [];
+  for (const raw of card.dependsOn) {
+    if (typeof raw !== 'string') continue;
+    const id = !isMs(raw) && aliases && aliases.has(raw) ? aliases.get(raw) : raw;
+    if (id === card.id || out.includes(id) || !isMs(id)) continue;
+    out.push(id);
+  }
+  return out;
+}
 
 /** The ids of the cards a card is blocked by that still exist, finished or not. `cards` are the project's cards. */
 export function liveBlockers(card, cards) {
