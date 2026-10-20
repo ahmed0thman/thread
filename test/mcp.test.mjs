@@ -187,6 +187,29 @@ test('board_open returns a tokened localhost URL with this project\'s tab when t
   assert.equal(res.status, 200);
 });
 
+test('wait_add hands back the chat pointer as a link to the card page on the running board, and the plain id when there is no board', async (t) => {
+  const e = setupThreadEnv(t);
+  await core.addCard(e.projectDir, { title: 'Fix the importer' });
+  const port = await freePort();
+  const c = start(t, e, { THREAD_NO_HTTP: '', THREAD_BOARD_PORT: String(port) });
+  await c.init();
+  const sid = '11111111-2222-4333-8444-555555555555';
+  const r = await c.call('wait_add', { card: 'c1', kind: 'question', text: 'Which importer?', session_id: sid });
+  const m = text(r).match(/"Waiting on you: \[c1\.w1\]\((http:\/\/127\.0\.0\.1:(\d+)\/)\?t=([0-9a-f]{32,64})#\/([0-9a-f]{12})\/c1\)"/);
+  assert.ok(m, text(r));
+  assert.equal(Number(m[2]), port);
+  assert.equal(m[4], core.projectKey(e.projectDir));
+  const res = await fetch(m[1] + 'api/state', { headers: { 'X-Thread-Token': m[3] } });
+  assert.equal(res.status, 200);
+
+  const off = setupThreadEnv(t);
+  await core.addCard(off.projectDir, { title: 'Fix the importer' });
+  const c2 = start(t, off);
+  await c2.init();
+  const r2 = await c2.call('wait_add', { card: 'c1', kind: 'question', text: 'Which importer?', session_id: sid });
+  assert.match(text(r2), /"Waiting on you: c1\.w1"/);
+});
+
 test('unknown tool and missing required argument return isError true, and the server still answers a ping', async (t) => {
   const e = setupThreadEnv(t);
   const c = start(t, e);

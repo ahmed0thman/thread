@@ -1,0 +1,25 @@
+# Commands
+
+Part of the thread documentation: [index](README.md).
+
+| Command | What it does |
+|---|---|
+| `/thread:new [--full] [--agent <name>] [--model <name>] [--effort <level>] [--lane <name>] [--write] [--parent <id>] <task>` | Start a thread on the task. By default it gets a brief written by Claude, runs on an agent or model Claude picks for the task, and cannot edit files. `--full` copies the whole session instead. `--agent`, or `--model` with an optional `--effort`, sets what runs it. `--lane` runs it on a [delegation lane](delegation.md#delegation-lanes) (another provider's CLI) and cannot be combined with `--agent`, `--model`, `--effort` or `--full`. `--write` lets it edit files. `--parent` puts it under a milestone. For a card that should not start a thread now, use `/thread:add`. |
+| `/thread:continue <id> <message>` | Send a follow-up to a finished thread (a lane thread continues its provider's session). When the main session has changed something the thread needs to know, Claude opens the message with a "Since your last turn:" note. |
+| `/thread:report [id]` | Pull a thread's digest into this session. With no id, picks the one unreported thread this session started. |
+| `/thread:status` | List threads with their milestone, state, context, agent or model, turns, tokens used, reported status and who started them. |
+| `/thread:end <id>` | End a thread, stopping it if it is running, and mark its card done. |
+| `/thread:board [--stop] [--parent <id>] [--tunnel [stop]]` | List the cards by stage (a card with items waiting for you shows `(2 waiting)`) and print the board link, which opens the project on its Summary. `--parent <id>` shows the report for one milestone instead. Milestones are listed in their own section, with their state. `--stop` stops the board web page (and a tunnel). `--tunnel` also prints a remote link for your phone, through a Cloudflare tunnel that lasts 12 hours, after asking you first; `--tunnel stop` closes it. See [Opening the board from your phone](security.md#opening-the-board-from-your-phone-tunnel). |
+| `/thread:add [--bug] [--idea] [--milestone] [--priority high\|low] [--label <x>] [--blocked-by <ids>] [--agent <name>] [--parent <id>] [--lane <name>] [--criteria "<line>"] <card>` | Add a card without acting on it. It is a task unless you say otherwise. `--bug` makes it a bug, `--idea` an idea, `--milestone` a milestone (which takes none of the card fields below). `--priority` sets high or low. `--label` adds a label (repeat it or use a comma list). `--blocked-by` names the cards it waits for (`c4,c7`). `--criteria` adds an acceptance criterion (repeat it). `--parent` puts the card under a milestone. `--lane` or `--agent` labels a task or idea with a [delegation lane](delegation.md#delegation-lanes) or a sub-agent. Words work too: "bug: the export button is broken" makes a bug. Flags win over words. |
+| `/thread:setup [--show] [--reset]` | Choose chat-only or the task board, your own stages, whether an answer or report click on the board [wakes an idle session](reviews-and-waking.md#waking-the-session), whether new threads use a [Graphify code map](threads.md#code-maps-graphify), whether this project's cards are [kept in the repo](storage-and-sync.md#keeping-the-board-in-your-repo-claudethread), and whether that applies to every project or this one. `--show` prints the current settings. `--reset` deletes a settings file. |
+| `/thread:track` | Claude loads this itself (see [How Claude uses the board](agent-behavior.md#how-claude-uses-the-board)), so that an instruction you give mid-task becomes a card, cards move as the work moves, and anything Claude needs from you is put on the card as a [waiting item](reviews-and-waking.md#waiting-for-you). You can also invoke it by hand. |
+
+```text
+/thread:new --agent critic review the retry logic in src/queue.ts for double charges
+/thread:new --full --write apply the rename we discussed to the billing module
+/thread:board --parent c12
+/thread:add --milestone Ship the invoice export
+/thread:add --bug --priority high --label export the CSV has a blank last row
+```
+
+Flags can go anywhere in the line. Thread states map to board stages through the [roles](board.md#custom-stages): running goes to the stage for **working**, finished to **review**, failed to **blocked**, ended to **done**. With the default stages that is In progress, Review, Blocked and Done.

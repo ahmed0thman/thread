@@ -1823,13 +1823,13 @@ test('an exit from the finished stages that came with a pull is remembered by th
   const { c, item } = await reviewed(e);
   await core.answerWait(e.projectDir, c.id, item.id, { verdict: 'approve' });
   await toDone(e, c.id);
-  // another device reopens it (a pull): the file carries the exit
-  const at = new Date(Date.now() + 5).toISOString();
+  // another device reopens it (a pull): the file carries the exit, dated minutes ahead of this clock
+  const at = new Date(Date.now() + 3 * 60 * 1000).toISOString();
   editFile(e.projectDir, c.id, (d) => { d.status = 'new'; d.leftDoneAt = at; d.history.push({ at, by: 'user', type: 'moved', from: 'done', to: 'new' }); });
   await core.updateCard(e.projectDir, c.id, { note: 'touched' }, { source: 'claude' });       // any write that sees the card
-  // pinned as the file gave it, but never later than this machine's now (a file a few ms or minutes ahead)
+  // pinned when this machine saw the exit, never ahead of its own clock: the file's time, minutes ahead, is not believed
   const pinned = Date.parse(overlayOfCard(e, c.id).localLeftDoneAt);
-  assert.ok(pinned <= Date.now() && pinned <= Date.parse(at), 'the pin is not ahead of this machine');
+  assert.ok(Number.isFinite(pinned) && pinned <= Date.now(), 'the pin is not ahead of this machine');
   editFile(e.projectDir, c.id, (d) => { delete d.leftDoneAt; d.history = d.history.filter((h) => h.type !== 'moved'); d.status = 'review'; });
   const card = core.readState(e.projectDir).cards.find((x) => x.id === c.id);
   assert.equal(core.reviewApproved(card, finished), false);

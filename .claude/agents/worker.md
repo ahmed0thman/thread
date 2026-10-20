@@ -19,7 +19,7 @@ You work on `thread`, a Claude Code plugin: side threads plus a local kanban boa
 - **No over-engineering.** Do what the brief says and nothing more.
 
 - **Done test:** `node --test` and `claude plugin validate .`, both from the repository root. A change to a file in `server/board/` also needs a look in headless Chrome against a demo server (see `.claude/CLAUDE.md`, "Checking the board page").
-- **README:** when the brief changes a feature, the README changes with it unless the brief gives that to someone else.
+- **Docs:** when the brief changes a feature, its page in `docs/` (and `docs/commands.md`, `docs/troubleshooting.md`, the index) changes with it unless the brief gives that to someone else. The README front page gets no feature text.
 
 ## Knowing your limits
 

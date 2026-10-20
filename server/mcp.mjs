@@ -191,7 +191,7 @@ const TOOLS = [
   {
     name: 'wait_add',
     description: 'Record something you need from the user on the card for that work, so the board shows it under "Waiting for you" with a red count and a tag on the card. Add an item when you finished work the user must check (kind "review"), have a question (kind "question", or "choice" with 2 to 8 options), or need the user to do something themselves (kind "todo"). ' +
-      'If there is no card for the work yet, add one first with board_add. In the chat give one line only, for example "Waiting on you: c37.w2", not the whole question again. ' +
+      'If there is no card for the work yet, add one first with board_add. In the chat give one line only, the one this tool returns (for example "Waiting on you: c37.w2", linked to the card page when the board runs), not the whole question again. ' +
       'The user answers on the board; their answers stay drafts there until one Send sends them all, so what several items asked arrives together. The answers reach this session, and only the session that asked, with the user\'s next message here (or within a few seconds when waking is on); nothing else arrives by itself. If the user answers in the chat instead, call wait_close with answered_in_chat. ' +
       'It does not move the card. Refused on a milestone, inside a side thread and when the project is chat-only. ' +
       'Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
@@ -1002,7 +1002,7 @@ const HANDLERS = {
       sessionId,
       worker: optStr(args, 'worker'),
     });
-    return `Added ${item.id} [${item.kind}] on ${card.id} "${core.clip(card.title, 60)}". The board shows it under "Waiting for you". In the chat, say only "Waiting on you: ${item.id}". The answer reaches this session with the user's next message here.`;
+    return `Added ${item.id} [${item.kind}] on ${card.id} "${core.clip(card.title, 60)}". The board shows it under "Waiting for you". In the chat, say only this line, as it is: "Waiting on you: ${waitPointer(item.id, card.id)}". The answer reaches this session with the user's next message here.`;
   },
 
   async wait_list(args) {
@@ -1154,12 +1154,23 @@ async function callTool(params) {
   }
 }
 
+// The chat pointer to a waiting item: a Markdown link to its card's page on the running board, so the user can click it where they read
+// the chat; the plain id when this process serves no board or its token cannot be read. It never starts the board.
+function waitPointer(itemId, cardId) {
+  try {
+    if (!board || !boardMod || process.env.THREAD_NO_HTTP === '1') return itemId;
+    return `[${itemId}](${board.url}?t=${boardMod.boardToken()}#/${core.storeKey(core.projectDir())}/${encodeURIComponent(cardId)})`;
+  } catch {
+    return itemId;
+  }
+}
+
 // ---------- instructions ----------
 
 const BOARD_GUIDE = [
-  'thread keeps this project\'s task board; the user reads it on a web page. Use it so nothing is lost and the user is not interrupted.',
+  'thread keeps this project\'s task board; the user reads it on a web page.',
   '- Before you start work the user asked for, put it on the board: board_add, or board_update an existing card to the working stage. An instruction that arrives mid-task becomes a card; do not drop the current task for it.',
-  '- Never put a question, a choice, a review request or a to-do for the user only in the chat. Record it with wait_add on the card for that work (board_add one first if there is none) and write one line in the chat, for example "Waiting on you: c37.w2". Keep working on whatever the answer does not block. If you can do nothing at all until the answer, you may also ask in the chat, but still call wait_add. Put any command the user should run in its own fenced code block, one command per block: the board shows it with a Copy button. Name another card by its id (c12), not by a board URL.',
+  '- Never put a question, a choice, a review request or a to-do for the user only in the chat. Record it with wait_add on the card for that work (board_add one first if there is none) and write in the chat only the line wait_add returns ("Waiting on you: c37.w2", linked to its card); keep that link whenever you name the item. Keep working on whatever the answer does not block. If you can do nothing at all until the answer, you may also ask in the chat, but still call wait_add. Put any command the user should run in its own fenced code block, one command per block: the board shows it with a Copy button. Name another card by its id (c12), not by a board URL.',
   '- Answers arrive as lines "The user answered c37.w2 on the board": act on every one. If the user answers in the chat instead, call wait_close with answered_in_chat.',
   '- Start every Agent call\'s description with the card id in brackets: "[c12] fix the rounding".',
   '- Move cards as the work moves, with the stage ids and roles from board_list. Never mark a card done that you did not verify; a card with acceptance criteria needs an approved review item first.',
