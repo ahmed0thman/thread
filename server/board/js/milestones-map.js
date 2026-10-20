@@ -87,6 +87,11 @@
         else { const x = { from: m.id, to: d, links: [], hand: true }; edges.push(x); edgeAt.set(m.id + '>' + d, x); }
       });
     });
+    // the names the milestones gave their lines (linkNames: the milestone it depends on -> text)
+    order.forEach((m) => {
+      if (m.linkNames === null || typeof m.linkNames !== 'object') return;
+      edges.forEach((e) => { if (e.from === m.id && typeof m.linkNames[e.to] === 'string' && m.linkNames[e.to].trim()) e.name = m.linkNames[e.to].trim(); });
+    });
     const idx = new Map(order.map((m, i) => [m.id, i]));
     const nodes = order.map((m) => {
       const p = progressOf(cards, m.id, config);
@@ -215,12 +220,12 @@
   // ---- milestone map page ----
   // What the view remembers, per project: the mode (the map, or every milestone as a block), the milestone picked on the map ('' = where
   // the project is), the map box's sideways scroll, the milestones whose "Which cards link it" fold is open, a milestone being moved from the
-  // keyboard (`move`: { id, col, row }), the line picked on the map (`edge`: 'from>to'), whether Reset layout asks to be confirmed, and the
+  // keyboard (`move`: { id, col, row }), the line picked on the map (`edge`: 'from>to') and the box open on it (`pop`: { key, mode, draft }), whether Reset layout asks to be confirmed, and the
   // layout that is being saved (`pending`) until the server has answered.
   const msUiAll = new Map();
   function msUi() {
     let u = msUiAll.get(selKey);
-    if (!u) { u = { mode: 'map', sel: '', scroll: 0, open: new Set(), move: null, edge: '', confirmReset: false, pending: null }; msUiAll.set(selKey, u); }
+    if (!u) { u = { mode: 'map', sel: '', scroll: 0, open: new Set(), move: null, edge: '', pop: null, confirmReset: false, pending: null }; msUiAll.set(selKey, u); }
     return u;
   }
   const MS_SVG_NS = 'http://www.w3.org/2000/svg';
@@ -259,6 +264,7 @@
     const u = msUi();
     u.sel = id;
     u.edge = '';
+    u.pop = null;
     renderPane();
     const b = focus ? Array.prototype.find.call(elPane.querySelectorAll('.ms-node'), (x) => x.dataset.id === id) : null;
     if (b) b.focus({ preventScroll: true });
@@ -293,10 +299,14 @@
     const rows = 1 + Math.max(0, mv ? mv.row : 0, ...map.nodes.map((n) => cellOf(n).row));
     const pos = (n) => ({ x: grid.left(cellOf(n).col), y: grid.rowTop(cellOf(n).row) });
     const centre = (n) => { const p = pos(n); return { x: p.x + MS_NODE_W / 2, y: p.y + MS_R + 9 }; };
-    const width = MS_PAD * 2 + (cols - 1) * MS_COL + MS_NODE_W;
-    const height = grid.rowTop(rows - 1) + MS_NODE_H + 16;
+    let width = MS_PAD * 2 + (cols - 1) * MS_COL + MS_NODE_W;
+    let height = grid.rowTop(rows - 1) + MS_NODE_H + 16;
     const boxes = map.nodes.map((n) => { const p = pos(n); return { x: p.x - 2, y: p.y - 2, w: MS_NODE_W + 4, h: MS_NODE_H + 4 }; });
     const pills = [];
+    const pillAt = new Map();
+    let popAt = null;
+    // the tab stop of the lines: the one last used while it is still there, else the first
+    const edgeTab = map.edges.some((x) => x.from + '>' + x.to === msEdgeTab) ? msEdgeTab : map.edges.length ? map.edges[0].from + '>' + map.edges[0].to : '';
 
     const box = h('div', 'ms-map-box');
     box.setAttribute('role', 'group');
@@ -304,14 +314,14 @@
     const canvas = h('div', 'ms-map');
     canvas.style.width = width + 'px';
     canvas.style.height = height + 'px';
-    const svg = msSvg('svg', { class: 'ms-edges', width, height, viewBox: '0 0 ' + width + ' ' + height, 'aria-hidden': 'true', focusable: 'false' });
+    const svg = msSvg('svg', { class: 'ms-edges', width, height, viewBox: '0 0 ' + width + ' ' + height, role: 'group', 'aria-label': 'Lines between the milestones', focusable: 'false' });
     if (map.mode === 'order') {
       // number order: a dotted line between neighbours on one row (a milestone moved elsewhere has no line: the order is the numbers')
       for (let i = 1; i < map.nodes.length; i++) {
         const a = map.nodes[i - 1], b = map.nodes[i];
         if (cellOf(a).row !== cellOf(b).row || cellOf(b).col <= cellOf(a).col) continue;
         const p = centre(a), q = centre(b);
-        svg.appendChild(msSvg('line', { class: 'ms-edge ms-edge-order', x1: p.x + MS_R + 4, y1: p.y, x2: q.x - MS_R - 4, y2: q.y }));
+        svg.appendChild(msSvg('line', { class: 'ms-edge ms-edge-order', 'aria-hidden': 'true', x1: p.x + MS_R + 4, y1: p.y, x2: q.x - MS_R - 4, y2: q.y }));
       }
     }
 
@@ -356,8 +366,12 @@
       const onPath = (e.from === sel || up.has(e.from)) && up.has(e.to);
       const cls = 'ms-edge' + (e.cycle ? ' ms-edge-cycle' : '') + (sn.state === 'done' ? ' ms-edge-met' : '') + (onPath ? ' ms-edge-path' : '')
         + (e.hand ? (e.links.length ? ' ms-edge-both' : ' ms-edge-hand') : '') + (u.edge === e.from + '>' + e.to ? ' ms-edge-sel' : '');
-      const g = msSvg('g', { class: cls });
-      const text = e.links.length ? String(e.links.length) + (e.hand ? ' + hand' : '') : 'hand';
+      const key = e.from + '>' + e.to;
+      // each line is a button of its own (a roving tab stop: the one last used, else the first): Enter or a click opens what can be done with it
+      const g = msSvg('g', { class: cls, role: 'button', tabindex: key === (edgeTab || '') ? 0 : -1, 'data-edge': key });
+      g.dataset.edge = key;
+      g.setAttribute('aria-label', msLineLabel(map, e));
+      const text = msLineText(e);
       const w = 10 + text.length * 7;
       // a link back (the milestones wait on each other) leaves the top of the ring of the one that waits, on the right, runs through the
       // gap above the row and comes down on the top of the one it waits for, so it never lies on the line the other way
@@ -368,7 +382,7 @@
         : r.kind === 'straight' ? [[x0, s.y], [x1, t.y]]
           : r.kind === 'step' ? [[x0, s.y], [r.xs, s.y], [r.xs, t.y], [x1, t.y]]
             : [[x0, s.y], [r.xs, s.y], [r.xs, r.cy], [r.xt, r.cy], [r.xt, t.y], [x1, t.y]];
-      g.appendChild(msSvg('path', { d: msRounded(pts, 7) }));
+      g.appendChild(msSvg('path', { d: msRounded(pts, 7), 'aria-hidden': 'true' }));
       g.appendChild(msSvg('path', { class: 'ms-arrow', d: 'M' + (back ? t.x : x1) + ' ' + (back ? t.y - top : t.y) + (back ? ' l-4 -7 h8 z' : ' l-7 -4 v8 z') }));
       // a wider line nobody sees that takes the click: it selects the line, and the details say where it comes from
       g.appendChild(msSvg('path', { class: 'ms-edge-hit', d: msRounded(pts, 7) }));
@@ -378,12 +392,31 @@
       const mid = spots.find((q) => !onNode(rect(q)) && !onPill(rect(q))) || spots.find((q) => !onNode(rect(q))) || spots[0];
 
       pills.push({ x: mid.x - w / 2, y: mid.y - 9, w, h: 18 });
+      pillAt.set(key, mid);
       g.appendChild(msSvg('rect', { class: 'ms-count', x: mid.x - w / 2, y: mid.y - 9, width: w, height: 18, rx: 9 }));
       g.appendChild(msSvg('text', { class: 'ms-count-text', x: mid.x, y: mid.y + 4, 'text-anchor': 'middle' }, text));
       g.addEventListener('click', () => msPickEdge(e));
+      g.addEventListener('keydown', (ev) => msEdgeKey(ev, map, e));
+      g.addEventListener('focus', () => { msEdgeTab = key; });
       svg.appendChild(g);
     });
     canvas.appendChild(svg);
+    // what can be done with the picked line, in a small box on it
+    const popEdge = editable && u.pop ? map.edges.find((x) => x.from + '>' + x.to === u.pop.key) : null;
+    if (popEdge && pillAt.has(u.pop.key)) {
+      const pop = msPopEl(map, popEdge, u);
+      const at = pillAt.get(u.pop.key);
+      const popW = 330, estH = u.pop.mode === 'cards' ? 150 + 38 * popEdge.links.length : u.pop.mode === 'rename' ? 150 : 190;
+      const left = Math.max(8, Math.min(at.x - popW / 2, Math.max(width, popW + 16) - popW - 8));
+      pop.style.left = left + 'px';
+      pop.style.top = (at.y + 16) + 'px';
+      pop.style.width = popW + 'px';
+      if (at.y + 16 + estH + 8 > height) { height = at.y + 16 + estH + 8; canvas.style.height = height + 'px'; }
+      if (left + popW + 8 > width) { width = left + popW + 8; canvas.style.width = width + 'px'; }
+      canvas.appendChild(pop);
+      popAt = { el: pop, at, fresh: !!u.pop.fresh };
+      u.pop.fresh = false;
+    }
     if (looseAuto) {
       const first = map.nodes.find((n) => n.loose && !cellOf(n).saved);
       const lane = h('p', 'ms-lane-label muted', 'Not linked to another milestone');
@@ -459,13 +492,111 @@
     box.appendChild(canvas);
     box.addEventListener('scroll', () => { u.scroll = box.scrollLeft; });
     // what the pointer handlers (milestones-drag.js) work on: this drawing's grid and cells
-    msView = { box, canvas, grid, cells: pl.cells, map, key: selKey, width, height };
+    msView = { box, canvas, grid, cells: pl.cells, map, key: selKey, width, height, pop: popAt };
     return box;
   }
   // On paper the map is scaled down to the page's width instead of being cut off.
   if (typeof window !== 'undefined' && window.addEventListener) {
     window.addEventListener('beforeprint', () => { document.querySelectorAll('.ms-map').forEach((c) => { const w = parseFloat(c.style.width) || 0; if (w > 680) c.style.zoom = String(680 / w); }); });
     window.addEventListener('afterprint', () => { document.querySelectorAll('.ms-map').forEach((c) => { c.style.zoom = ''; }); });
+  }
+
+  // ---- a line: what is written on it, what it says to a screen reader, and the box with what can be done with it ----
+  // The text on a line's count: its name (cut to fit) with the number of card links after it, else the number and "+ hand", else "hand".
+  // The characters of a text as a person counts them (a letter with its accents, an emoji), not as the code units of the string.
+  function msGraphemes(t) {
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(t), (x) => x.segment);
+    return Array.from(t);
+  }
+  const MS_PILL_CHARS = 23;   // what fits on a line between two columns (the count's box is 7 px a character, in MS_COL - 28 px)
+  function msLineText(e) {
+    const n = e.links.length;
+    if (e.name) {
+      const tail = n ? ' · ' + n : '';
+      const room = Math.max(6, MS_PILL_CHARS - tail.length);
+      const g = msGraphemes(e.name);
+      return (g.length > room ? g.slice(0, room - 1).join('') + '…' : e.name) + tail;
+    }
+    return n ? String(n) + (e.hand ? ' + hand' : '') : 'hand';
+  }
+  // Where a line comes from, in words.
+  function msLineSource(e) {
+    if (!e.links.length) return 'Drawn by hand.';
+    const cards = e.links.slice(0, 4).map((l) => l.card + ' → ' + l.by).join(', ') + (e.links.length > 4 ? ' and ' + (e.links.length - 4) + ' more' : '');
+    return 'From cards ' + cards + (e.hand ? ', and drawn by hand too' : '') + '.';
+  }
+  function msLineLabel(map, e) {
+    const at = new Map(map.nodes.map((x) => [x.id, x]));
+    return 'Line: ' + msName(at.get(e.from)) + ' depends on ' + msName(at.get(e.to)) + (e.name ? ', named "' + e.name + '"' : '') + (e.cycle ? ', part of a cycle' : '') + '. ' + msLineSource(e) + ' Enter or Delete: open its options (name it, remove it).';
+  }
+  // The box on a line: its name, where it comes from, and Rename, Remove link (a hand link) and Remove card links (with a list to confirm first).
+  function msPopEl(map, e, u) {
+    const at = new Map(map.nodes.map((x) => [x.id, x]));
+    const byId = new Map(current.cards.map((c) => [c.id, c]));
+    const cardName = (id) => { const c = byId.get(id); return id + (c ? ' "' + clip(c.title, 30) + '"' : ''); };
+    const title = msName(at.get(e.from)) + ' depends on ' + msName(at.get(e.to));
+    const pop = h('div', 'ms-pop');
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', 'The line: ' + title);
+    // a key that is held must not press a button again and again: the box opens on the key that confirms what is in it
+    pop.addEventListener('keydown', (ev) => { if (ev.repeat && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); return; } if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); if (u.pop && u.pop.mode !== 'view') msOpenPop(u.pop.key, 'view'); else msClosePop(true); } });
+    const head = h('div', 'ms-pop-head');
+    head.append(h('strong', 'ms-pop-title', title), plainBtn('Close', 'small ghost ms-pop-x', () => msClosePop(true)));
+    pop.appendChild(head);
+    pop.appendChild(h('p', 'ms-pop-row', msLineSource(e)));
+    if (e.name) pop.appendChild(h('p', 'ms-pop-row', 'Name: "' + e.name + '"'));
+    const row = h('div', 'ms-pop-actions');
+    if (u.pop.mode === 'rename') {
+      const lab = h('label', 'ms-edit-k', 'Name of the line');
+      lab.setAttribute('for', 'ms-pop-name');
+      const input = h('input', 'ms-pop-input');
+      input.id = 'ms-pop-name';
+      input.type = 'text';
+      input.maxLength = 40;
+      input.value = u.pop.draft;
+      input.addEventListener('input', () => { u.pop.draft = input.value; });
+      input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); msRenameLine(e, input.value); } });
+      pop.append(lab, input, h('p', 'ms-pop-row muted', 'Up to 40 characters. Empty takes the name away. Enter saves, Escape goes back.'));
+      row.append(plainBtn('Save', 'small', () => msRenameLine(e, input.value)), plainBtn('Cancel', 'small', () => msOpenPop(u.pop.key, 'view')));
+    } else if (u.pop.mode === 'cards') {
+      pop.appendChild(h('p', 'ms-pop-row', 'Take the line off these cards?'));
+      const ul = h('ul', 'ms-pop-list');
+      e.links.forEach((l) => ul.appendChild(h('li', null, cardName(l.card) + ' will no longer be blocked by ' + cardName(l.by))));
+      pop.appendChild(ul);
+      const go = plainBtn('Remove card links', 'small ms-pop-danger', () => msRemoveCardLinks(e));
+      row.append(go, plainBtn('Back', 'small', () => msOpenPop(u.pop.key, 'view')));
+    } else {
+      row.appendChild(plainBtn(e.name ? 'Rename' : 'Name it', 'small', () => msOpenPop(u.pop.key, 'rename')));
+      if (e.hand) row.appendChild(plainBtn('Remove link', 'small ms-pop-danger', () => msRemoveLink(e.from, e.to)));
+      if (e.links.length) row.appendChild(plainBtn('Remove card links…', 'small ms-pop-danger', () => msOpenPop(u.pop.key, 'cards')));
+    }
+    pop.appendChild(row);
+    return pop;
+  }
+
+  // Puts the box of a line where it can be read: as wide as the map's box allows (up to 330 px), inside what is shown of it sideways, with the map
+  // made as tall (and wide) as the box measured needs, so nothing is cut off. Run once the pane holds the map and has a width.
+  function msPlacePop(box) {
+    const pv = msView && msView.pop;
+    if (!pv) return;
+    const canvas = msView.canvas;
+    const cw = box.clientWidth || 330;
+    const popW = Math.min(330, Math.max(240, cw - 16));
+    pv.el.style.width = popW + 'px';
+    const wide = Math.max(parseFloat(canvas.style.width) || 0, pv.at.x + popW / 2 + 8);
+    canvas.style.width = wide + 'px';
+    // the line in view, then the box on it, inside what is shown
+    if (pv.at.x < (box.scrollLeft || 0) + 24 || pv.at.x > (box.scrollLeft || 0) + cw - 24) box.scrollLeft = Math.max(0, pv.at.x - cw / 2);
+    const sl = box.scrollLeft || 0;
+    const left = Math.max(sl + 8, Math.min(pv.at.x - popW / 2, sl + cw - popW - 8));
+    const top = pv.at.y + 16;
+    pv.el.style.left = left + 'px';
+    pv.el.style.top = top + 'px';
+    const need = top + (pv.el.offsetHeight || 0) + 8;
+    if (need > (parseFloat(canvas.style.height) || 0)) canvas.style.height = need + 'px';
+    msView.height = Math.max(msView.height, need);
+    msView.width = Math.max(msView.width, wide);
+    if (pv.fresh && pv.el.scrollIntoView) pv.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
   // The key under the map: what each mark means, so the shapes and lines never rely on colour.
@@ -494,13 +625,14 @@
     const editable = msCanEdit();
     const box = h('div', 'ms-rel');
     const pickBtn = (id, extra) => {
-      const b = plainBtn(msName(at.get(id)) + (extra || ''), 'small ghost ms-rel-btn', () => { msEndMove(); u.sel = id; u.mode = 'map'; u.edge = ''; renderPane(); });
+      const b = plainBtn(msName(at.get(id)) + (extra || ''), 'small ghost ms-rel-btn', () => { msEndMove(); u.sel = id; u.mode = 'map'; u.edge = ''; u.pop = null; renderPane(); });
       b.title = at.get(id).title;
       return b;
     };
     const rmBtn = (from, to) => {
       const text = msName(at.get(from)) + ' depends on ' + msName(at.get(to));
       const b = plainBtn('Remove', 'small ghost ms-rel-rm', () => msRemoveLink(from, to));
+      b.dataset.id = 'rm:' + from + '>' + to;
       b.setAttribute('aria-label', 'Remove the link you drew: ' + text);
       b.title = 'Remove the link you drew: ' + text;
       return b;
@@ -523,10 +655,18 @@
       return box;
     }
     const edgeOf = (from, to) => map.edges.find((e) => e.from === from && e.to === to) || { links: [] };
-    const how = (from, to) => { const e = edgeOf(from, to); const k = e.links.length; return (k ? msPlural(k, 'link', 'links') : '') + (e.hand ? (k ? ' + ' : '') + 'drawn by hand' : ''); };
+    const how = (from, to) => { const e = edgeOf(from, to); const k = e.links.length; return (e.name ? '"' + clip(e.name, 24) + '" · ' : '') + (k ? msPlural(k, 'link', 'links') : '') + (e.hand ? (k ? ' + ' : '') + 'drawn by hand' : ''); };
     const handOf = (from, to) => !!edgeOf(from, to).hand;
-    row('Depends on', n.deps, (d) => ' · ' + how(n.id, d) + (at.get(d).state === 'done' ? ' · done' : ''), (d) => (editable && handOf(n.id, d) ? rmBtn(n.id, d) : null));
-    row('Needed by', n.neededBy, (w) => (handOf(w, n.id) ? ' · ' + how(w, n.id) : ''), (w) => (editable && handOf(w, n.id) ? rmBtn(w, n.id) : null));
+    // a button on every line opens the same box as a click on it on the map: its name and how to remove it
+    const lineBtn = (from, to) => {
+      const b = plainBtn('Line', 'small ghost ms-rel-line', () => msOpenPop(from + '>' + to, 'view'));
+      b.dataset.id = 'line:' + from + '>' + to;
+      b.setAttribute('aria-label', 'The line: ' + msName(at.get(from)) + ' depends on ' + msName(at.get(to)) + ': name it or remove it');
+      return b;
+    };
+    const tail = (from, to) => { if (!editable) return null; const w = h('span', 'ms-rel-tools'); w.appendChild(lineBtn(from, to)); if (handOf(from, to)) w.appendChild(rmBtn(from, to)); return w; };
+    row('Depends on', n.deps, (d) => ' · ' + how(n.id, d) + (at.get(d).state === 'done' ? ' · done' : ''), (d) => tail(n.id, d));
+    row('Needed by', n.neededBy, (w) => { const t = how(w, n.id); return t ? ' · ' + t : ''; }, (w) => tail(w, n.id));
     // the line that was clicked on the map: where it comes from, and whether it can be removed here
     const picked = u.edge ? map.edges.find((e) => e.from + '>' + e.to === u.edge && (e.from === n.id || e.to === n.id)) : null;
     if (picked) {
@@ -534,9 +674,8 @@
       p.appendChild(h('span', 'ms-rel-k', 'Selected line'));
       const cardsText = picked.links.slice(0, 4).map((l) => l.card + ' → ' + l.by).join(', ') + (picked.links.length > 4 ? ' and ' + (picked.links.length - 4) + ' more' : '');
       p.appendChild(h('span', null, msName(at.get(picked.from)) + ' depends on ' + msName(at.get(picked.to)) + '. '
-        + (picked.links.length ? 'It comes from cards ' + cardsText + (picked.hand ? ', and you drew it by hand too' : '') + '.' : 'You drew it by hand.')));
-      if (picked.links.length && !picked.hand) p.appendChild(h('span', 'muted', ' Edit those cards to change it.'));
-      if (editable && picked.hand) p.appendChild(rmBtn(picked.from, picked.to));
+        + (picked.links.length ? 'It comes from cards ' + cardsText + (picked.hand ? ', and you drew it by hand too' : '') + '.' : 'You drew it by hand.') + (picked.name ? ' Named "' + picked.name + '".' : '')));
+      if (editable) { const lb = lineBtn(picked.from, picked.to); lb.dataset.id += ':note'; p.appendChild(lb); }
       box.appendChild(p);
     }
     const up = msUpstream(map, n.id).filter((id) => at.get(id).state !== 'done');
@@ -633,7 +772,7 @@
   function msMapSig(map) {
     const byId = new Map(current.cards.map((c) => [c.id, c]));
     const title = (id) => { const c = byId.get(id); return c ? [c.title, c.kind === 'milestone' ? '' : String(finishedIn(c, cfg()))] : null; };
-    return map.edges.map((e) => [e.from, e.to, !!e.cycle, ...(e.hand ? [true] : []), e.links.map((l) => [l.card, l.by, title(l.card), title(l.by)])]);
+    return map.edges.map((e) => [e.from, e.to, !!e.cycle, ...(e.hand ? [true] : []), ...(e.name ? [e.name] : []), e.links.map((l) => [l.card, l.by, title(l.card), title(l.by)])]);
   }
 
   // The picked milestone's block is in a polite live region that stays the same element from one drawing to the next, so a screen
@@ -655,6 +794,7 @@
     // run once the pane holds it and has a width: the old sideways scroll, moved just enough to show the picked milestone (or the cell it is being moved to)
     return () => {
       if (!n) return;
+      msPlacePop(box);
       const cell = u.move && u.move.id === n.id ? u.move : pl.cells.get(n.id);
       const x = MS_PAD + cell.col * MS_COL;
       let left = u.scroll;

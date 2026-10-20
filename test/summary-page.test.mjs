@@ -16,7 +16,7 @@ const block = (name) => {
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
 const S = vm.runInNewContext(
-  `${block('tokens and agents')}\n${block('milestones and stages')}\n${block('milestone map model')}\n${block('summary')}\n({ summaryModel, weekEdges, weekOf, completedAt, stageTimes, median, chartScale, spanText, derivedWorker })`,
+  `${block('tokens and agents')}\n${block('milestones and stages')}\n${block('milestone map model')}\n${block('summary')}\n({ summaryModel, weekEdges, dayEdges, sumLabelStride, weekOf, completedAt, stageTimes, median, chartScale, spanText, derivedWorker })`,
   {},
 );
 
@@ -901,7 +901,7 @@ test('the filter bar sets, shows and clears filters, redraws the Summary and kee
   t.page.renderSummary();
   const sel = (id) => t.pane.querySelector('select[data-id="' + id + '"]');
   assert.equal(sel('sum-range').value, '8');
-  assert.deepEqual(sel('sum-range').querySelectorAll('option').map((o) => o.textContent), ['Last 4 weeks', 'Last 8 weeks', 'Last 12 weeks', 'Last 26 weeks']);
+  assert.deepEqual(sel('sum-range').querySelectorAll('option').map((o) => o.textContent), ['Last 7 days', 'Last 4 weeks', 'Last 8 weeks', 'Last 12 weeks', 'Last 26 weeks']);
   assert.deepEqual(sel('sum-milestone').querySelectorAll('option').map((o) => o.textContent), ['All milestones', 'Checkout', 'Launch', 'No milestone']);
   assert.equal(t.pane.querySelector('.toolbar-note').textContent, '', 'nothing is set: no count, no button');
   // a card filter: the count, the accent look, the redraw, the tiles
@@ -961,4 +961,136 @@ test('filters that cannot be stored or read still work, and a stored value that 
   const notJson = summaryPage(shop(), CUSTOM, { sessionStorage: fakeStore({ 'thread.summary.filters': 'nope' }) });
   notJson.page.renderSummary();
   assert.equal(notJson.pane.querySelectorAll('.sum-tile').length, 5);
+});
+
+// ---------------------------------------------------------------- the last 7 days: one point per day
+
+test('the 7-day range has one bucket per local day, today last, and a card is counted on the day its time falls in, at the edges too', () => {
+  const edges = plain(S.dayEdges(NOW, 7));
+  assert.equal(edges.length, 8);
+  edges.forEach((e) => { const d = new Date(e); assert.deepEqual([d.getHours(), d.getMinutes()], [0, 0]); });
+  assert.equal(edges[0], local(2026, 10, 8).getTime());
+  assert.equal(edges[7], local(2026, 10, 15).getTime(), 'the last edge is the end of today');
+  const cards = [
+    card({ createdAt: iso(local(2026, 10, 14, 0, 0, 0, 0)), status: 'new' }),                        // today, at midnight
+    card({ createdAt: iso(local(2026, 10, 13, 23, 59, 59, 999)), status: 'new' }),                   // the last millisecond of yesterday
+    card({ createdAt: iso(local(2026, 10, 8)), status: 'new' }),                                     // the first day shown
+    card({ createdAt: iso(local(2026, 10, 7, 23, 59)), status: 'new' }),                             // the day before: not shown, but a backlog card
+    card({ createdAt: iso(local(2026, 10, 12, 18)), status: 'done', history: [{ at: iso(local(2026, 10, 12, 18)), type: 'created', to: 'new' }, { at: iso(local(2026, 10, 13, 10)), type: 'moved', from: 'new', to: 'done' }] }),
+    card({ createdAt: null, status: 'new' }),                                                         // no creation time
+    card({ createdAt: iso(local(2026, 10, 9)), status: 'done', updatedAt: 'nope' }),                  // finished, no completion time
+  ];
+  const m = model(cards, DEFAULT, NOW, { range: '7d' });
+  assert.equal(m.unit, 'day');
+  assert.equal(m.weeks.length, 7);
+  assert.deepEqual(m.weeks.map((w) => w.start), edges.slice(0, 7));
+  assert.deepEqual(m.weeks.map((w) => w.end), edges.slice(1));
+  assert.deepEqual(m.weeks.map((w) => w.created), [1, 1, 0, 0, 1, 1, 1]);
+  assert.deepEqual(m.weeks.map((w) => w.done), [0, 0, 0, 0, 0, 1, 0]);
+  // open at the end of each day: the backlog card, the card of the first day, the one from the 12th until its completion on the 13th
+  assert.deepEqual(m.weeks.map((w) => w.open), [2, 2, 2, 2, 3, 3, 4]);
+  assert.equal(m.weeks[6].open, m.tiles.open - 1, 'today is the Open tile, less the card with no creation time');
+  assert.equal(model(cards, DEFAULT, NOW, { range: 8 }).unit, 'week');
+  assert.equal(model(cards, DEFAULT, NOW).unit, 'week');
+});
+
+test('a day with a clock change is still one day: every edge is a local midnight and the dates follow each other', () => {
+  for (const now of [local(2026, 3, 9, 12), local(2026, 3, 30, 12), local(2026, 10, 27, 12), local(2026, 11, 2, 12), local(2026, 10, 25, 12)]) {
+    const edges = plain(S.dayEdges(now.getTime(), 7));
+    assert.equal(edges.length, 8);
+    edges.forEach((e) => assert.deepEqual([new Date(e).getHours(), new Date(e).getMinutes()], [0, 0], new Date(e).toString()));
+    for (let i = 1; i < edges.length; i++) {
+      const a = new Date(edges[i - 1]), b = new Date(edges[i]);
+      assert.equal(new Date(a.getFullYear(), a.getMonth(), a.getDate() + 1).getTime(), b.getTime(), 'consecutive dates');
+      assert.ok(b - a >= 23 * HOUR && b - a <= 25 * HOUR);
+    }
+    const last = new Date(edges[6]);
+    assert.deepEqual([last.getFullYear(), last.getMonth(), last.getDate()], [now.getFullYear(), now.getMonth(), now.getDate()], 'the last day is today');
+  }
+  // a card made at 23:30 on any of those days counts on that day
+  const now = local(2026, 10, 27, 12).getTime();
+  const m = model([card({ createdAt: iso(local(2026, 10, 25, 23, 30)) }), card({ createdAt: iso(local(2026, 10, 26, 0, 30)) })], DEFAULT, now, { range: '7d' });
+  assert.deepEqual(m.weeks.map((w) => w.created), [0, 0, 0, 0, 1, 1, 0]);
+});
+
+test('the range falls back to 8 weeks for a value nothing offers, and the 7-day range is text an older page does not take for a number', () => {
+  const weeks = (range) => model([card({})], DEFAULT, NOW, { range }).weeks.length;
+  assert.equal(weeks('7d'), 7);
+  for (const bad of ['3d', '7', 7, 'day', '7D', '7d ', {}, [], true, NaN, 'Infinity']) assert.equal(weeks(bad), 8, JSON.stringify(bad));
+  assert.equal(weeks('12'), 12);
+  // what an older page does with the stored text: Number('7d') is NaN, which is in none of its lists, so it takes 8 weeks
+  assert.equal([4, 8, 12, 26].includes(Number('7d')), false);
+  assert.equal(model([card({})], DEFAULT, NOW, { range: '7d' }).filters.range, '7d');
+  assert.equal(model([card({})], DEFAULT, NOW, { range: 'x' }).filters.range, 8);
+});
+
+test('the labels under the axis are thinned by the space between points, and the current one is always named', () => {
+  assert.equal(S.sumLabelStride(60, 'day'), 1, 'seven days fit');
+  assert.equal(S.sumLabelStride(60, 'week'), 1);
+  assert.equal(S.sumLabelStride(14.8, 'week'), 4);
+  assert.equal(S.sumLabelStride(20, 'day'), 3);
+  assert.equal(S.sumLabelStride(1000, 'day'), 1);
+  assert.equal(S.sumLabelStride(0.5, 'week'), 92);
+  const t = summaryPage(demoCards(), CUSTOM, { sessionStorage: fakeStore({ 'thread.summary.filters': JSON.stringify({ k1: { range: '7d' } }) }) });
+  t.page.renderSummary();
+  const ticks = t.pane.querySelectorAll('.sum-svg text.tick').slice(5 + 3).map((x) => x.textContent);   // after the five and three values on the side
+  assert.equal(ticks.length, 7);
+  assert.equal(ticks[6], 'Today');
+  assert.deepEqual(ticks.slice(0, 6), ['Thu 8', 'Fri 9', 'Sat 10', 'Sun 11', 'Mon 12', 'Tue 13'], 'a short weekday and the date, today as Today');
+});
+
+test('the 7-day chart says days, shows the date in the tooltip and the table, and keeps the keyboard, the clamp and the filters working', () => {
+  const store = fakeStore();
+  const t = summaryPage(demoCards(), CUSTOM, { sessionStorage: store });
+  t.page.renderSummary();
+  const range = () => t.pane.querySelector('select[data-id="sum-range"]');
+  assert.equal(range().value, '8');
+  assert.deepEqual(range().querySelectorAll('option').map((o) => o.value), ['7d', '4', '8', '12', '26']);
+  range().value = '7d';
+  range().fire('change');
+  assert.equal(range().value, '7d');
+  assert.match(range().className, /is-set/);
+  assert.equal(JSON.parse(store.m['thread.summary.filters']).k1.range, '7d');
+  const flow = t.pane.querySelector('.sum-flow');
+  assert.match(flow.textContent, /Created, done and open by day/);
+  assert.match(flow.textContent, /Last 7 days, one point per day/);
+  assert.match(flow.textContent, /Open at day end/);
+  assert.doesNotMatch(flow.querySelector('.sum-sub').textContent, /week/);
+  const svg = flow.querySelector('svg');
+  assert.match(svg.getAttribute('aria-label'), /day by day over the last 7 days/);
+  assert.match(flow.querySelector('.sum-chart').getAttribute('aria-label'), /Daily chart.*days/);
+  assert.equal(t.pane.querySelectorAll('.sum-svg .pt-done').length, 7);
+  // the table
+  const rows = t.pane.querySelectorAll('.sum-table tbody tr');
+  assert.equal(rows.length, 7);
+  assert.equal(rows[0].querySelector('th').textContent, 'Thu, Oct 8');
+  assert.equal(rows[6].querySelector('th').textContent, 'Wed, Oct 14 (open now)');
+  assert.deepEqual(t.pane.querySelectorAll('.sum-table thead th').map((x) => x.textContent), ['Day', 'Created', 'Done', 'Open at day end']);
+  // the tooltip by keyboard and pointer
+  const box = flow.querySelector('.sum-chart');
+  const tip = box.querySelector('.sum-tip');
+  box.fire('focus');
+  assert.match(tip.textContent, /^Wed, Oct 14 \(today\)Created0Done0Open now2$/);
+  box.fire('keydown', { key: 'ArrowLeft' });
+  assert.match(tip.textContent, /^Tue, Oct 13Created1Done1Open at day end2$/);
+  assert.match(box.querySelector('.sr-only').textContent, /^Tue, Oct 13: Created 1, Done 1, Open at day end 2$/);
+  box.querySelector('svg').rect = { left: 0, width: 420 };
+  box.offsetWidth = 150; tip.offsetWidth = 140;
+  for (const k of ['Home', 'End']) { box.fire('keydown', { key: k }); assert.ok(parseFloat(tip.style.left) >= 0 && parseFloat(tip.style.left) + 140 <= 150, k); }
+  box.fire('pointermove', { clientX: 42 });
+  assert.match(tip.textContent, /^Thu, Oct 8/);
+  // Clear filters (the range counts) goes back to the default weeks
+  t.pane.querySelector('.toolbar-note .btn').click();
+  assert.equal(range().value, '8');
+  assert.match(t.pane.querySelector('.sum-flow').textContent, /Created, done and open by week/);
+  assert.equal(JSON.parse(store.m['thread.summary.filters']).k1.range, 8);
+  // a page that finds 7d in the store keeps it per project, and a card filter works in the day range as well
+  const again = summaryPage(shop(), CUSTOM, { sessionStorage: fakeStore({ 'thread.summary.filters': JSON.stringify({ k1: { range: '7d', type: 'bug' } }) }) });
+  again.page.renderSummary();
+  assert.equal(again.pane.querySelectorAll('.sum-svg .pt-open').length, 7);
+  assert.equal(again.pane.querySelector('.tb-count').textContent, '1 of 5 cards');
+  // nothing in these days
+  const quiet = summaryPage([card({ status: 'shipped', createdAt: ago(310 * DAY), updatedAt: ago(300 * DAY) })], CUSTOM, { sessionStorage: fakeStore({ 'thread.summary.filters': JSON.stringify({ k1: { range: '7d' } }) }) });
+  quiet.page.renderSummary();
+  assert.match(quiet.pane.querySelector('.sum-flow').textContent, /Nothing was created or finished in these days, and nothing is open\./);
 });

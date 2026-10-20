@@ -184,7 +184,7 @@ async function handleProject(req, res, projectDir, sub, query, remote = false) {
   const approvalm = method === 'POST' ? /^\/cards\/([A-Za-z0-9_-]{1,64})\/approval$/.exec(sub) : null;
   const isBatch = method === 'POST' && sub === '/waits/answer-batch';
   // The links and the layout of the Milestones map (this machine's owner at the keyboard: closed to the tunnel, see REMOTE_ROUTES)
-  const dependm = method === 'POST' ? /^\/milestones\/([A-Za-z0-9_-]{1,64})\/depends-on$/.exec(sub) : null;
+  const dependm = method === 'POST' ? /^\/milestones\/([A-Za-z0-9_-]{1,64})\/(depends-on|link-name|unlink-cards)$/.exec(sub) : null;
   const isLayout = (method === 'PUT' || method === 'DELETE') && sub === '/milestone-layout';
   const known = isState || isAgents || isLanes || isCardCreate || !!rm || !!stopm || !!waitm || !!notifym || !!approvalm || isBatch || !!dependm || isLayout || (cm && (method === 'PATCH' || method === 'DELETE')) || (sm && method === 'POST') || THREAD_ROUTES.has(threadRoute);
   if (!known) {
@@ -294,7 +294,22 @@ async function handleProject(req, res, projectDir, sub, query, remote = false) {
     // One link drawn by hand on the map: { add: <milestone id> } makes this milestone depend on that one, { remove: <id> } takes it away.
     requireJson(req);
     const body = await readJsonBody(req);
-    for (const k of Object.keys(body)) if (k !== 'add' && k !== 'remove') throw new HttpError(400, `unknown key ${k.slice(0, 40)}; a milestone link takes: add or remove`);
+    const allowed = dependm[2] === 'depends-on' ? ['add', 'remove'] : dependm[2] === 'link-name' ? ['link', 'name'] : ['dep', 'cards'];
+    for (const k of Object.keys(body)) if (!allowed.includes(k)) throw new HttpError(400, `unknown key ${k.slice(0, 40)}; this route takes: ${allowed.join(', ')}`);
+    if (dependm[2] === 'link-name') {
+      // Names (or, with an empty name, unnames) the line from the milestone `link` to this one.
+      send(res, 200, viewOf(await core.setLinkName(projectDir, dependm[1], pick(body, ['link', 'name']), { source: 'user' })));
+      return;
+    }
+    if (dependm[2] === 'unlink-cards') {
+      // Takes the card links that make the line from the milestone `dep` to this one off their cards, through the normal card update.
+      if (typeof body.dep !== 'string') throw new HttpError(400, 'dep must be the card id of the milestone the line comes from');
+      if (!Array.isArray(body.cards)) throw new HttpError(400, 'cards must be the list of [card, blocker] pairs that were confirmed');
+      const { removed, skipped, cards } = await core.removeCardLinks(projectDir, dependm[1], body.dep, body.cards, { source: 'user' });
+      const st = core.readState(projectDir);
+      send(res, 200, { removed, skipped, cards: cards.map((c) => withViews(core.cardById(st.cards, c.id) || c, core.readConfig(projectDir), st.cards, st.aliases)) });
+      return;
+    }
     const card = await core.changeMilestoneLink(projectDir, dependm[1], pick(body, ['add', 'remove']), { source: 'user' });
     send(res, 200, viewOf(card));
     return;
@@ -668,6 +683,8 @@ function withViews(card, cfg, cards, aliases) {
     // the links drawn by hand to milestones that are still there (a file written by hand or an older version can name anything)
     const links = core.liveDependsOn(card, cards, aliases);
     if (links.length) view.dependsOn = links; else delete view.dependsOn;
+    const names = core.liveLinkNames(card, cards, aliases);
+    if (Object.keys(names).length) view.linkNames = names; else delete view.linkNames;
     view.progress = core.milestoneProgress(cards, card.id, cfg);
     view.msState = core.milestoneState(cards, card.id, cfg);
     return threadView(view);

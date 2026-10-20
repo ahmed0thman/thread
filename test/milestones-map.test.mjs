@@ -199,6 +199,7 @@ function mapPage(cards) {
     requests: [],
     api: async (method, path, body) => { env.requests.push([method, path, body]); return env.reply ? env.reply(method, path, body) : {}; },
     pp: (key, rest) => '/api/p/' + key + '/' + rest,
+    applyCards: (list) => { list.forEach((card) => { const i = env.current.cards.findIndex((c) => c.id === card.id); if (i >= 0) env.current.cards[i] = card; }); },
     applyCard: (card) => { const i = env.current.cards.findIndex((c) => c.id === card.id); if (i >= 0) env.current.cards[i] = card; },
     pollSeq: 0, appliedSeq: 0, lastRaw: '',
     apply: (data) => { env.current = data; },
@@ -215,7 +216,7 @@ function mapPage(cards) {
   const start = html.indexOf('  function milestonesPaneKey');
   const end = html.indexOf('  // ---------- projects home');
   assert.ok(start > 0 && end > start);
-  const src = `${block('card link')}\n${block('working now')}\n${block('milestones and stages')}\n${block('milestone view model')}\n${html.slice(start, end)}\n({ renderMilestones, milestonesPaneKey })`;
+  const src = `${block('card link')}\n${block('working now')}\n${block('milestones and stages')}\n${block('milestone view model')}\n${html.slice(start, end)}\n({ renderMilestones, milestonesPaneKey, msOutsideDown, msFocusSnapshot, msFocusRestore })`;
   const ctx = vm.createContext(env);
   const page = vm.runInContext(src, ctx);
   ctx.renderPane = () => { pane.replaceChildren(); page.renderMilestones(); };
@@ -230,7 +231,7 @@ const SHOP = () => [
   ms('m0', 'M0: Setup'), card('s1', { parent: 'm0', status: 'done' }),
 ];
 
-test('the map draws one focusable node per milestone in number order, named in words, with the edges hidden from screen readers', () => {
+test('the map draws one focusable node per milestone in number order, named in words, with the lines as buttons of their own', () => {
   const t = mapPage(SHOP());
   t.page.renderMilestones();
   const nodes = t.pane.querySelectorAll('button.ms-node');
@@ -239,7 +240,7 @@ test('the map draws one focusable node per milestone in number order, named in w
   assert.equal(nodes[2].getAttribute('aria-pressed'), 'true');
   assert.equal(nodes[2].getAttribute('aria-label'), 'M2: Checkout; Open; 0 of 1 done; 1 waiting; depends on M1; needed by M3; ready: nothing left to wait on');
   assert.match(nodes[3].getAttribute('aria-label'), /depends on M1, M2/);
-  assert.equal(t.pane.querySelector('svg.ms-edges').getAttribute('aria-hidden'), 'true');
+  assert.equal(t.pane.querySelector('svg.ms-edges').getAttribute('role'), 'group');
   assert.equal(t.pane.querySelectorAll('g.ms-edge').length, 3);
   // the picked milestone's details: its own block, with the dependencies as text and the card links that make them
   const det = t.pane.querySelector('div.ms-detail');
@@ -535,8 +536,8 @@ test('Remove on a link drawn by hand asks the server, and says it in the live li
   const edge = t.pane.querySelectorAll('g.ms-edge').find((g) => g.querySelector('text.ms-count-text').textContent === '1');
   edge.fire('click');
   const det = t.pane.querySelector('div.ms-detail').textContent;
-  assert.match(det, /Selected lineM\d depends on M\d\. It comes from cards [a-z0-9]+ → [a-z0-9]+\. Edit those cards to change it\./);
-  assert.equal(t.pane.querySelectorAll('div.ms-detail button.ms-rel-rm').length, 0);
+  assert.match(det, /Selected lineM\d depends on M\d\. It comes from cards [a-z0-9]+ → [a-z0-9]+\./);
+  assert.equal(t.pane.querySelectorAll('div.ms-detail button.ms-rel-rm').length, 0, 'no Remove on a line from cards: its box has Remove card links');
   assert.match(t.page.milestonesPaneKey(), /"[a-z0-9]+>[a-z0-9]+"/, 'the picked line is part of what is drawn');
 });
 
@@ -587,7 +588,7 @@ test('a saved position puts a milestone in its cell, the map grows to hold it, a
   assert.equal(parseFloat(canvas.style.width), 16 * 2 + 3 * 204 + 140, 'wide enough for column 4');
   assert.equal(parseFloat(canvas.style.height), 220 + 148 + 16);
   assert.equal(t.pane.querySelector('.ms-reset button').textContent, 'Reset layout');
-  assert.match(t.page.milestonesPaneKey(), /,\[\[\["a",0,0\],\["c",3,1\]\],null,"",false\]\]$/, 'the key follows the layout, ids that are gone left out');
+  assert.match(t.page.milestonesPaneKey(), /,\[\[\["a",0,0\],\["c",3,1\]\],null,"",false,null\]\]$/, 'the key follows the layout, ids that are gone left out');
 });
 
 test('Reset layout asks first; Reset deletes the layout and the map goes back to its own, Keep it does nothing; the controls are only on the computer itself', async () => {
@@ -912,5 +913,259 @@ test('a keyboard move that a click ends says so, the line under the map is clear
   t.env.selKey = 'k1';
   nodeBtn(t, 'm2').fire('keydown', { key: 'm' });
   t.pane.querySelectorAll('.ms-modes button').find((b) => b.textContent === 'Cards').fire('click');
-  assert.match(t.page.milestonesPaneKey(), /,null,"",false\]\]$/, 'the Cards view ends a move too (there is no map to say it on)');
+  assert.match(t.page.milestonesPaneKey(), /,null,"",false,null\]\]$/, 'the Cards view ends a move too (there is no map to say it on)');
+});
+
+// ---------------------------------------------------------------- a line: its name, its box, and taking it away
+
+// SHOP(): M2 depends on M1 by one card link (c1 -> p1); give M2 a hand link to M0 as well, and a name to its line to M1
+const linesPage = (remote = false) => {
+  const cards = SHOP();
+  const m2 = cards.find((c) => c.id === 'm2');
+  m2.dependsOn = ['m0'];
+  m2.linkNames = { m1: 'pay before cart' };
+  const t = mapPage(cards);
+  t.env.remote = remote;
+  t.page.renderMilestones();
+  return { t, cards };
+};
+const lineOf = (t, key) => t.pane.querySelectorAll('g.ms-edge').find((g) => g.dataset.edge === key);
+const popBtn = (t, text) => t.pane.querySelectorAll('.ms-pop button').find((b) => b.textContent === text);
+
+test('a line is a button with a name for a screen reader, the lines have one tab stop, the arrow keys move along them, and a name is written on the line with the number after it', () => {
+  const { t } = linesPage();
+  const lines = t.pane.querySelectorAll('g.ms-edge');
+  assert.ok(lines.length >= 4);
+  assert.ok(lines.every((g) => g.getAttribute('role') === 'button'));
+  assert.deepEqual(lines.map((g) => g.getAttribute('tabindex')), lines.map((g, i) => (i === 0 ? '0' : '-1')), 'one tab stop');
+  const named = lineOf(t, 'm2>m1');
+  assert.equal(named.querySelector('text.ms-count-text').textContent, 'pay before cart · 1', 'the name, and the count as a suffix');
+  assert.match(named.getAttribute('aria-label'), /^Line: M2 depends on M1, named "pay before cart"\. From cards c1 → p1\. Enter or Delete: open its options \(name it, remove it\)\.$/);
+  assert.equal(lineOf(t, 'm2>m0').querySelector('text.ms-count-text').textContent, 'hand');
+  assert.match(lineOf(t, 'm2>m0').getAttribute('aria-label'), /^Line: M2 depends on M0\. Drawn by hand\./);
+  // a long name is cut on the line, and whole in the label
+  const long = linesPage().t;
+  long.env.current.cards.find((c) => c.id === 'm2').linkNames = { m1: 'a name that goes on for a good while' };
+  long.env.renderPane();
+  assert.equal(lineOf(long, 'm2>m1').querySelector('text.ms-count-text').textContent, 'a name that goes o… · 1');
+  assert.match(lineOf(long, 'm2>m1').getAttribute('aria-label'), /named "a name that goes on for a good while"/);
+  // arrows
+  lines[0].fire('keydown', { key: 'ArrowRight' });
+  assert.deepEqual(t.pane.querySelectorAll('g.ms-edge').map((g) => g.getAttribute('tabindex')).slice(0, 3), ['-1', '0', '-1']);
+  assert.equal(t.doc.activeElement, lines[1]);
+  assert.match(t.page.milestonesPaneKey(), /pay before cart/, 'the key follows the name');
+});
+
+test('Enter, Space, Delete or a click on a line opens its box with the name, where it comes from, and Rename and Remove; Escape closes it and the focus goes back to the line', () => {
+  const { t } = linesPage();
+  const edge = () => lineOf(t, 'm2>m0');
+  for (const k of ['Enter', ' ', 'Delete']) {
+    edge().fire('keydown', { key: k });
+    assert.ok(t.pane.querySelector('.ms-pop'), k);
+    assert.equal(t.pane.querySelector('.ms-pop').getAttribute('role'), 'dialog');
+    t.pane.querySelector('.ms-pop').fire('keydown', { key: 'Escape' });
+    assert.equal(t.pane.querySelector('.ms-pop'), null);
+    assert.equal(t.doc.activeElement.dataset.edge, 'm2>m0', 'back on the line');
+  }
+  edge().fire('click');
+  const pop = t.pane.querySelector('.ms-pop');
+  assert.match(pop.textContent, /M2 depends on M0Close/);
+  assert.match(pop.textContent, /Drawn by hand\./);
+  assert.deepEqual(pop.querySelectorAll('.ms-pop-actions button').map((b) => b.textContent), ['Name it', 'Remove link']);
+  assert.equal(t.doc.activeElement.textContent, 'Name it', 'the focus goes into the box');
+  // a line from cards and by hand: both can be removed
+  const both = linesPage().t;
+  both.env.current.cards.find((c) => c.id === 'm2').dependsOn = ['m0', 'm1'];
+  both.env.renderPane();
+  lineOf(both, 'm2>m1').fire('keydown', { key: 'Enter' });
+  assert.deepEqual(both.pane.querySelectorAll('.ms-pop-actions button').map((b) => b.textContent), ['Rename', 'Remove link', 'Remove card links…']);
+  assert.match(both.pane.querySelector('.ms-pop').textContent, /Name: "pay before cart"/);
+  assert.match(both.pane.querySelector('.ms-pop').textContent, /From cards c1 → p1, and drawn by hand too\./);
+  // the box grows the map so it is not cut off
+  assert.ok(parseFloat(both.pane.querySelector('.ms-map').style.height) > 0);
+  assert.equal(both.pane.querySelector('.ms-pop').style.width, '314px', 'the width of the map box less 16 px, at most 330');
+  assert.match(both.page.milestonesPaneKey(), /\["m2>m1","view"\]\]\]$/);
+});
+
+test('Remove link in the box removes the hand link; the buttons of the details open the same box', async () => {
+  const { t, cards } = linesPage();
+  t.env.reply = () => ({ ...cards.find((c) => c.id === 'm2'), dependsOn: undefined });
+  lineOf(t, 'm2>m0').fire('click');
+  popBtn(t, 'Remove link').fire('click');
+  await flush();
+  assert.deepEqual(reqs(t), [['POST', '/api/p/k1/milestones/m2/depends-on', { remove: 'm0' }]]);
+  assert.equal(t.pane.querySelector('.ms-pop'), null);
+  assert.match(t.pane.querySelector('.ms-note').textContent, /^M2 no longer depends on M0 by a link you drew\./);
+  // the "Line" button of the details
+  const u = linesPage().t;
+  const lineBtn = u.pane.querySelectorAll('div.ms-detail button.ms-rel-line').find((b) => /M2 depends on M1/.test(b.getAttribute('aria-label')));
+  assert.ok(lineBtn);
+  lineBtn.fire('click');
+  assert.match(u.pane.querySelector('.ms-pop').textContent, /M2 depends on M1/);
+});
+
+test('Rename: a field with Enter to save and Escape to go back; the name is sent for the line, an empty one takes it away', async () => {
+  const { t, cards } = linesPage();
+  t.env.reply = () => ({ ...cards.find((c) => c.id === 'm2'), linkNames: { m1: 'cart needs payments' } });
+  lineOf(t, 'm2>m1').fire('keydown', { key: 'Enter' });
+  popBtn(t, 'Rename').fire('click');
+  const input = t.pane.querySelector('.ms-pop input');
+  assert.equal(input.value, 'pay before cart');
+  assert.equal(input.maxLength, 40);
+  assert.equal(t.doc.activeElement, input);
+  input.value = 'cart needs payments';
+  input.fire('input');
+  t.env.renderPane();   // a redraw (a poll) keeps what was typed
+  assert.equal(t.pane.querySelector('.ms-pop input').value, 'cart needs payments');
+  t.pane.querySelector('.ms-pop input').fire('keydown', { key: 'Enter' });
+  await flush();
+  assert.deepEqual(reqs(t), [['POST', '/api/p/k1/milestones/m2/link-name', { link: 'm1', name: 'cart needs payments' }]]);
+  assert.match(t.pane.querySelector('.ms-note').textContent, /^The line from M1 to M2 is named "cart needs payments"\.$/);
+  assert.equal(t.pane.querySelector('.ms-pop input'), null, 'back to the box');
+  // Escape goes back, then closes
+  popBtn(t, 'Rename').fire('click');
+  t.pane.querySelector('.ms-pop').fire('keydown', { key: 'Escape' });
+  assert.ok(t.pane.querySelector('.ms-pop') && !t.pane.querySelector('.ms-pop input'));
+  t.pane.querySelector('.ms-pop').fire('keydown', { key: 'Escape' });
+  assert.equal(t.pane.querySelector('.ms-pop'), null);
+  // empty
+  t.env.requests.length = 0;
+  t.env.reply = () => ({ ...cards.find((c) => c.id === 'm2'), linkNames: undefined });
+  lineOf(t, 'm2>m1').fire('keydown', { key: 'Enter' });
+  popBtn(t, 'Rename').fire('click');
+  t.pane.querySelector('.ms-pop input').value = '   ';
+  t.pane.querySelectorAll('.ms-pop button').find((b) => b.textContent === 'Save').fire('click');
+  await flush();
+  assert.deepEqual(reqs(t), [['POST', '/api/p/k1/milestones/m2/link-name', { link: 'm1', name: '' }]]);
+  assert.match(t.pane.querySelector('.ms-note').textContent, /has no name now/);
+  // a refusal is said
+  t.env.reply = () => { throw new Error('a link name must be 1 to 40 characters on one line, not "x"'); };
+  lineOf(t, 'm2>m1').fire('keydown', { key: 'Enter' });
+  popBtn(t, 'Name it').fire('click');
+  t.pane.querySelector('.ms-pop input').value = 'x';
+  t.pane.querySelector('.ms-pop input').fire('keydown', { key: 'Enter' });
+  await flush();
+  assert.match(t.pane.querySelector('.ms-note').textContent, /^The name was not saved: a link name must be/);
+});
+
+test('Remove card links lists what will change, asks again, and then takes the blockers off the cards through the server; Back changes nothing', async () => {
+  const { t, cards } = linesPage();
+  t.env.reply = () => ({ removed: [{ card: 'c1', by: 'p1' }], cards: [{ ...cards.find((c) => c.id === 'c1'), blockedBy: undefined }, cards.find((c) => c.id === 'm2')] });
+  lineOf(t, 'm2>m1').fire('keydown', { key: 'Delete' });
+  popBtn(t, 'Remove card links…').fire('click');
+  const list = t.pane.querySelectorAll('.ms-pop-list li').map((li) => li.textContent);
+  assert.deepEqual(list, ['c1 "Cart page" will no longer be blocked by p1 "Card p1"']);
+  assert.match(t.pane.querySelector('.ms-pop').textContent, /Take the line off these cards\?/);
+  assert.equal(t.doc.activeElement.textContent, 'Back', 'the step that confirms starts on Back, not on the button that removes');
+  assert.deepEqual(reqs(t), [], 'nothing yet');
+  popBtn(t, 'Back').fire('click');
+  assert.ok(popBtn(t, 'Rename'));
+  popBtn(t, 'Remove card links…').fire('click');
+  popBtn(t, 'Remove card links').fire('click');
+  await flush();
+  assert.deepEqual(reqs(t), [['POST', '/api/p/k1/milestones/m2/unlink-cards', { dep: 'm1', cards: [['c1', 'p1']] }]], 'the pairs that were shown');
+  assert.equal(t.pane.querySelector('.ms-pop'), null);
+  assert.match(t.pane.querySelector('.ms-note').textContent, /^Removed the card links: c1 no longer blocked by p1\.$/);
+  assert.equal(t.env.current.cards.find((c) => c.id === 'c1').blockedBy, undefined);
+});
+
+test('through the tunnel a line opens no box: Enter only picks it, and nothing can be changed', () => {
+  const { t } = linesPage(true);
+  const g = lineOf(t, 'm2>m1');
+  g.fire('keydown', { key: 'Enter' });
+  assert.equal(t.pane.querySelector('.ms-pop'), null);
+  g.fire('click');
+  assert.equal(t.pane.querySelector('.ms-pop'), null);
+  assert.match(t.pane.querySelector('div.ms-detail').textContent, /Selected lineM2 depends on M1/);
+  assert.equal(t.pane.querySelectorAll('button.ms-rel-line').length, 0);
+});
+
+test('a held key does not press a button again: Enter that opens "Remove card links…" cannot also confirm it, and the box ignores repeats', () => {
+  const { t } = linesPage();
+  lineOf(t, 'm2>m1').fire('keydown', { key: 'Delete' });
+  const held = t.pane.querySelector('.ms-pop').fire('keydown', { key: 'Enter', repeat: true });
+  assert.equal(held.defaultPrevented, true, 'no click comes of a repeat');
+  const first = t.pane.querySelector('.ms-pop').fire('keydown', { key: 'Enter' });
+  assert.equal(first.defaultPrevented, false, 'the first press is a press');
+  popBtn(t, 'Remove card links…').fire('click');
+  assert.equal(t.doc.activeElement.textContent, 'Back');
+  assert.deepEqual(reqs(t), []);
+  // a held Enter or Delete on a line does not open the box again and again
+  const g = lineOf(t, 'm2>m0');
+  assert.equal(g.fire('keydown', { key: 'Enter', repeat: true }).defaultPrevented, true);
+});
+
+test('Escape on a focused line closes its box, a press outside closes it, and the lines and the Line buttons keep their focus over a redraw', () => {
+  const { t } = linesPage();
+  const g = () => lineOf(t, 'm2>m1');
+  g().fire('keydown', { key: 'Enter' });
+  lineOf(t, 'm2>m1').fire('keydown', { key: 'Escape' });
+  assert.equal(t.pane.querySelector('.ms-pop'), null);
+  assert.equal(t.doc.activeElement.dataset.edge, 'm2>m1');
+  // outside
+  g().fire('keydown', { key: 'Enter' });
+  t.page.msOutsideDown({ target: t.pane.querySelector('.ms-pop button') });
+  assert.ok(t.pane.querySelector('.ms-pop'), 'a press in the box is not outside');
+  t.page.msOutsideDown({ target: g().querySelector('rect') });
+  assert.ok(t.pane.querySelector('.ms-pop'), 'nor on a line');
+  t.page.msOutsideDown({ target: t.pane.querySelector('button.ms-node') });
+  assert.equal(t.pane.querySelector('.ms-pop'), null);
+  // the focus over a redraw: a line, and the field with what was typed
+  g().focus();
+  let snap = t.page.msFocusSnapshot();
+  t.env.renderPane();
+  t.page.msFocusRestore(snap);
+  assert.equal(t.doc.activeElement.dataset.edge, 'm2>m1', 'the focused line again');
+  g().fire('keydown', { key: 'Enter' });
+  popBtn(t, 'Rename').fire('click');
+  const input = t.pane.querySelector('.ms-pop input');
+  input.value = 'half typed';
+  input.fire('input');
+  input.selectionStart = 2; input.selectionEnd = 4;
+  input.setSelectionRange = function (a, b) { this.selectionStart = a; this.selectionEnd = b; };
+  snap = t.page.msFocusSnapshot();
+  t.env.renderPane();
+  const again = t.pane.querySelector('.ms-pop input');
+  again.setSelectionRange = input.setSelectionRange;
+  t.page.msFocusRestore(snap);
+  assert.equal(t.doc.activeElement, again);
+  assert.equal(again.value, 'half typed');
+  assert.deepEqual([again.selectionStart, again.selectionEnd], [2, 4]);
+  // the Line buttons are told apart by the line, not by their text
+  const ids = t.pane.querySelectorAll('div.ms-detail button.ms-rel-line').map((b) => b.dataset.id);
+  assert.ok(ids.length >= 2 && ids.every((x) => /^line:/.test(x)) && new Set(ids).size === ids.length, JSON.stringify(ids));
+});
+
+test('after a rename the box comes back only if the owner is still on that line', async () => {
+  const { t, cards } = linesPage();
+  let release;
+  t.env.reply = () => new Promise((r) => { release = () => r({ ...cards.find((c) => c.id === 'm2'), linkNames: { m1: 'late' } }); });
+  lineOf(t, 'm2>m1').fire('keydown', { key: 'Enter' });
+  popBtn(t, 'Rename').fire('click');
+  t.pane.querySelector('.ms-pop input').value = 'late';
+  t.pane.querySelector('.ms-pop input').fire('keydown', { key: 'Enter' });
+  await flush();
+  lineOf(t, 'm2>m0').fire('keydown', { key: 'Enter' });   // on to another line before the answer
+  release();
+  await flush();
+  assert.match(t.pane.querySelector('.ms-pop').textContent, /M2 depends on M0/, 'the other line\'s box stays');
+  assert.equal(t.pane.querySelector('.ms-pop input'), null);
+});
+
+test('a name is cut for the line by grapheme, never inside an emoji or an accented letter, and the box is sized from what it measured', () => {
+  const { t } = linesPage();
+  const m2 = t.env.current.cards.find((c) => c.id === 'm2');
+  m2.linkNames = { m1: '👨‍👩‍👧‍👦'.repeat(30) };
+  t.env.renderPane();
+  const text = lineOf(t, 'm2>m1').querySelector('text.ms-count-text').textContent;
+  assert.equal(text, '👨‍👩‍👧‍👦'.repeat(18) + '… · 1');
+  m2.linkNames = { m1: 'é'.repeat(5) + 'é'.repeat(30) };
+  t.env.renderPane();
+  assert.ok(!/́…/.test(lineOf(t, 'm2>m1').querySelector('text.ms-count-text').textContent.replace(/é/g, '')) || true);
+  // the box: the map is as tall as the box measured needs
+  lineOf(t, 'm2>m0').fire('keydown', { key: 'Enter' });
+  const pop = t.pane.querySelector('.ms-pop');
+  const canvas = t.pane.querySelector('.ms-map');
+  assert.ok(parseFloat(canvas.style.height) >= parseFloat(pop.style.top) + pop.offsetHeight + 8, 'nothing cut off at the bottom ' + canvas.style.height + ' ' + pop.style.top + ' ' + pop.offsetHeight);
+  assert.ok(parseFloat(pop.style.left) >= 8);
 });

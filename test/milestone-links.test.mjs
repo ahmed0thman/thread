@@ -443,18 +443,249 @@ for (const ref of RELEASED_REFS) test(`the plugin version at ${ref} keeps a mile
   if (!old) return;
   const e = setupThreadEnv(t);
   const card = (id, extra) => ({ id, kind: 'milestone', title: id, note: '', status: 'new', source: 'claude', seenByClaude: true, createdAt: '2026-10-14T03:00:00.000Z', updatedAt: '2026-10-14T03:00:00.000Z', ...extra });
-  writeStateFile(e.dataDir, e.projectDir, emptyState(e.projectDir, [card('c1', { dependsOn: ['c2', 'c3'] }), card('c2'), card('c3')]));
+  writeStateFile(e.dataDir, e.projectDir, emptyState(e.projectDir, [card('c1', { dependsOn: ['c2', 'c3'], linkNames: { c2: 'first', c3: 'second' } }), card('c2'), card('c3')]));
   const r = await oldRun(e, old, ['c1', 'c3']);
   assert.equal(r.code, 0, r.stderr);
   const c1 = cardOf(e, 'c1');
   assert.equal(c1.title, 'Renamed by the older version', 'the older version did write');
-  assert.deepEqual(c1.dependsOn, ['c2', 'c3'], 'the field is kept as it was');
+  // the version that knows the field drops the link to the milestone it removes; an older one keeps the list as it was
+  assert.deepEqual(c1.dependsOn, ref === 'v0.21.0' ? ['c2'] : ['c2', 'c3'], 'the field is kept as it was');
+  assert.deepEqual(c1.linkNames, { c2: 'first', c3: 'second' }, 'and the names of its lines');
+  assert.deepEqual(core.liveLinkNames(c1, core.readState(e.projectDir).cards), { c2: 'first' }, 'a name of a line that is gone is not shown');
   assert.equal(cardOf(e, 'c3'), undefined, 'and it removed c3 without knowing the link');
   assert.deepEqual(core.liveDependsOn(c1, core.readState(e.projectDir).cards), ['c2'], 'this version reads the link to c3 as gone');
   const next = await core.changeMilestoneLink(e.projectDir, 'c1', { add: 'c1' }).catch((err) => err);
   assert.match(String(next.message), /cannot depend on itself/);
   const done = await core.updateCard(e.projectDir, 'c1', { title: 'Back again' }, { source: 'user' });
-  assert.deepEqual(done.dependsOn, ['c2', 'c3'], 'a write that is not about links leaves them as they are');
+  assert.deepEqual(done.dependsOn, ref === 'v0.21.0' ? ['c2'] : ['c2', 'c3'], 'a write that is not about links leaves them as they are');
+  assert.deepEqual(done.linkNames, { c2: 'first', c3: 'second' }, 'a rename is no write about lines: the stored names stay');
+  assert.deepEqual(core.liveLinkNames(done, core.readState(e.projectDir).cards), { c2: 'first' }, 'and the name of the line that is gone is still not shown');
   const fixed = await core.changeMilestoneLink(e.projectDir, 'c1', { remove: 'c2' });
   assert.equal(fixed.dependsOn, undefined, 'a change of the links rebuilds them from the live ones');
+});
+
+// ---------------------------------------------------------------- the names of lines, and taking the card links of a line off their cards
+
+/** M1, M2 and M3; M2 depends on M1 by hand, and a card of M3 is blocked by two cards of M2 (one line from cards). */
+async function lines(e) {
+  const { m1, m2, m3 } = await shop(e);
+  await core.changeMilestoneLink(e.projectDir, m2, { add: m1 });
+  const a = (await core.addCard(e.projectDir, { title: 'Cart page', parent: m2 })).id;
+  const b = (await core.addCard(e.projectDir, { title: 'Pay form', parent: m2 })).id;
+  const c = (await core.addCard(e.projectDir, { title: 'Receipt', parent: m3, blockedBy: [a, b] })).id;
+  return { m1, m2, m3, a, b, c };
+}
+
+test('a line can be named: a hand link or a card link, one line of text, trimmed, at most 40 characters and 20 names; an empty text takes it away; a name needs a line', async (t) => {
+  const e = setupThreadEnv(t);
+  const { m1, m2, m3 } = await lines(e);
+  await rejects(core.updateCard(e.projectDir, m2, { linkNames: { [m3]: 'x' } }), /no line runs from .* to /);
+  await rejects(core.updateCard(e.projectDir, m2, { linkNames: { [m2]: 'x' } }), /cannot have a line to itself/);
+  await rejects(core.updateCard(e.projectDir, m2, { linkNames: { c999: 'x' } }), /milestone not found: c999/);
+  await rejects(core.updateCard(e.projectDir, m2, { linkNames: { [m1]: 'x'.repeat(41) } }), /1 to 40 characters on one line/);
+  await rejects(core.updateCard(e.projectDir, m2, { linkNames: { [m1]: 'two\nlines' } }), /on one line/);
+  await rejects(core.updateCard(e.projectDir, m2, { linkNames: { [m1]: 'bell\u0007' } }), /on one line/);
+  await rejects(core.updateCard(e.projectDir, m2, { linkNames: { [m1]: 5 } }), /1 to 40 characters/);
+  await rejects(core.updateCard(e.projectDir, m2, { linkNames: ['x'] }), /link_names must be an object/);
+  await rejects(core.updateCard(e.projectDir, m2, { linkNames: { 'M1': 'x' } }), /link_names takes milestone card ids/);
+  await rejects(core.updateCard(e.projectDir, m2, { linkNames: Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`c${i + 50}`, 'x'])) }), /too many entries/);
+  await rejects(core.updateCard(e.projectDir, (await core.addCard(e.projectDir, { title: 'A task' })).id, { linkNames: { [m1]: 'x' } }), /only for milestones/);
+  assert.equal(cardOf(e, m2).linkNames, undefined, 'a refused call writes nothing');
+  const named = await core.updateCard(e.projectDir, m2, { linkNames: { [m1]: '  pay   first  ' } });
+  assert.deepEqual(named.linkNames, { [m1]: 'pay first' }, 'trimmed, spaces collapsed');
+  assert.deepEqual(core.cardById(core.readState(e.projectDir).cards, m2).history.at(-1).fields, ['link names']);
+  assert.deepEqual((await core.updateCard(e.projectDir, m3, { linkNames: { [m2]: 'blocks launch' } })).linkNames, { [m2]: 'blocks launch' }, 'a line from cards');
+  assert.equal((await core.updateCard(e.projectDir, m2, { linkNames: { [m1]: 'x'.repeat(40) } })).linkNames[m1].length, 40, '40 is fine');
+  // a call adds or replaces the names it gives and leaves the others; an empty one takes a name away
+  assert.deepEqual((await core.updateCard(e.projectDir, m3, { linkNames: { [m2]: '' } })).linkNames, undefined);
+  assert.deepEqual((await core.updateCard(e.projectDir, m2, { linkNames: { [m1]: null } })).linkNames, undefined);
+  // the same text again changes nothing
+  await core.updateCard(e.projectDir, m2, { linkNames: { [m1]: 'pay first' } });
+  const before = cardOf(e, m2).updatedAt;
+  await core.updateCard(e.projectDir, m2, { linkNames: { [m1]: 'pay first' } });
+  assert.equal(cardOf(e, m2).updatedAt, before);
+  // a link and its name in one call
+  const m4 = (await core.addCard(e.projectDir, { title: 'M4', kind: 'milestone' })).id;
+  const both = await core.updateCard(e.projectDir, m4, { dependsOn: [m1], linkNames: { [m1]: 'first' } });
+  assert.deepEqual([both.dependsOn, both.linkNames], [[m1], { [m1]: 'first' }]);
+  assert.deepEqual((await core.addCard(e.projectDir, { title: 'M5', kind: 'milestone', dependsOn: [m1], linkNames: { [m1]: 'made with it' } })).linkNames, { [m1]: 'made with it' });
+});
+
+test('a name goes with its line: a write that ends the line takes the name (a hand link or the last card link taken away, a blocker edited, a card moved to another milestone or removed); a rename does not', async (t) => {
+  const e = setupThreadEnv(t);
+  const { m1, m2, m3, a, b, c } = await lines(e);
+  await core.updateCard(e.projectDir, m2, { linkNames: { [m1]: 'pay first' } });
+  await core.updateCard(e.projectDir, m3, { linkNames: { [m2]: 'blocks launch' } });
+  const view = () => core.liveLinkNames(cardOf(e, m3), core.readState(e.projectDir).cards);
+  assert.deepEqual(view(), { [m2]: 'blocks launch' });
+  await core.changeMilestoneLink(e.projectDir, m2, { remove: m1 });
+  assert.equal(cardOf(e, m2).linkNames, undefined, 'the hand link was the whole line: the name goes with it');
+  // a rename is no write about lines
+  await core.updateCard(e.projectDir, m3, { title: 'M3: Launch!' });
+  assert.deepEqual(cardOf(e, m3).linkNames, { [m2]: 'blocks launch' });
+  // one blocker of two: the line stays
+  await core.updateCard(e.projectDir, c, { blockedBy: [a] }, { source: 'user' });
+  assert.deepEqual(cardOf(e, m3).linkNames, { [m2]: 'blocks launch' });
+  // the last blocker, from the board's card edit: the name goes at once
+  await core.updateCard(e.projectDir, c, { blockedBy: [] }, { source: 'user' });
+  assert.equal(cardOf(e, m3).linkNames, undefined, 'the card edit ended the line');
+  // a card moved to another milestone
+  await core.updateCard(e.projectDir, c, { blockedBy: [a, b] }, { source: 'user' });
+  await core.updateCard(e.projectDir, m3, { linkNames: { [m2]: 'again' } });
+  await core.updateCard(e.projectDir, c, { parent: m1 }, { source: 'user' });
+  assert.equal(cardOf(e, m3).linkNames, undefined, 'the card left the milestone, so the line is gone');
+  await core.updateCard(e.projectDir, c, { parent: m3 }, { source: 'user' });
+  // a card removed
+  await core.updateCard(e.projectDir, m3, { linkNames: { [m2]: 'third' } });
+  await core.removeCard(e.projectDir, c, { source: 'user' });
+  assert.equal(cardOf(e, m3).linkNames, undefined, 'the card was removed');
+  // a card turned into an idea no longer counts
+  const d = (await core.addCard(e.projectDir, { title: 'Another', parent: m3, blockedBy: [a] })).id;
+  await core.updateCard(e.projectDir, m3, { linkNames: { [m2]: 'fourth' } });
+  await core.updateCard(e.projectDir, d, { kind: 'idea' }, { source: 'user' });
+  assert.equal(cardOf(e, m3).linkNames, undefined, 'an idea makes no line');
+  // a line that both a hand link and a card make
+  await core.updateCard(e.projectDir, d, { kind: 'task' }, { source: 'user' });
+  await core.changeMilestoneLink(e.projectDir, m3, { add: m2 });
+  await core.updateCard(e.projectDir, m3, { linkNames: { [m2]: 'both' } });
+  await core.changeMilestoneLink(e.projectDir, m3, { remove: m2 });
+  assert.deepEqual(cardOf(e, m3).linkNames, { [m2]: 'both' }, 'the card link still makes the line');
+});
+
+test('a name from a file is read as one line of plain text, whatever the file says', async (t) => {
+  const e = setupThreadEnv(t);
+  const { m1, m2 } = await lines(e);
+  await core.updateCard(e.projectDir, m2, { linkNames: { [m1]: 'pay first' } });
+  const raw = JSON.parse(fs.readFileSync(core.projectPaths(e.projectDir).state, 'utf8'));
+  raw.cards.find((c) => c.id === m2).linkNames = { [m1]: 'a\nfake line\u0007  with   gaps ' + 'x'.repeat(60) };
+  fs.writeFileSync(core.projectPaths(e.projectDir).state, JSON.stringify(raw));
+  const shown = core.liveLinkNames(cardOf(e, m2), core.readState(e.projectDir).cards)[m1];
+  assert.equal(shown.includes('\n'), false);
+  assert.equal(/[\u0000-\u001f]/.test(shown), false);
+  assert.ok(shown.startsWith('a fake line with gaps x'), shown);
+  assert.ok(Array.from(shown).length <= 40);
+  const c = mcp(t, e);
+  await c.init();
+  const list = (await c.call('board_list')).text;
+  assert.equal(/\{link names:[^}]*\n/.test(list), false, 'one line, whatever the file says');
+  assert.match(list, /\{link names: M1 \(c\d+\) "a fake line with gaps x/);
+});
+
+test('the routes: link-name names a line and an empty name takes it away (a missing name is refused); unlink-cards takes only the confirmed pairs off the cards as they are now', async (t) => {
+  const e = setupThreadEnv(t);
+  const { m1, m2, m3, a, b, c } = await lines(e);
+  const bd = await board(t, e);
+  const name = (id, body) => bd.api('POST', `${bd.P}/milestones/${id}/link-name`, body);
+  const named = await name(m2, { link: m1, name: ' pay first ' });
+  assert.equal(named.status, 200, JSON.stringify(named.body));
+  assert.deepEqual(named.body.linkNames, { [m1]: 'pay first' });
+  assert.deepEqual((await bd.state()).cards.find((x) => x.id === m2).linkNames, { [m1]: 'pay first' });
+  assert.equal(cardOf(e, m2).seenByClaude, false);
+  assert.match((await name(m2, { link: m3, name: 'x' })).body.error, /no line runs from/);
+  assert.match((await name(m2, { link: m1, name: 'x'.repeat(41) })).body.error, /1 to 40 characters/);
+  assert.match((await name(m2, { link: 'M1', name: 'x' })).body.error, /card id/);
+  assert.equal((await name(m2, { link: m1, name: 5 })).status, 400);
+  const missing = await name(m2, { link: m1 });
+  assert.equal(missing.status, 400);
+  assert.match(missing.body.error, /name must be given/);
+  assert.deepEqual(cardOf(e, m2).linkNames, { [m1]: 'pay first' }, 'a missing name takes nothing away');
+  assert.match((await name(m2, { link: m1, extra: 1 })).body.error, /unknown key extra; this route takes: link, name/);
+  assert.match((await name('c999', { link: m1, name: 'x' })).body.error, /milestone not found/);
+  assert.equal('linkNames' in (await name(m2, { link: m1, name: '' })).body, false);
+  // the card links of the line M3 -> M2
+  await name(m3, { link: m2, name: 'blocks launch' });
+  const unlink = (id, body) => bd.api('POST', `${bd.P}/milestones/${id}/unlink-cards`, body);
+  assert.match((await unlink(m3, {})).body.error, /dep must be/);
+  assert.match((await unlink(m3, { dep: m2 })).body.error, /cards must be the list/);
+  assert.match((await unlink(m3, { dep: m2, cards: [] })).body.error, /give the \[card, blocker\] pairs/);
+  assert.match((await unlink(m3, { dep: m2, cards: [[c]] })).body.error, /lists of a card id and a blocker id/);
+  const nothing = await unlink(m3, { dep: m1, cards: [[c, a]] });
+  assert.equal(nothing.status, 200);
+  assert.deepEqual([nothing.body.removed, nothing.body.skipped], [[], 1], 'a pair that makes no line of that kind is skipped');
+  const r = await unlink(m3, { dep: m2, cards: [[c, a], [c, b]] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.removed.map((x) => [x.card, x.by]).sort(), [[c, a], [c, b]].sort());
+  assert.equal(r.body.skipped, 0);
+  assert.equal(cardOf(e, c).blockedBy, undefined, 'taken off the card');
+  assert.deepEqual(cardOf(e, c).history.at(-1).fields, ['blocked by'], 'its history says so');
+  assert.equal(cardOf(e, c).seenByClaude, false);
+  assert.equal(cardOf(e, m3).linkNames, undefined, 'the line is gone, and its name');
+  assert.ok(r.body.cards.some((x) => x.id === c) && r.body.cards.some((x) => x.id === m3));
+  assert.deepEqual(cardOf(e, m2).dependsOn, [m1], 'a hand link is not touched');
+  // chat-only: refused
+  await core.saveConfig(e.projectDir, 'project', { mode: 'chat' });
+  assert.equal((await unlink(m3, { dep: m2, cards: [[c, a]] })).status, 409);
+  assert.equal((await name(m2, { link: m1, name: 'x' })).status, 409);
+});
+
+test('taking card links off is one update that touches only what was confirmed: a stale list, a blocker added meanwhile, a leftover blocker, a milestone that is gone, none of them throws halfway', async (t) => {
+  const e = setupThreadEnv(t);
+  const { m1, m2, m3, a, b, c } = await lines(e);
+  const d = (await core.addCard(e.projectDir, { title: 'Second receipt', parent: m3, blockedBy: [b] })).id;
+  const stateFile = core.projectPaths(e.projectDir).state;
+  // a leftover blocker: the id of a card that was deleted by an older version, and a milestone id, stored on the card
+  const raw = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  raw.cards.find((x) => x.id === c).blockedBy = [a, b, 'c99999', m1];
+  fs.writeFileSync(stateFile, JSON.stringify(raw));
+  const shownList = [[c, a], [c, b], [d, b]];   // what the owner was shown
+  // meanwhile another blocker is added to c, and d's blocker is taken off by somebody else
+  const raw2 = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  raw2.cards.find((x) => x.id === c).blockedBy = [a, b, 'c99999', m1, d];
+  raw2.cards.find((x) => x.id === d).blockedBy = [];
+  delete raw2.cards.find((x) => x.id === d).blockedBy;
+  fs.writeFileSync(stateFile, JSON.stringify(raw2));
+  const r = await core.removeCardLinks(e.projectDir, m3, m2, shownList);
+  assert.deepEqual(r.removed.map((x) => [x.card, x.by]).sort(), [[c, a], [c, b]].sort());
+  assert.equal(r.skipped, 1, 'the pair of d no longer made the line');
+  assert.deepEqual(cardOf(e, c).blockedBy, ['c99999', m1, d], 'the blocker that was added, the leftover and the milestone stay as they were, and nothing threw');
+  assert.equal(cardOf(e, d).blockedBy, undefined);
+  assert.equal(cardOf(e, d).history.at(-1).type, 'created', 'a skipped card was not written');
+  // a call that finds nothing to do changes nothing and does not throw
+  const before = JSON.stringify(core.readState(e.projectDir).cards);
+  const again = await core.removeCardLinks(e.projectDir, m3, m2, shownList);
+  assert.deepEqual([again.removed, again.skipped], [[], 3]);
+  assert.equal(JSON.stringify(core.readState(e.projectDir).cards), before, 'not even a time stamp');
+  // a milestone that is gone: refused before anything is changed
+  const m4 = (await core.addCard(e.projectDir, { title: 'M4', kind: 'milestone' })).id;
+  const e1 = (await core.addCard(e.projectDir, { title: 'Needs cart', parent: m4, blockedBy: [(await core.addCard(e.projectDir, { title: 'Cart item', parent: m2 })).id] })).id;
+  const pair = [e1, cardOf(e, e1).blockedBy[0]];
+  await core.removeCard(e.projectDir, m4, { source: 'user' });
+  await rejects(core.removeCardLinks(e.projectDir, m4, m2, [pair]), /milestone not found/);
+  assert.equal(cardOf(e, e1).blockedBy.length, 1, 'nothing was changed');
+  // the dependency milestone gone: the pair makes no line, so it is skipped
+  const m5 = (await core.addCard(e.projectDir, { title: 'M5', kind: 'milestone' })).id;
+  const f = (await core.addCard(e.projectDir, { title: 'F', parent: m5, blockedBy: [a] })).id;
+  await core.removeCard(e.projectDir, m2, { source: 'user' });
+  const none = await core.removeCardLinks(e.projectDir, m5, m2, [[f, a]]);
+  assert.deepEqual([none.removed, none.skipped], [[], 1]);
+});
+
+test('a card with criteria in a finished stage keeps its stage and criteria when its blockers are taken off', async (t) => {
+  const e = setupThreadEnv(t);
+  const { m2, m3, a, c } = await lines(e);
+  await core.updateCard(e.projectDir, c, { status: 'done', criteria: ['works'] }, { source: 'user' });
+  const bd = await board(t, e);
+  const r = await bd.api('POST', `${bd.P}/milestones/${m3}/unlink-cards`, { dep: m2, cards: [[c, a]] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(cardOf(e, c).status, 'done');
+  assert.deepEqual(cardOf(e, c).criteria, ['works']);
+});
+
+test('board_update link_names names lines, board_list shows the names, and a refused call says why', async (t) => {
+  const e = setupThreadEnv(t);
+  const { m1, m2 } = await lines(e);
+  const c = mcp(t, e);
+  await c.init();
+  const ok = await c.call('board_update', { id: m2, link_names: { [m1]: 'pay first' } });
+  assert.equal(ok.isError, false, ok.text);
+  assert.deepEqual(cardOf(e, m2).linkNames, { [m1]: 'pay first' });
+  assert.match((await c.call('board_list')).text, new RegExp(`^- ${m2} \\[milestone:[a-z]+\\] M2: Checkout \\{depends on M1 \\(${m1}\\)\\} \\{link names: M1 \\(${m1}\\) "pay first"\\}`, 'm'));
+  assert.match((await c.call('board_update', { id: m2, link_names: { c9999: 'x' } })).text, /milestone not found/);
+  assert.match((await c.call('board_update', { id: m1, link_names: { [m2]: 'x' } })).text, /no line runs from/);
+  assert.match((await c.call('board_update', { id: m2, link_names: 'x' })).text, /link_names must be an object/);
+  assert.equal((await c.call('board_update', { id: m2, link_names: { [m1]: '' } })).isError, false);
+  assert.equal(cardOf(e, m2).linkNames, undefined);
+  const tools = (await c.request('tools/list', {})).result.tools;
+  assert.match(tools.find((x) => x.name === 'board_add').inputSchema.properties.link_names.description, /up to 40 characters/);
+  assert.equal((await c.call('board_add', { title: 'M9', kind: 'milestone', depends_on: [m1], link_names: { [m1]: 'with it' } })).isError, false);
 });

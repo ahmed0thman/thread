@@ -5,6 +5,12 @@
   // a week runs from Monday 00:00 to the next Monday 00:00 in the browser's time zone.
   const SUM_RANGES = [4, 8, 12, 26];    // the weeks the chart can show, the current one last
   const SUM_RANGE = 8;                  // the default
+  // The seventh range is the last 7 days, one point per day. It is the text '7d', not a number: an older page that reads it from the
+  // stored filters (the same sessionStorage key) takes Number('7d'), which is NaN, finds it in no list and falls back to 8 weeks.
+  const SUM_DAYS = '7d';
+  const SUM_DAY_COUNT = 7;
+  const sumRangeOk = (r) => r === SUM_DAYS || SUM_RANGES.includes(Number(r));
+  const sumRangeOf = (r) => (r === SUM_DAYS ? SUM_DAYS : SUM_RANGES.includes(Number(r)) ? Number(r) : SUM_RANGE);
   const SUM_DONE_DAYS = 7;      // "done lately" tile
   const SUM_WORKERS = 8;        // rows in the work chart
   const SUM_WAITS = 8;
@@ -20,7 +26,15 @@
     for (let i = n - 1; i >= -1; i--) out.push(new Date(d.getFullYear(), d.getMonth(), d.getDate() - sinceMonday - 7 * i).getTime());
     return out;
   }
-  // The week t falls in, or -1 when it is outside the weeks shown (or has no time).
+  // n + 1 midnights (00:00 local), oldest first: day i is [edges[i], edges[i + 1]) and the last edge is the end of today. Calendar
+  // arithmetic again, so a day of 23 or 25 hours (a clock change) is still one day.
+  function dayEdges(now, n) {
+    const d = new Date(now);
+    const out = [];
+    for (let i = n - 1; i >= -1; i--) out.push(new Date(d.getFullYear(), d.getMonth(), d.getDate() - i).getTime());
+    return out;
+  }
+  // The week (or day) t falls in, or -1 when it is outside the ones shown (or has no time).
   function weekOf(t, edges) {
     if (t === null || t < edges[0] || t >= edges[edges.length - 1]) return -1;
     let i = edges.length - 2;
@@ -72,6 +86,9 @@
   }
   // 'agent:worker' as workedBy names it: a name that was cut short with … loses the dots and is cut to fit 64 characters
   const derivedWorker = (prefix, name) => prefix + String(name).replace(/…$/, '').slice(0, 64 - prefix.length);
+  // Every how many points a name is written under the axis, so that they do not run into each other (step: the space between two points
+  // in the chart's own units). The current week or day is always one of them: the points are counted back from it.
+  function sumLabelStride(step, unit) { return Math.max(1, Math.ceil((unit === 'day' ? 50 : 46) / step)); }
   // The chart's top value and its gridlines: whole numbers, four steps, at least 4.
   function chartScale(max) {
     const top = max <= 4 ? 4 : Math.ceil(max / 4) * 4;
@@ -124,7 +141,7 @@
     const o = f && typeof f === 'object' ? f : {};
     const pick = (v, ok) => (typeof v === 'string' && ok(v) ? v : '');
     return {
-      range: SUM_RANGES.includes(Number(o.range)) ? Number(o.range) : SUM_RANGE,
+      range: sumRangeOf(o.range),
       milestone: pick(o.milestone, (v) => v === NO_MS || ch.milestones.some((m) => m[0] === v)),
       worker: pick(o.worker, (v) => ch.workers.includes(v)),
       type: pick(o.type, (v) => ch.types.some((t) => t[0] === v)),
@@ -172,7 +189,8 @@
     const askedMs = (w) => { const t = atMs(w.askedAt); return t === null ? Infinity : t; };
     waits.sort((a, b) => (askedMs(a) === askedMs(b) ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : askedMs(a) < askedMs(b) ? -1 : 1));
 
-    const edges = weekEdges(now, f.range);
+    const days = f.range === SUM_DAYS;
+    const edges = days ? dayEdges(now, SUM_DAY_COUNT) : weekEdges(now, f.range);
     const weeks = edges.slice(0, -1).map((start, i) => ({ start, end: edges[i + 1], created: 0, done: 0, open: openAt(work, doneTimes, edges[i + 1]) }));
     work.forEach((c) => { const i = weekOf(atMs(c.createdAt), edges); if (i >= 0) weeks[i].created += 1; });
     doneCards.forEach((c) => { const i = weekOf(doneTimes.get(c), edges); if (i >= 0) weeks[i].done += 1; });
@@ -218,6 +236,7 @@
         bugs: open.filter((c) => c.type === 'bug').length,
         waiting: waits.length,
       },
+      unit: days ? 'day' : 'week',    // what each entry of `weeks` is
       weeks,
       scale: chartScale(Math.max(0, ...weeks.map((w) => Math.max(w.created, w.done)))),
       openScale: chartScale(Math.max(0, ...weeks.map((w) => w.open))),
@@ -278,7 +297,7 @@
   function sumUi() {
     if (!sumMemo[selKey]) {
       const s = sumStored()[selKey] || {};
-      const u = { range: SUM_RANGES.includes(Number(s.range)) ? Number(s.range) : SUM_RANGE, table: false, week: -1 };
+      const u = { range: sumRangeOf(s.range), table: false, week: -1 };
       SUM_KEYS.forEach((k) => { u[k] = typeof s[k] === 'string' ? s[k] : ''; });
       sumMemo[selKey] = u;
     }
@@ -327,7 +346,7 @@
     const bar = h('div', 'sum-filters');
     bar.setAttribute('role', 'group');
     bar.setAttribute('aria-label', 'Summary filters');
-    bar.appendChild(sumSelect('sum-range', 'Time range of the chart', SUM_RANGES.map((n) => [String(n), 'Last ' + n + ' weeks']), String(f.range), f.range !== SUM_RANGE, (v) => sumSet({ range: Number(v) })));
+    bar.appendChild(sumSelect('sum-range', 'Time range of the chart', [[SUM_DAYS, 'Last 7 days']].concat(SUM_RANGES.map((n) => [String(n), 'Last ' + n + ' weeks'])), String(f.range), f.range !== SUM_RANGE, (v) => sumSet({ range: sumRangeOf(v) })));
     const add = (key, id, label, all, pairs, min) => {
       if (pairs.length < min && f[key] === '') return;
       bar.appendChild(sumSelect(id, label, [['', all]].concat(pairs), f[key], f[key] !== '', (v) => sumSet({ [key]: v })));
@@ -356,6 +375,8 @@
     { key: 'done', label: 'Done', mark: 'diamond' },
     { key: 'open', label: 'Open at week end', mark: 'triangle' },
   ];
+  // What the chart calls its buckets: a week, or in the 7-day range a day
+  const sumSeriesLabel = (s, unit) => (s.key === 'open' ? 'Open at ' + unit + ' end' : s.label);
   // k scales the marker down when the weeks are many
   function sumMark(kind, cx, cy, cls, k) {
     const u = k || 1;
@@ -366,9 +387,16 @@
   }
   const sumDate = (t) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   const sumWeekText = (w) => sumDate(w.start) + ' to ' + sumDate(w.end - 1);
+  const sumDayName = (t) => new Date(t).toLocaleDateString(undefined, { weekday: 'short' }) + ' ' + new Date(t).getDate();    // Mon 14
+  const sumDayText = (t) => new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });   // Tue, Oct 14
+  // what names a bucket: its dates for a week, its date for a day (the last day is today)
+  const sumBucketText = (w, unit) => (unit === 'day' ? sumDayText(w.start) : sumWeekText(w));
+  // what is written under a point: a day's name, today as Today, or a week's first day
+  const sumTickText = (w, i, n, unit) => (unit === 'day' ? (i === n - 1 ? 'Today' : sumDayName(w.start)) : sumDate(w.start));
 
   function weeksChart(m) {
     const n = m.weeks.length;
+    const unit = m.unit === 'day' ? 'day' : 'week';
     const W = 420, H = 248, L = 34, R = 10, PAD = 8;
     const T1 = 12, H1 = 120, T2 = 170, H2 = 48;
     const step = (W - L - R - 2 * PAD) / (n - 1);
@@ -381,19 +409,19 @@
     box.tabIndex = 0;
     box.dataset.id = 'sum-chart';   // the pane gives the focus back to it after a redraw
     box.setAttribute('role', 'group');
-    box.setAttribute('aria-label', 'Weekly chart. Use the left and right arrow keys to step through the weeks, Home and End to jump to the first and last, and Escape to close the details.');
+    box.setAttribute('aria-label', (unit === 'day' ? 'Daily' : 'Weekly') + ' chart. Use the left and right arrow keys to step through the ' + unit + 's, Home and End to jump to the first and last, and Escape to close the details.');
     const svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, class: 'sum-svg', role: 'img',
-      'aria-label': 'Line chart of cards created, done and still open, week by week over the last ' + n + ' weeks: ' + created + ' created and ' + done + ' done in all; open went from ' + first.open + ' to ' + last.open + ' cards. The table has each week.' });
+      'aria-label': 'Line chart of cards created, done and still open, ' + unit + ' by ' + unit + ' over the last ' + n + ' ' + unit + 's: ' + created + ' created and ' + done + ' done in all; open went from ' + first.open + ' to ' + last.open + ' cards. The table has each week.' });
     const grid = (ticks, y) => ticks.forEach((v) => {
       svg.appendChild(svgEl('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: v === 0 ? 'axis' : 'grid' }));
       svg.appendChild(svgEl('text', { x: L - 5, y: y(v) + 4, 'text-anchor': 'end', class: 'tick' }, String(v)));
     });
     grid(m.scale.ticks, yOf.created);
     grid(m.openScale.ticks.filter((_, i) => i % 2 === 0), yOf.open);
-    svg.appendChild(svgEl('text', { x: L, y: T2 - 10, class: 'cap' }, 'Open at the end of the week'));
-    // week labels: every few weeks when they would run into each other, counted back from the current week so that one is always named
-    const every = Math.max(1, Math.ceil(46 / step));
-    m.weeks.forEach((w, i) => { if ((n - 1 - i) % every === 0) svg.appendChild(svgEl('text', { x: x(i), y: T2 + H2 + 18, 'text-anchor': 'middle', class: 'tick' }, sumDate(w.start))); });
+    svg.appendChild(svgEl('text', { x: L, y: T2 - 10, class: 'cap' }, 'Open at the end of the ' + unit));
+    // the labels under the axis: every few points when they would run into each other, counted back from the current one so that it is always named
+    const every = sumLabelStride(step, unit);
+    m.weeks.forEach((w, i) => { if ((n - 1 - i) % every === 0) svg.appendChild(svgEl('text', { x: x(i), y: T2 + H2 + 18, 'text-anchor': 'middle', class: 'tick' }, sumTickText(w, i, n, unit))); });
 
     const guide = svgEl('line', { x1: 0, x2: 0, y1: T1, y2: T2 + H2, class: 'guide' });
     svg.appendChild(guide);
@@ -417,7 +445,8 @@
     box.append(tip, live);
 
     const ui = sumUi();
-    const rowsOf = (w, i) => SUM_SERIES.map((s) => [s.key === 'open' && i === n - 1 ? 'Open now' : s.label, w[s.key]]);   // the current week has not ended
+    const rowsOf = (w, i) => SUM_SERIES.map((s) => [s.key === 'open' && i === n - 1 ? 'Open now' : sumSeriesLabel(s, unit), w[s.key]]);   // the current week or day has not ended
+    const head = (w, i) => (unit === 'day' ? sumDayText(w.start) + (i === n - 1 ? ' (today)' : '') : 'Week of ' + sumWeekText(w));
     let at = -1;
     function show(i, announce) {
       at = i;
@@ -431,7 +460,7 @@
       const w = m.weeks[i];
       const rows = rowsOf(w, i);
       tip.replaceChildren(
-        h('div', 'sum-tip-head', 'Week of ' + sumWeekText(w)),
+        h('div', 'sum-tip-head', head(w, i)),
         ...rows.map(([label, v]) => { const r = h('div', 'sum-tip-row'); r.append(h('span', null, label), h('span', 'tnum', String(v))); return r; }),
       );
       // beside the guide line, on the side with room, and never outside the chart
@@ -439,7 +468,7 @@
       const side = bw && tw ? (gx + 10 + tw <= bw ? 'to-right' : 'to-left') : (i > (n - 1) / 2 ? 'to-left' : 'to-right');
       tip.className = 'sum-tip ' + side;
       tip.style.left = bw && tw ? Math.max(0, Math.min(bw - tw, side === 'to-right' ? gx + 10 : gx - 10 - tw)) + 'px' : (x(i) / W * 100) + '%';
-      if (announce) live.textContent = 'Week of ' + sumWeekText(w) + ': ' + rows.map(([label, v]) => label + ' ' + v).join(', ');
+      if (announce) live.textContent = head(w, i) + ': ' + rows.map(([label, v]) => label + ' ' + v).join(', ');
     }
     const weekUnder = (e) => {
       const r = svg.getBoundingClientRect();
@@ -470,28 +499,29 @@
     else ui.week = -1;
     return box;
   }
-  function sumLegend() {
+  function sumLegend(unit) {
     const key = h('div', 'sum-legend');
     SUM_SERIES.forEach((s) => {
       const k = h('span', 'sum-key');
       const sw = svgEl('svg', { viewBox: '0 0 28 12', width: 28, height: 12, class: 'sum-swatch', 'aria-hidden': 'true' });
       sw.appendChild(svgEl('line', { x1: 1, x2: 27, y1: 6, y2: 6, class: 'ln ln-' + s.key }));
       sw.appendChild(sumMark(s.mark, 14, 6, 'pt pt-' + s.key));
-      k.append(sw, h('span', null, s.label));
+      k.append(sw, h('span', null, sumSeriesLabel(s, unit)));
       key.appendChild(k);
     });
     return key;
   }
   // The same numbers as the chart, as a table
   function sumTable(m) {
+    const unit = m.unit === 'day' ? 'day' : 'week';
     const t = h('table', 'sum-table');
-    const cap = h('caption', 'sr-only', 'Cards created, done and open at the end of each week');
+    const cap = h('caption', 'sr-only', 'Cards created, done and open at the end of each ' + unit);
     const head = h('tr');
-    ['Week', 'Created', 'Done', 'Open at week end'].forEach((c, i) => { const th = h('th', i ? 'tnum' : '', c); th.scope = 'col'; head.appendChild(th); });
+    [unit === 'day' ? 'Day' : 'Week', 'Created', 'Done', 'Open at ' + unit + ' end'].forEach((c, i) => { const th = h('th', i ? 'tnum' : '', c); th.scope = 'col'; head.appendChild(th); });
     const body = h('tbody');
     m.weeks.forEach((w, i) => {
       const tr = h('tr');
-      const th = h('th', null, sumWeekText(w) + (i === m.weeks.length - 1 ? ' (open now)' : ''));
+      const th = h('th', null, sumBucketText(w, unit) + (i === m.weeks.length - 1 ? ' (open now)' : ''));
       th.scope = 'row';
       tr.appendChild(th);
       ['created', 'done', 'open'].forEach((k) => tr.appendChild(h('td', 'tnum', String(w[k]))));
@@ -540,10 +570,12 @@
     const left = h('div', 'sum-col'), right = h('div', 'sum-col');
     grid.append(left, right);
 
-    const flow = sumPanel('sum-flow', 'Created, done and open by week', 'Last ' + m.weeks.length + ' weeks, weeks start on Monday. Open is how many cards were still open when the week ended.');
+    const byDay = m.unit === 'day';
+    const flow = byDay ? sumPanel('sum-flow', 'Created, done and open by day', 'Last ' + m.weeks.length + ' days, one point per day, today last. Open is how many cards were still open when the day ended.')
+      : sumPanel('sum-flow', 'Created, done and open by week', 'Last ' + m.weeks.length + ' weeks, weeks start on Monday. Open is how many cards were still open when the week ended.');
     if (m.weeks.some((w) => w.created || w.done || w.open)) {
       flow.appendChild(weeksChart(m));
-      flow.appendChild(sumLegend());
+      flow.appendChild(sumLegend(m.unit === 'day' ? 'day' : 'week'));
       const ui = sumUi();
       const tbl = sumTable(m);
       tbl.id = 'sum-table';
@@ -559,7 +591,7 @@
         tog.setAttribute('aria-expanded', ui.table ? 'true' : 'false');
       });
       flow.append(tog, tbl);
-    } else flow.appendChild(h('p', 'sum-none muted', 'Nothing was created or finished in these weeks, and nothing is open.'));
+    } else flow.appendChild(h('p', 'sum-none muted', 'Nothing was created or finished in these ' + (byDay ? 'days' : 'weeks') + ', and nothing is open.'));
     left.appendChild(flow);
 
     const who = sumPanel('sum-who', 'Work by worker', 'Done cards and tokens, all time. Work by the main session shows only where Claude recorded a worker.');
@@ -665,9 +697,9 @@
       'A card keeps the last 50 entries of its history. An older card may show only when it was created, and a move that fell out of the history is not counted.',
       'A card counts as done on the day it last moved into the done stage or a later one from an earlier stage; if that move is not in the history, on the day it was last updated.',
       'Work by the main session shows only where Claude recorded a worker. Tokens come from sub-agent runs and thread turns, not from the main session.',
-      'The filters apply to every number here, and the time range sets only the weeks of the chart; the Done tile always counts the last ' + SUM_DONE_DAYS + ' days.',
+      'The filters apply to every number here, and the time range sets only the weeks (or the 7 days) of the chart; the Done tile always counts the last ' + SUM_DONE_DAYS + ' days.',
       'Open at the end of a week counts the cards created before it that were not yet completed. A card that was done, then reopened, shows as open for the whole time. The line can be a little lower than the Open tile: a card with no creation time is on the tile but cannot be placed on the line.',
-      'Weeks start on Monday in this browser’s time zone.',
+      'Weeks start on Monday, and days run from midnight to midnight, in this browser’s time zone.',
     ].forEach((t) => ul.appendChild(h('li', null, t)));
     p.appendChild(ul);
     return p;

@@ -2857,10 +2857,11 @@ test('the one-time copy into the repo gives a milestone\'s links the new ids of 
   const e = oneProject(t);
   const m1 = await core.addCard(e.projectDir, { title: 'M1', kind: 'milestone' });
   const m2 = await core.addCard(e.projectDir, { title: 'M2', kind: 'milestone', dependsOn: [m1.id] });
-  const m3 = await core.addCard(e.projectDir, { title: 'M3', kind: 'milestone', dependsOn: [m1.id, m2.id] });
+  const m3 = await core.addCard(e.projectDir, { title: 'M3', kind: 'milestone', dependsOn: [m1.id, m2.id], linkNames: { [m1.id]: 'first' } });
   core.enableRepo(e.projectDir);
   await core.reconcile(e.projectDir);
   const [n1, n2, n3] = [m1.id, m2.id, m3.id].map((id) => newIdOf(e, id));
+  assert.deepEqual(JSON.parse(repoText(e.projectDir, n3)).linkNames, { [n1]: 'first' }, 'the names of the lines follow the milestones to their new ids');
   for (const id of [n1, n2, n3]) assert.match(id, NEW_ID);
   assert.deepEqual(JSON.parse(repoText(e.projectDir, n2)).dependsOn, [n1]);
   assert.deepEqual(JSON.parse(repoText(e.projectDir, n3)).dependsOn, [n1, n2]);
@@ -2870,21 +2871,23 @@ test('the one-time copy into the repo gives a milestone\'s links the new ids of 
 });
 
 const OLD_MS_WRITER = path.join(TEST_DIR, 'fixtures', 'old-milestone-writer.mjs');
-for (const ref of ['v0.15.2', 'v0.20.0']) test(`the plugin version at ${ref} keeps a milestone's hand-drawn links in its card file when it renames the milestone and removes another`, async (t) => {
+for (const ref of ['v0.15.2', 'v0.20.0', 'v0.21.0']) test(`the plugin version at ${ref} keeps a milestone's hand-drawn links in its card file when it renames the milestone and removes another`, async (t) => {
   const old = oldServerFrom(t, ref);
   if (!old) return;
   const e = oneProject(t);
   core.enableRepo(e.projectDir);
   const m1 = await core.addCard(e.projectDir, { title: 'M1', kind: 'milestone' });
   const m2 = await core.addCard(e.projectDir, { title: 'M2', kind: 'milestone', dependsOn: [m1.id] });
-  const m3 = await core.addCard(e.projectDir, { title: 'M3', kind: 'milestone', dependsOn: [m1.id, m2.id] });
+  const m3 = await core.addCard(e.projectDir, { title: 'M3', kind: 'milestone', dependsOn: [m1.id, m2.id], linkNames: { [m1.id]: 'first', [m2.id]: 'second' } });
   const before = repoText(e.projectDir, m3.id);
   // the older version renames M3 and removes M2 (it does not know the link to it)
   const r = await runNode([OLD_MS_WRITER, old, e.projectDir, m3.id, m2.id], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir }, cwd: e.projectDir });
   assert.equal(r.code, 0, r.stderr);
   const file = JSON.parse(repoText(e.projectDir, m3.id));
   assert.equal(file.title, 'Renamed by the older version', 'the older version did write the file');
-  assert.deepEqual(file.dependsOn, [m1.id, m2.id], 'the links are kept as they were');
+  // the version that knows the field drops the link to the milestone it removes; an older one keeps the list as it was
+  assert.deepEqual(file.dependsOn, ref === 'v0.21.0' ? [m1.id] : [m1.id, m2.id], 'the links are kept');
+  assert.deepEqual(file.linkNames, { [m1.id]: 'first', [m2.id]: 'second' }, 'and the names of the lines (no older version knows them)');
   assert.notEqual(repoText(e.projectDir, m3.id), before);
   assert.equal(fs.existsSync(path.join(cardsDir(e.projectDir), `${m2.id}.json`)), false, 'M2 is gone');
   // this version reads the link to the removed milestone as gone
@@ -2892,7 +2895,8 @@ for (const ref of ['v0.15.2', 'v0.20.0']) test(`the plugin version at ${ref} kee
   assert.deepEqual(core.liveDependsOn(c, core.readState(e.projectDir).cards), [m1.id]);
   // and the file text is the one this version would write for it: the same order of keys
   const fixed = await core.updateCard(e.projectDir, m3.id, { title: 'M3 again' }, { source: 'user' });
-  assert.deepEqual(fixed.dependsOn, [m1.id, m2.id]);
+  assert.deepEqual(fixed.dependsOn, ref === 'v0.21.0' ? [m1.id] : [m1.id, m2.id]);
+  assert.deepEqual(core.liveLinkNames(fixed, core.readState(e.projectDir).cards), { [m1.id]: 'first' }, 'the name of a line that is gone is not shown');
   assert.deepEqual(Object.keys(JSON.parse(repoText(e.projectDir, m3.id))).filter((k) => ['dependsOn', 'updatedAt', 'history'].includes(k)), ['updatedAt', 'history', 'dependsOn'], 'a key no older version knows sorts last, alphabetically, in every version');
 });
 
@@ -2922,23 +2926,27 @@ test('the layout and the links saved before the copy into the repo follow the mi
 });
 
 const OLD_COPY = path.join(TEST_DIR, 'fixtures', 'old-copy-writer.mjs');
-for (const ref of ['v0.15.2', 'v0.20.0']) test(`when the plugin version at ${ref} makes the copy, a milestone's links (which it leaves under their old ids) and the layout are read under the new ids, and the next change writes the new ones`, async (t) => {
+for (const ref of ['v0.15.2', 'v0.20.0', 'v0.21.0']) test(`when the plugin version at ${ref} makes the copy, a milestone's links (which it leaves under their old ids) and the layout are read under the new ids, and the next change writes the new ones`, async (t) => {
   const old = oldServerFrom(t, ref);
   if (!old) return;
   const e = oneProject(t);
   const m1 = await core.addCard(e.projectDir, { title: 'M1', kind: 'milestone' });
   const m2 = await core.addCard(e.projectDir, { title: 'M2', kind: 'milestone', dependsOn: [m1.id] });
-  const m3 = await core.addCard(e.projectDir, { title: 'M3', kind: 'milestone', dependsOn: [m1.id, m2.id] });
+  const m3 = await core.addCard(e.projectDir, { title: 'M3', kind: 'milestone', dependsOn: [m1.id, m2.id], linkNames: { [m1.id]: 'first', [m2.id]: 'second' } });
   await core.setMilestoneLayout(e.projectDir, { [m3.id]: { col: 2, row: 2 } }, new Set([m1.id, m2.id, m3.id]));
   const r = await runNode([OLD_COPY, old, e.projectDir], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir }, cwd: e.projectDir });
   assert.equal(r.code, 0, r.stderr);
   const [n1, n2, n3] = [m1.id, m2.id, m3.id].map((id) => newIdOf(e, id));
   for (const id of [n1, n2, n3]) assert.match(id, NEW_ID);
-  assert.deepEqual(JSON.parse(repoText(e.projectDir, n3)).dependsOn, [m1.id, m2.id], 'the older version left the old ids in the file');
+  // an older version leaves the old ids in the file; 0.21.0 knows dependsOn (not the names) and rewrites it
+  const knows = ref === 'v0.21.0';
+  assert.deepEqual(JSON.parse(repoText(e.projectDir, n3)).dependsOn, knows ? [n1, n2] : [m1.id, m2.id]);
+  assert.deepEqual(JSON.parse(repoText(e.projectDir, n3)).linkNames, { [m1.id]: 'first', [m2.id]: 'second' }, 'no older version knows the names: they keep the old ids');
   const st = core.readState(e.projectDir);
   const card = (id) => st.cards.find((c) => c.id === id);
-  assert.deepEqual(core.liveDependsOn(card(n3), st.cards), [], 'without the map the old ids name nothing');
+  assert.deepEqual(core.liveDependsOn(card(n3), st.cards), knows ? [n1, n2] : [], 'without the map an old id names nothing');
   assert.deepEqual(core.liveDependsOn(card(n3), st.cards, st.aliases), [n1, n2], 'with it they are the new ids');
+  assert.deepEqual(core.liveLinkNames(card(n3), st.cards, st.aliases), { [n1]: 'first', [n2]: 'second' }, 'and so are the names of the lines');
   assert.deepEqual(core.readMilestoneLayout(e.projectDir, new Set([n1, n2, n3]), st.aliases), { [n3]: { col: 2, row: 2 } });
   // the board shows the new ids
   const b = await startBoardServer(e.projectDir, { port: 0, token: TOKEN });
@@ -2949,6 +2957,76 @@ for (const ref of ['v0.15.2', 'v0.20.0']) test(`when the plugin version at ${ref
   const fixed = await core.changeMilestoneLink(e.projectDir, n3, { remove: n1 });
   assert.deepEqual(fixed.dependsOn, [n2]);
   assert.deepEqual(JSON.parse(repoText(e.projectDir, n3)).dependsOn, [n2]);
+  assert.deepEqual(JSON.parse(repoText(e.projectDir, n3)).linkNames, { [n2]: 'second' }, 'the new ids, and the name of the line that is gone dropped');
   // a loop is seen through the map too: M3 -> M2 and M2 -> M1 (the old id in M2's file), so M1 -> M3 would close it
   await assert.rejects(core.changeMilestoneLink(e.projectDir, n1, { add: n3 }), /loop of milestone links/);
+});
+
+test('in a project kept in the repo a hand link is drawn, named and removed through the board, the card links of a line come off their cards, and another clone reads the names', async (t) => {
+  const w = twoDevices(t);
+  const { A } = w;
+  const T = 'c'.repeat(32);
+  const ids = await as(A, async () => {
+    core.enableRepo(A.dir);
+    const m1 = (await core.addCard(A.dir, { title: 'M1: Payments', kind: 'milestone', source: 'user' })).id;
+    const m2 = (await core.addCard(A.dir, { title: 'M2: Checkout', kind: 'milestone', source: 'user' })).id;
+    const m3 = (await core.addCard(A.dir, { title: 'M3: Launch', kind: 'milestone', source: 'user' })).id;
+    const a = (await core.addCard(A.dir, { title: 'Cart page', parent: m2, source: 'user' })).id;
+    const c = (await core.addCard(A.dir, { title: 'Receipt', parent: m3, blockedBy: [a], source: 'user' })).id;
+    return { m1, m2, m3, a, c };
+  });
+  const call = await as(A, async () => {
+    const b = await startBoardServer(A.dir, { port: 0, token: T });
+    t.after(() => new Promise((r) => { b.server.closeAllConnections?.(); b.server.close(() => r()); }));
+    const key = core.projectKey(A.dir);
+    return async (method, p, body) => { const r = await fetch(`http://127.0.0.1:${b.port}/api/p/${key}${p}`, { method, headers: { 'x-thread-token': T, 'content-type': 'application/json' }, body: body && JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
+  });
+  const { m1, m2, m3, a, c } = ids;
+  const fileOf = (id) => JSON.parse(repoText(A.dir, id));
+  // a hand link: drawn, named, removed
+  let r = await as(A, () => call('POST', `/milestones/${m2}/depends-on`, { add: m1 }));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(fileOf(m2).dependsOn, [m1]);
+  r = await as(A, () => call('POST', `/milestones/${m2}/link-name`, { link: m1, name: 'pay first' }));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(fileOf(m2).linkNames, { [m1]: 'pay first' }, 'the name is in the card file, shared');
+  const overlay = (await as(A, () => JSON.parse(fs.readFileSync(core.projectPaths(A.dir).repo, 'utf8')))).overlay || {};
+  assert.equal(JSON.stringify(overlay).includes('pay first'), false, 'and not in the overlay');
+  for (const bad of [os.homedir(), w.base, w.dataDir, S1]) assert.equal(repoText(A.dir, m2).includes(bad), false);
+  // a line from cards: named, then its card links are taken off the card
+  r = await as(A, () => call('POST', `/milestones/${m3}/link-name`, { link: m2, name: 'blocks launch' }));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  commitAll(A.dir, 'names');
+  git(A.dir, 'push', '-q', 'origin', 'main');
+  const B = w.clone('B');
+  assert.deepEqual(await as(B, () => core.readState(B.dir).cards.find((x) => x.id === m3).linkNames), { [m2]: 'blocks launch' }, 'another clone reads the names');
+  r = await as(A, () => call('POST', `/milestones/${m3}/unlink-cards`, { dep: m2, cards: [[c, a]] }));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.removed, [{ card: c, by: a }]);
+  assert.equal('blockedBy' in fileOf(c), false, 'taken off the card file');
+  assert.equal('linkNames' in fileOf(m3), false, 'and the name of the line that is gone');
+  assert.deepEqual(fileOf(c).history.at(-1).fields, ['blocked by']);
+  r = await as(A, () => call('POST', `/milestones/${m2}/depends-on`, { remove: m1 }));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal('dependsOn' in fileOf(m2), false);
+  assert.equal('linkNames' in fileOf(m2), false);
+  assert.equal(git(A.dir, 'status', '--porcelain').includes('layout'), false);
+});
+
+test('a name is not pruned while a card file cannot be read (the line may come from it), and is when the file is fine again', async (t) => {
+  const e = oneProject(t);
+  core.enableRepo(e.projectDir);
+  const m1 = (await core.addCard(e.projectDir, { title: 'M1', kind: 'milestone', source: 'user' })).id;
+  const m2 = (await core.addCard(e.projectDir, { title: 'M2', kind: 'milestone', source: 'user' })).id;
+  const a = (await core.addCard(e.projectDir, { title: 'A', parent: m1, source: 'user' })).id;
+  const b = (await core.addCard(e.projectDir, { title: 'B', parent: m2, blockedBy: [a], source: 'user' })).id;
+  await core.updateCard(e.projectDir, m2, { linkNames: { [m1]: 'pay first' } }, { source: 'user' });
+  fs.writeFileSync(path.join(cardsDir(e.projectDir), 'cbad01.json'), '<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> x\n');
+  await core.updateCard(e.projectDir, b, { blockedBy: [] }, { source: 'user' });
+  assert.deepEqual(JSON.parse(repoText(e.projectDir, m2)).linkNames, { [m1]: 'pay first' }, 'kept: a card that cannot be read might still make the line');
+  assert.deepEqual(core.liveLinkNames(core.readState(e.projectDir).cards.find((c) => c.id === m2), core.readState(e.projectDir).cards), {}, 'but not shown');
+  fs.rmSync(path.join(cardsDir(e.projectDir), 'cbad01.json'));
+  await core.updateCard(e.projectDir, b, { note: 'x', blockedBy: [a] }, { source: 'user' });
+  await core.updateCard(e.projectDir, b, { blockedBy: [] }, { source: 'user' });
+  assert.equal('linkNames' in JSON.parse(repoText(e.projectDir, m2)), false, 'with every file readable the write that ends the line takes the name');
 });

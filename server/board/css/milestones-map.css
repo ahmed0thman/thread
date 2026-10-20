@@ -29,7 +29,12 @@
 .ms-edge-sel path:not(.ms-arrow):not(.ms-edge-hit) { stroke-width: 4.5; }
 .ms-edge-sel .ms-count { stroke-width: 3; }
 /* a wider line nobody sees, so a thin one is easy to click */
-.ms-edge path.ms-edge-hit { stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
+.ms-edge path.ms-edge-hit { stroke: transparent; stroke-width: 24; pointer-events: stroke; cursor: pointer; }
+/* a line shows it can be picked: thicker and its count filled on hover and on focus */
+.ms-edge:focus { outline: none; }
+.ms-edge:hover path:not(.ms-arrow):not(.ms-edge-hit), .ms-edge:focus-visible path:not(.ms-arrow):not(.ms-edge-hit) { stroke-width: 4.5; }
+.ms-edge:hover .ms-count, .ms-edge:focus-visible .ms-count { stroke-width: 3; fill: var(--accent-bg); }
+.ms-edge:focus-visible .ms-count { stroke: var(--accent); }
 .ms-edge .ms-count, .ms-edge .ms-count-text { cursor: pointer; }
 .ms-count { fill: var(--surface); stroke: currentColor; stroke-width: 1.5; }
 .ms-count-text { fill: var(--text); font: 600 11px/1 var(--sans, system-ui), system-ui, sans-serif; }
@@ -137,6 +142,20 @@
 .ms-pad { display: inline-flex; gap: 2px; }
 .ms-pad-btn { min-width: 32px; }
 
+/* the box on a picked line */
+.ms-pop {
+  position: absolute; z-index: 6; box-sizing: border-box; padding: var(--s3); display: flex; flex-direction: column; gap: var(--s2);
+  background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--r3); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); font-size: 13px;
+}
+.ms-pop-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s2); }
+.ms-pop-title { font-size: 13.5px; }
+.ms-pop-row { margin: 0; overflow-wrap: anywhere; }
+.ms-pop-list { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.ms-pop-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.ms-pop-input { width: 100%; box-sizing: border-box; padding: 5px 8px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r1); }
+.ms-pop-danger { color: var(--fail); }
+.ms-rel-tools { display: inline-flex; gap: 2px; }
+
 @keyframes ms-shake { 0%, 100% { translate: 0; } 20% { translate: -6px; } 40% { translate: 6px; } 60% { translate: -4px; } 80% { translate: 4px; } }
 .ms-node-wrap.ms-shake > .ms-node { border-color: var(--fail); background: var(--fail-bg); }
 @media (prefers-reduced-motion: no-preference) {
@@ -164,5 +183,5 @@
 }
 @media print {
   .ms-map-box { overflow: visible; }
-  .ms-handle, .ms-hint, .ms-note, .ms-edit, .ms-reset { display: none; }
+  .ms-handle, .ms-hint, .ms-note, .ms-edit, .ms-reset, .ms-pop { display: none; }
 }

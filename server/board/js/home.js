@@ -208,6 +208,7 @@
     const where = showingHome ? 'home' : selKey + '/' + viewSel;
     const keep = !showingHome && viewSel === 'list' ? listSnapshot() : null;
     const focus = !keep && where === paneWhere ? paneFocusKey() : null;   // only when the same view is drawn again
+    const msFocus = !showingHome && viewSel === 'milestones' && where === paneWhere ? msFocusSnapshot() : null;   // what the generic restore does not know: a line, the name being typed
     paneWhere = where;
     elPane.replaceChildren();
     if (!paneSig) return;
@@ -217,6 +218,7 @@
     else if (viewSel === 'summary') renderSummary();
     elPane.scrollTop = top;
     restorePaneFocus(focus);
+    if (msFocus) msFocusRestore(msFocus);
   }
 
   // The projects, the top bar and the pane follow the data: each is drawn only when what it shows changed.

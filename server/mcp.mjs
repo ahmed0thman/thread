@@ -48,6 +48,7 @@ const CARD_FIELD_PROPS = {
   blocked_by: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'The ids of up to 10 cards that must be finished first, for example ["c4"]. A card cannot be blocked by itself or by a milestone, and a card that has this list cannot be started as a thread. Not for milestones or threads.' },
   criteria: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'Up to 10 acceptance criteria, each up to 200 characters. A card with criteria cannot be moved to the done stage, or any stage after it, until the owner has approved a review item on it: raise one with wait_add (kind "review"). In a project kept in the repo only an approval given on this machine\'s board counts (one that came from another device must be confirmed on the card page here first). Once a card has criteria you can only add lines to them. A card with criteria cannot be started as a thread. Not for milestones or threads.' },
   depends_on: { type: 'array', items: { type: 'string' }, maxItems: 20, description: 'Only for a milestone: the ids of up to 20 other milestones it depends on, for example ["c4"]. They are drawn as links on the board\'s Milestones map and in board_list as {depends on M2 (c4)}; they only say what the plan is and gate nothing (the cards of a milestone can still be started and finished). A milestone cannot depend on itself, and the links drawn this way never make a loop (such a call is refused). board_update replaces the whole list; an empty list removes the links you drew. Links that come from cards (a card of one milestone blocked by a card of another) are not in this list: they are made by blocked_by on those cards.' },
+  link_names: { type: 'object', additionalProperties: { type: 'string', maxLength: 40 }, description: 'Only for a milestone: short names (up to 40 characters, one line) for the lines of the Milestones map that run to the milestones it depends on, as { "<milestone id>": "text" }, for example {"c4": "pay first"}. A line is a link drawn by hand (depends_on) or a link the cards make (blocked_by); a name needs one of them. The call adds or replaces the names it gives and leaves the others; an empty text takes a name away. board_list shows them.' },
   worker: WORKER_PROP,
 };
 const CONFIRM_PROP = { type: 'string', description: 'The confirm code from a "CONFIRMATION REQUIRED" answer. Pass it only after the user agreed to continue.' };
@@ -149,7 +150,7 @@ const TOOLS = [
   },
   {
     name: 'board_update',
-    description: 'Change a board card\'s title, note, status, kind (task or idea), milestone, lane, agent, type, priority, labels, blocked_by or criteria, or (for a milestone) depends_on. An empty value (an empty list, or an empty string) removes that field, except criteria: once a card has acceptance criteria you may add lines but not remove or change them (only the owner can, on the board). A card with criteria cannot be moved to the done stage, or any stage after it, until the owner approves a review item on it (wait_add, kind "review"; in a project kept in the repo only an approval given or confirmed on this machine\'s board counts); a card moved back out of the finished stages needs a new approval. Thread cards follow their thread and should not be moved by hand. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
+    description: 'Change a board card\'s title, note, status, kind (task or idea), milestone, lane, agent, type, priority, labels, blocked_by or criteria, or (for a milestone) depends_on or link_names. An empty value (an empty list, or an empty string) removes that field, except criteria: once a card has acceptance criteria you may add lines but not remove or change them (only the owner can, on the board). A card with criteria cannot be moved to the done stage, or any stage after it, until the owner approves a review item on it (wait_add, kind "review"; in a project kept in the repo only an approval given or confirmed on this machine\'s board counts); a card moved back out of the finished stages needs a new approval. Thread cards follow their thread and should not be moved by hand. Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -334,7 +335,7 @@ function clean(obj) {
 // The project-management fields and the worker of a board_add or board_update call, as core takes them. The values are
 // checked there; null and empty values pass through, because they remove a field.
 function cardFieldArgs(args) {
-  return clean({ type: args.type, priority: args.priority, labels: args.labels, blockedBy: args.blocked_by, criteria: args.criteria, dependsOn: args.depends_on, worker: optStr(args, 'worker') });
+  return clean({ type: args.type, priority: args.priority, labels: args.labels, blockedBy: args.blocked_by, criteria: args.criteria, dependsOn: args.depends_on, linkNames: args.link_names, worker: optStr(args, 'worker') });
 }
 
 // The calling session: the session_id argument, else the environment, else unknown.
@@ -427,6 +428,8 @@ function fieldMarks(c, cards, cfg, aliases) {
   // a milestone: the links drawn by hand to other milestones (all of them, finished or not: they are the plan, not a gate)
   const links = core.liveDependsOn(c, cards, aliases);
   if (links.length) marks.push(`{depends on ${links.map((id) => `${milestoneName(cards.find((x) => x.id === id))} (${id})`).join(', ')}}`);
+  const names = Object.entries(core.liveLinkNames(c, cards, aliases));
+  if (names.length) marks.push(`{link names: ${names.map(([id, text]) => `${milestoneName(cards.find((x) => x.id === id))} (${id}) "${text}"`).join(', ')}}`);
   if (c.kind !== 'milestone' && core.gatedByCriteria(c)) {
     // a pull cut or dropped the criteria the owner's board had: the card is still held to the gate (fields.criteriaCut)
     marks.push(core.criteriaCut(c) ? `[criteria ${core.hasCriteria(c) ? c.criteria.length : 0}, cut in the repo file: the owner must confirm on the board]` : `[criteria ${c.criteria.length}]`);

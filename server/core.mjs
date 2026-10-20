@@ -13,7 +13,7 @@ import { EFFORTS, cleanEffort, cleanModel, collapse, sameSession, sessionModel }
 import { ChatOnlyError, DEFAULT_STAGES, readConfig } from './config.mjs';
 import { openWaits, reviewApproved } from './waits.mjs';
 import { notifyActive } from './notify.mjs';
-import { CARD_ID_RE, CARD_ID_SRC, FIELD_NAMES, MAX_DEPENDS, addHistory, cardById, claudeCard, cleanDependsOn, cleanFields, cleanWorker, criteriaCut, criteriaHash, finishedStageIds, gatedByCriteria, hasCriteria, leftDoneAt, liveBlockers, liveDependsOn, pinLeftDone as pinExit, threadById, watchFinished } from './fields.mjs';
+import { CARD_ID_RE, CARD_ID_SRC, FIELD_NAMES, MAX_DEPENDS, addHistory, cardById, claudeCard, cleanDependsOn, cleanFields, cleanLinkNames, cleanWorker, criteriaCut, criteriaHash, finishedStageIds, gatedByCriteria, hasCriteria, leftDoneAt, liveBlockers, liveDependsOn, liveLinkNames, milestoneCardLinks, pinLeftDone as pinExit, threadById, watchFinished } from './fields.mjs';
 import { codeMapNote } from './codemap.mjs';
 import { RESUME, laneSnapshot, requireRunnableLane, unusableLane } from './lanes.mjs';
 
@@ -480,6 +480,42 @@ function setDependsOn(state, card, ids) {
   return true;
 }
 
+// The names a milestone gives its lines (`linkNames`, see fields.cleanLinkNames): a name goes with a line that runs between the two milestones, a
+// hand link or a card link. `changes` is the cleaned object: a text sets a name, null takes it away. True when the card changed.
+function setLinkNames(state, card, changes) {
+  if (card.kind !== 'milestone') {
+    if (Object.values(changes).some((v) => v !== null)) throw new Error('link_names is only for milestones: it names the lines of the Milestones map');
+    return false;
+  }
+  const names = liveLinkNames(card, state.cards, state.aliases);
+  for (const [raw, text] of Object.entries(changes)) {
+    const id = !milestoneOf(state, raw) && state.aliases && state.aliases.has(raw) ? state.aliases.get(raw) : raw;
+    if (text === null) { delete names[id]; continue; }
+    if (id === card.id) throw new Error(`link_names: ${id} cannot have a line to itself`);
+    if (!milestoneOf(state, id)) throw new Error(`link_names: milestone not found: ${id}`);
+    const line = liveDependsOn(card, state.cards, state.aliases).includes(id) || milestoneCardLinks(state.cards).some((e) => e.from === card.id && e.to === id);
+    if (!line) throw new Error(`link_names: no line runs from ${msName(milestoneOf(state, id))} to ${msName(card)}; a name needs a link drawn by hand (depends_on) or a card link (blocked_by)`);
+    names[id] = text;
+  }
+  if (Object.keys(names).length > MAX_DEPENDS) throw new Error(`a milestone can name ${MAX_DEPENDS} lines at most`);
+  if (JSON.stringify(card.linkNames ?? {}) === JSON.stringify(names)) return false;
+  if (Object.keys(names).length) card.linkNames = names; else delete card.linkNames;
+  return true;
+}
+// Drops the names of a milestone whose lines are gone (the last link taken away). Quiet: no history, no time.
+// Never while the state reports a card file it could not read (state.notices): a line may come from a card that cannot be seen now.
+function pruneLinkNames(state, card) {
+  if (!isObject(card.linkNames) || (Array.isArray(state.notices) && state.notices.length)) return;
+  const names = liveLinkNames(card, state.cards, state.aliases);
+  if (Object.keys(names).length) card.linkNames = names; else delete card.linkNames;
+}
+
+// The same for every milestone: run by a write that can end a line (a blocker taken off, a card moved to another milestone or turned into an idea,
+// a card or a milestone removed).
+function pruneAllLinkNames(state) {
+  for (const c of state.cards) if (c.kind === 'milestone') pruneLinkNames(state, c);
+}
+
 // Moving a card that has acceptance criteria into a finished stage (the done stage or a later one) needs the owner's approval of a
 // review item; so does a move from one finished stage to another when the card was never approved (the owner dragged it there). Only
 // Claude's own changes are held to it; the board's are not (its views show such a card as not verified).
@@ -510,7 +546,7 @@ function guardCriteria(card, next) {
   if (!kept) throw new Error(`${card.id}'s acceptance criteria can only be changed by the owner on the board; you may add lines.`);
 }
 
-export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent, lane, agent, type, priority, labels, blockedBy, criteria, dependsOn, worker } = {}) {
+export async function addCard(projectDirArg, { title, note = '', status, kind = 'task', source = 'claude', parent, lane, agent, type, priority, labels, blockedBy, criteria, dependsOn, linkNames, worker } = {}) {
   const cfg = readConfig(projectDirArg);
   requireTasks(cfg);
   const t = typeof title === 'string' ? title.trim() : '';
@@ -533,6 +569,7 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
   }
   const fields = cleanFields({ type, priority, labels, blockedBy, criteria });
   const depends = cleanDependsOn(dependsOn);
+  const names = cleanLinkNames(linkNames);
   const by = cleanWorker(worker);
   return updateState(projectDirArg, (state) => {
     const claude = source === 'claude';
@@ -557,6 +594,7 @@ export async function addCard(projectDirArg, { title, note = '', status, kind = 
     if (agentName) card.agent = agentName;
     setFields(state, card, fields);
     if (dependIds) setDependsOn(state, card, dependIds);
+    if (names && Object.keys(names).length) setLinkNames(state, card, names);
     if (source === 'claude') gateDone(state, card, cfg, status);
     addHistory(card, source, { type: 'created', to: status }, ts, by);
     state.cards.push(card);
@@ -573,7 +611,7 @@ function checkKindChange(card, kind) {
   if (kind !== 'task' && kind !== 'idea') throw new Error(`a card can only become a task or an idea, not "${kind.slice(0, 40)}"`);
 }
 
-export async function updateCard(projectDirArg, id, { title, note, status, kind, parent, lane, agent, type, priority, labels, blockedBy, criteria, dependsOn, worker } = {}, { source = 'claude' } = {}) {
+export async function updateCard(projectDirArg, id, { title, note, status, kind, parent, lane, agent, type, priority, labels, blockedBy, criteria, dependsOn, linkNames, worker } = {}, { source = 'claude' } = {}) {
   const cfg = readConfig(projectDirArg);
   if (title !== undefined) {
     if (typeof title !== 'string' || !title.trim()) throw new Error('title must not be empty');
@@ -589,6 +627,7 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
   }
   const cleaned = cleanFields({ type, priority, labels, blockedBy, criteria });
   const depends = cleanDependsOn(dependsOn);
+  const names = cleanLinkNames(linkNames);
   const by = cleanWorker(worker);
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, id, source === 'claude');
@@ -622,6 +661,13 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
     if (depends !== undefined && (depends !== null || card.kind === 'milestone')) {
       if (setDependsOn(state, card, depends === null ? [] : source === 'claude' ? claudeIds(state, depends) : depends)) { changed = true; fields.push('depends on'); }
     }
+    // after the links, so a link and its name can come in one call; a link taken away takes its name
+    if (card.kind === 'milestone' && depends !== undefined) pruneLinkNames(state, card);
+    if (names !== undefined && Object.keys(names).length) {
+      const mapped = {};
+      for (const [k, v] of Object.entries(names)) mapped[source === 'claude' ? claudeId(state, k) : k] = v;
+      if (setLinkNames(state, card, mapped)) { changed = true; fields.push('link names'); }
+    }
     // the owner changing the criteria on the board is what this machine's record of them follows (fields.criteriaCut); Claude's lines are
     // recorded by the write itself
     if (source === 'user' && state.repoBacked && cleaned.criteria !== undefined && card.kind !== 'milestone') {
@@ -636,6 +682,8 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
       card.status = status;
       changed = true;
     }
+    // a write that can end a line takes the names of the lines that are gone
+    if (fields.some((f) => f === 'blocked by' || f === 'milestone' || f === 'kind')) pruneAllLinkNames(state);
     const last = Array.isArray(card.history) ? card.history[card.history.length - 1] : null;
     if (!changed && by && !isThread(card) && !(last && last.worker === by)) {
       // nothing else changed: the call only says who did the work (once, not again for the worker the latest entry already names)
@@ -694,13 +742,85 @@ export async function changeMilestoneLink(projectDirArg, id, { add, remove } = {
       next = cur.filter((x) => x !== dep);
     }
     // a link to a milestone that is gone is dropped by the same write: it is rebuilt from the live ones
-    if (setDependsOn(state, card, next)) {
+    const hadNames = JSON.stringify(card.linkNames ?? {});
+    const linked = setDependsOn(state, card, next);
+    pruneLinkNames(state, card);
+    if (linked || hadNames !== JSON.stringify(card.linkNames ?? {})) {
       const ts = now();
       card.updatedAt = ts;
       if (source === 'user') card.seenByClaude = false;
       addHistory(card, source, { type: 'edited', fields: ['depends on'] }, ts);
     }
     return card;
+  });
+}
+
+/**
+ * Names (or, with an empty `name`, unnames) the line from milestone `link` to milestone `id` (the one `id` waits for): what the board's rename calls.
+ * A line is a hand link or a card link. Resolves to the milestone card.
+ */
+export async function setLinkName(projectDirArg, id, { link, name } = {}, { source = 'user' } = {}) {
+  requireTasks(readConfig(projectDirArg));
+  if (typeof link !== 'string' || !CARD_ID_RE.test(link.trim())) throw new Error('the line must be given as the card id of the milestone it comes from, like "c4"');
+  if (typeof name !== 'string') throw new Error('name must be given: a short text, or an empty string to take the name away');
+  const changes = cleanLinkNames({ [link.trim()]: name });
+  return updateState(projectDirArg, (state) => {
+    const card = milestoneOf(state, id);
+    if (!card) throw new Error(`milestone not found: ${id}`);
+    if (setLinkNames(state, card, changes)) {
+      const ts = now();
+      card.updatedAt = ts;
+      if (source === 'user') card.seenByClaude = false;
+      addHistory(card, source, { type: 'edited', fields: ['link names'] }, ts);
+    }
+    return card;
+  });
+}
+
+/**
+ * Takes card links off their cards: `pairs` are the [card, blocker] pairs the owner confirmed for the line from milestone `id` to milestone `dep`.
+ * All in ONE state update (one lock, and in a project kept in the repo one write that is undone as a whole when a file cannot be written): each
+ * pair is taken out of the card's CURRENT blockers (a blocker added meanwhile stays), and a pair that no longer makes the line (the card moved,
+ * its blockers changed, a milestone is gone) is skipped, so nothing the owner did not see is removed and nothing throws halfway. The edit is
+ * what an edit of the card's Blocked by on the board does: its time, "new from user", the history entry, the watch of the finished stages.
+ * Resolves to { removed: [{ card, by }], skipped: n, cards: the cards that changed }.
+ */
+export async function removeCardLinks(projectDirArg, id, dep, pairs, { source = 'user' } = {}) {
+  const cfg = readConfig(projectDirArg);
+  requireTasks(cfg);
+  if (!Array.isArray(pairs) || !pairs.length) throw new Error('give the [card, blocker] pairs to take off');
+  if (pairs.length > 200 || !pairs.every((p) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'string' && typeof p[1] === 'string')) throw new Error('the pairs must be lists of a card id and a blocker id, at most 200');
+  return updateState(projectDirArg, (state) => {
+    if (!milestoneOf(state, id)) throw new Error(`milestone not found: ${id}`);
+    const line = milestoneCardLinks(state.cards).find((e) => e.from === id && e.to === dep);
+    const live = new Set((line ? line.links : []).map((l) => `${l.card}\n${l.by}`));
+    const gone = new Map();
+    let skipped = 0;
+    for (const [cardId, by] of pairs) {
+      if (!live.has(`${cardId}\n${by}`)) { skipped += 1; continue; }
+      gone.set(cardId, [...(gone.get(cardId) || []), by]);
+    }
+    const removed = [];
+    const changed = [];
+    const ts = now();
+    for (const [cardId, list] of gone) {
+      const card = state.cards.find((c) => c.id === cardId && c.kind !== 'milestone');
+      if (!card) { skipped += list.length; continue; }
+      pinLeftDone(state, card, cfg);
+      const kept = (card.blockedBy || []).filter((x) => !list.includes(x));
+      if (kept.length === (card.blockedBy || []).length) { skipped += list.length; continue; }
+      if (kept.length) card.blockedBy = kept; else delete card.blockedBy;
+      card.updatedAt = ts;
+      if (source === 'user') card.seenByClaude = false;
+      if (!isThread(card)) {
+        if (state.repoBacked) watchFinished(card, cfg, ts);
+        addHistory(card, source, { type: 'edited', fields: ['blocked by'] }, ts);
+      }
+      for (const by of list) removed.push({ card: cardId, by });
+      changed.push(card);
+    }
+    if (removed.length) pruneAllLinkNames(state);
+    return { removed, skipped, cards: [...changed, milestoneOf(state, id)] };
   });
 }
 
@@ -750,6 +870,7 @@ export async function removeCard(projectDirArg, id, { source = 'claude' } = {}) 
       }
     }
     state.cards = state.cards.filter((c) => c !== card);
+    pruneAllLinkNames(state);
     return { removed: card.id, shared, keptFile };
   });
   // Logs and activity files would otherwise outlive the card; a thread that has this id keeps its own. Best effort. The dot

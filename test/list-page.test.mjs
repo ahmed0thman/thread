@@ -651,7 +651,7 @@ test('a card or milestone link in the Milestones view opens the card page on a p
   }
   assert.equal(t.opened.length, 2);
   // the key follows what is drawn
-  assert.match(t.page.milestonesPaneKey(), /^\["milestones","k1","map","c1",\[\["c1","Launch","open","",2,1,0,1,0,\[\["c2","Open one","New",""\]\]\]\],\[\],\[\[\],null,"",false\]\]$/);
+  assert.match(t.page.milestonesPaneKey(), /^\["milestones","k1","map","c1",\[\["c1","Launch","open","",2,1,0,1,0,\[\["c2","Open one","New",""\]\]\]\],\[\],\[\[\],null,"",false,null\]\]$/);
 });
 
 test('a card with a running agent has a dot in the Milestones view, named for screen readers, and the key follows it', () => {

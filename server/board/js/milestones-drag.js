@@ -9,6 +9,7 @@
 
   let msView = null;            // the last drawing's grid, cells and map (msMapEl sets it)
   let msDrag = null;            // what the pointer is doing right now (see msNodeDown, msHandleDown)
+  let msEdgeTab = '';           // the line that is the tab stop of the lines on the map
   let msSuppressUntil = 0;      // the click that ends a drag must not pick
   const MS_DRAG_PX = 5;         // how far a press must move to be a drag: a click still picks
   const MS_HOLD_MS = 450;       // a finger must rest this long to take a milestone (moving sooner is a scroll)
@@ -21,7 +22,7 @@
   function msUiSig(u, list) {
     const ids = new Set(list.map((m) => m.id));
     const lay = msLayout();
-    return [Object.keys(lay).filter((id) => ids.has(id) && lay[id]).sort().map((id) => [id, lay[id].col, lay[id].row]), u.move ? [u.move.id, u.move.col, u.move.row] : null, u.edge, !!u.confirmReset];
+    return [Object.keys(lay).filter((id) => ids.has(id) && lay[id]).sort().map((id) => [id, lay[id].col, lay[id].row]), u.move ? [u.move.id, u.move.col, u.move.row] : null, u.edge, !!u.confirmReset, u.pop ? [u.pop.key, u.pop.mode] : null];
   }
 
   // ---- what the map says back: one polite line under the key ----
@@ -79,7 +80,122 @@
     msEndMove();
     u.sel = e.from;
     u.edge = e.from + '>' + e.to;
+    if (msCanEdit()) u.pop = { key: u.edge, mode: 'view', draft: e.name || '', fresh: true };
+    msEdgeTab = u.edge;
     renderPane();
+    if (u.pop) msFocusPop();
+  }
+  // ---- a line's own box ----
+  const msEdgeEl = (key) => Array.prototype.find.call(elPane.querySelectorAll('g.ms-edge'), (g) => g.dataset.edge === key) || null;
+  function msFocusEdge(key) { const g = msEdgeEl(key); if (g && g.focus) g.focus({ preventScroll: true }); }
+  // The first button (or the field) of the open box gets the focus.
+  function msFocusPop() {
+    const pop = elPane.querySelector('.ms-pop');
+    // a step that confirms a removal starts on Back, never on the button that removes
+    const back = pop && msUi().pop && msUi().pop.mode === 'cards' ? Array.prototype.find.call(pop.querySelectorAll('.ms-pop-actions button'), (b) => b.textContent === 'Back') : null;
+    const first = back || (pop && (pop.querySelector('input') || pop.querySelector('.ms-pop-actions button')));
+    if (first) first.focus({ preventScroll: true });
+  }
+  function msOpenPop(key, mode) {
+    const u = msUi();
+    const e = msView && msView.key === selKey ? msView.map.edges.find((x) => x.from + '>' + x.to === key) : null;
+    if (!e) return;
+    u.sel = e.from;
+    u.edge = key;
+    u.pop = { key, mode: mode || 'view', draft: e.name || '', fresh: true };
+    msEdgeTab = key;
+    renderPane();
+    msFocusPop();
+  }
+  function msClosePop(refocus) {
+    const u = msUi();
+    const key = u.pop && u.pop.key;
+    u.pop = null;
+    renderPane();
+    if (refocus && key) { msFocusEdge(key); if (!msEdgeEl(key)) msFocusNode(u.sel); }
+  }
+  // Keys on a line: Enter or Space open its box, Delete too (the box is where removing is confirmed), the arrows move to the next line.
+  function msEdgeKey(ev, map, e) {
+    const k = ev.key;
+    const key = e.from + '>' + e.to;
+    if (k === 'Escape') { if (msUi().pop) { ev.preventDefault(); msClosePop(true); } return; }
+    if (ev.repeat && (k === 'Enter' || k === ' ' || k === 'Delete' || k === 'Backspace')) { ev.preventDefault(); return; }
+    if (k === 'Enter' || k === ' ' || k === 'Delete' || k === 'Backspace') { ev.preventDefault(); if (msCanEdit()) msOpenPop(key, 'view'); else msPickEdge(e); return; }
+    const to = k === 'ArrowRight' || k === 'ArrowDown' ? 1 : k === 'ArrowLeft' || k === 'ArrowUp' ? -1 : 0;
+    if (!to) return;
+    ev.preventDefault();
+    const i = map.edges.indexOf(e);
+    const next = map.edges[Math.max(0, Math.min(map.edges.length - 1, i + to))];
+    const nk = next.from + '>' + next.to;
+    msEdgeTab = nk;
+    const g = msEdgeEl(nk);
+    if (g) { Array.prototype.forEach.call(elPane.querySelectorAll('g.ms-edge'), (x) => x.setAttribute('tabindex', x === g ? '0' : '-1')); g.focus({ preventScroll: true }); }
+  }
+  // The map's own focus over a redraw (a poll that changed something): the name being typed, with its caret, and a line that has the focus.
+  // (The pane's generic restore knows links, [data-id] elements and buttons by text; it does not know these.)
+  function msFocusSnapshot() {
+    const a = document.activeElement;
+    if (!a || !a.getAttribute || !elPane.contains(a)) return null;
+    if (a.className === 'ms-pop-input') return { k: 'name', s: a.selectionStart, e: a.selectionEnd };
+    if (a.dataset && a.dataset.edge) return { k: 'edge', key: a.dataset.edge };
+    return null;
+  }
+  function msFocusRestore(snap) {
+    if (!snap) return;
+    if (snap.k === 'edge') { msFocusEdge(snap.key); return; }
+    const input = elPane.querySelector('.ms-pop-input');
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    if (input.setSelectionRange && typeof snap.s === 'number') input.setSelectionRange(snap.s, snap.e);
+  }
+  // A press anywhere but on the box or a line closes the box.
+  function msOutsideDown(ev) {
+    const u = msUiAll.get(selKey);
+    if (!u || !u.pop || !elPane.querySelector('.ms-pop')) return;
+    const t = ev.target;
+    if (t && t.closest && (t.closest('.ms-pop') || t.closest('g.ms-edge') || t.closest('.ms-rel-line'))) return;
+    u.pop = null;
+    renderPane();
+  }
+  if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('pointerdown', msOutsideDown, true);
+
+  // Names the line (an empty text takes the name away): the waiting milestone's card keeps it.
+  async function msRenameLine(e, text) {
+    const u = msUi();
+    const key = selKey;
+    const name = String(text).trim();
+    try {
+      const card = await api('POST', pp(key, 'milestones/' + encodeURIComponent(e.from) + '/link-name'), { link: e.to, name });
+      applyCard(card, key);
+      const here = e.from + '>' + e.to;
+      // back to the box of this line, unless the owner has moved on to another line or closed it meanwhile
+      const stay = u.pop && u.pop.key === here;
+      if (stay) u.pop = { key: here, mode: 'view', draft: name };
+      renderPane();
+      if (stay) msFocusPop();
+      msSay(name ? 'The line from ' + msNameOfId(e.to) + ' to ' + msNameOfId(e.from) + ' is named "' + name + '".' : 'The line from ' + msNameOfId(e.to) + ' to ' + msNameOfId(e.from) + ' has no name now.');
+    } catch (err) {
+      if (!err.auth) msSay('The name was not saved: ' + msClean(err), true);
+    }
+  }
+  // Takes the card links that make the line off their cards (the server uses the normal card update, so history, the repo and the other rules apply).
+  async function msRemoveCardLinks(e) {
+    const u = msUi();
+    const key = selKey;
+    const still = e.hand;
+    try {
+      // exactly the pairs the owner confirmed: the server takes only those, from the cards as they are now
+      const data = await api('POST', pp(key, 'milestones/' + encodeURIComponent(e.from) + '/unlink-cards'), { dep: e.to, cards: e.links.map((l) => [l.card, l.by]) });
+      u.pop = null;
+      u.edge = still ? e.from + '>' + e.to : '';
+      applyCards(data.cards, key);
+      renderPane();
+      const done = (data.removed || []).map((l) => l.card + ' no longer blocked by ' + l.by).join(', ');
+      msSay((done ? 'Removed the card links: ' + done + '.' : 'Nothing was removed: the cards had changed since the list was shown.') + (data.skipped && done ? ' ' + msPlural(data.skipped, 'link had', 'links had') + ' already changed.' : '') + (still ? ' The link you drew is still there.' : ''));
+      msFocusNode(u.sel);
+    } catch (err) {
+      if (!err.auth) msSay('The card links were not removed: ' + msClean(err), true);
+    }
   }
 
   // ---- saving a layout ----
@@ -178,6 +294,7 @@
     try {
       const card = await api('POST', pp(key, 'milestones/' + encodeURIComponent(waiter) + '/depends-on'), { remove: dep });
       u.edge = '';
+      u.pop = null;
       applyCard(card, key);
       renderPane();
       msSay(text + (msView && msView.map.edges.some((e) => e.from === waiter && e.to === dep && e.links.length) ? ' Cards still link them.' : ''));

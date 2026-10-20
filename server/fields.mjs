@@ -10,6 +10,7 @@ export const MAX_LABELS = 8;
 export const MAX_LABEL = 24;
 export const MAX_BLOCKERS = 10;
 export const MAX_DEPENDS = 20;
+export const MAX_LINK_NAME = 40;
 export const MAX_CRITERIA = 10;
 export const MAX_CRITERION = 200;
 export const MAX_WORKER = 64;
@@ -136,6 +137,30 @@ export function cleanDependsOn(v) {
     if (!CARD_ID_RE.test(t)) throw new Error(`depends_on takes milestone card ids like "c4" or "c8k2x1", not "${String(x).slice(0, 40)}"`);
     if (out.includes(t)) throw new Error(`${t} is given twice in depends_on`);
     out.push(t);
+  }
+  return out;
+}
+
+// The short names a milestone gives the lines on the Milestones map that run to the milestones it waits for (`linkNames`: { <the milestone the
+// line comes from>: "text" }). The shape only; that the milestone is one and that a line runs to it is checked against the state (setLinkNames in
+// core.mjs). An empty text (or null) takes a name away. Not one of FIELD_NAMES, like dependsOn. An older plugin version ignores it and keeps it.
+export function cleanLinkNames(v) {
+  if (v === undefined) return undefined;
+  if (v === null) return {};
+  if (!isObject(v)) throw new Error('link_names must be an object of milestone ids and short names');
+  const keys = Object.keys(v);
+  if (keys.length > MAX_DEPENDS) throw new Error(`link_names has too many entries (${keys.length}, the limit is ${MAX_DEPENDS})`);
+  const out = {};
+  for (const k of keys) {
+    const id = k.trim();
+    if (!CARD_ID_RE.test(id)) throw new Error(`link_names takes milestone card ids like "c4" as keys, not "${k.slice(0, 40)}"`);
+    const x = v[k];
+    if (x === null || x === undefined || (typeof x === 'string' && !x.trim())) { out[id] = null; continue; }
+    const t = typeof x === 'string' ? x.trim().replace(/\s+/g, ' ') : '';
+    if (!t || t.length > MAX_LINK_NAME || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(typeof x === 'string' ? x.trim() : '')) {
+      throw new Error(`a link name must be 1 to ${MAX_LINK_NAME} characters on one line, not "${String(x).slice(0, 40)}"`);
+    }
+    out[id] = t;
   }
   return out;
 }
@@ -335,6 +360,50 @@ export function liveDependsOn(card, cards, aliases) {
     const id = !isMs(raw) && aliases && aliases.has(raw) ? aliases.get(raw) : raw;
     if (id === card.id || out.includes(id) || !isMs(id)) continue;
     out.push(id);
+  }
+  return out;
+}
+
+/**
+ * The lines the cards make between milestones: [{ from, to, links: [{ card, by }] }], `from` the milestone that waits (a card in it is blocked
+ * by a card in `to`). Ideas and milestones do not count, a link inside one milestone is none, and a stored blocker that is a milestone reads as
+ * that milestone. The same rule as the Milestones map's (milestoneDeps in the board page).
+ */
+export function milestoneCardLinks(cards) {
+  const ms = new Set(cards.filter((c) => c && c.kind === 'milestone').map((c) => c.id));
+  const home = new Map([...ms].map((id) => [id, id]));
+  const counted = (c) => c && c.kind !== 'milestone' && c.kind !== 'idea' && ms.has(c.parent);
+  for (const c of cards) if (counted(c)) home.set(c.id, c.parent);
+  const edges = new Map();
+  for (const c of cards) {
+    if (!counted(c) || !Array.isArray(c.blockedBy)) continue;
+    for (const b of new Set(c.blockedBy.filter((x) => typeof x === 'string'))) {
+      const to = home.get(b);
+      if (!to || to === c.parent) continue;
+      const k = `${c.parent}>${to}`;
+      if (!edges.has(k)) edges.set(k, { from: c.parent, to, links: [] });
+      edges.get(k).links.push({ card: c.id, by: b });
+    }
+  }
+  return [...edges.values()];
+}
+
+/**
+ * The names of a milestone's lines that still have a line: { <id of the milestone it depends on>: "text" }. A name is kept while a hand link
+ * (`dependsOn`) or a card link runs between the two. `aliases` (state.aliases) reads an id the one-time copy changed, as liveDependsOn does.
+ */
+export function liveLinkNames(card, cards, aliases) {
+  if (!card || card.kind !== 'milestone' || !isObject(card.linkNames)) return {};
+  const isMs = (id) => cards.some((c) => c && c.id === id && c.kind === 'milestone');
+  const hand = new Set(liveDependsOn(card, cards, aliases));
+  const fromCards = new Set(milestoneCardLinks(cards).filter((e) => e.from === card.id).map((e) => e.to));
+  const out = {};
+  for (const [raw, text] of Object.entries(card.linkNames)) {
+    const id = !isMs(raw) && aliases && aliases.has(raw) ? aliases.get(raw) : raw;
+    // a name from a file is read as one line of plain text: control characters and line breaks become spaces
+    const clean = typeof text === 'string' ? text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim() : '';
+    if (!clean || id === card.id || id in out || !isMs(id) || !(hand.has(id) || fromCards.has(id))) continue;
+    out[id] = Array.from(clean).slice(0, MAX_LINK_NAME).join('');
   }
   return out;
 }
