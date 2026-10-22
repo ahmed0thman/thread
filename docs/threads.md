@@ -24,7 +24,7 @@ The thread's digest appears under four headings, **Happened**, **Decided**, **Ch
 /thread:board
 ```
 
-The link it prints opens your project on its Summary. **Board** in the top bar shows the cards in their columns.
+It opens your project on its Summary in your browser. **Board** in the top bar shows the cards in their columns.
 
 By default the thread does not get your whole conversation. Claude writes it a brief from what you typed, so it starts with far less context than a full copy ([How threads work](#how-threads-work) says what that costs). Claude also picks what runs the thread by how hard the task is: a smaller sub-agent or model for simple work, the session's own model for work that needs judgment (see [Choosing the agent and model](agent-behavior.md#choosing-the-agent-and-model)). Flags change these defaults:
 
@@ -47,6 +47,7 @@ A thread opens full-window on the board (see [The Board view](board.md#the-board
 
 - **Context.** By default a thread starts a fresh session and knows only the brief and the task. It also loads the project's `CLAUDE.md` on its own, and sees files as they are on disk when it reads them. With `--full` it starts as a copy of the main session at that moment. A thread on a [delegation lane](delegation.md#delegation-lanes) is always a brief thread: its provider's CLI knows only the brief and the task. Either way it does not see anything the main session does afterwards, and neither do its follow-ups: a follow-up resumes the thread's own session. Continue a thread for the same task; start a new one for a new task. Claude tells a continued thread what changed with a [catch-up note](agent-behavior.md#catch-up-notes-on-follow-ups).
 - **Model and effort.** With `/thread:new`, Claude chooses a sub-agent or a model by how hard the task is, unless you name one; see [Choosing the agent and model](agent-behavior.md#choosing-the-agent-and-model). A thread with neither an agent nor a model runs with the same model and effort as the main session. An agent brings its own model, effort and instructions, on every turn.
+- **For a card.** A thread can do the work of a task or idea (`card` in `thread_start`, `--card` in `/thread:new`): the card then shows each turn as a run with its live steps and report, as for a sub-agent, and stays a task. See [Running a lane for a card](delegation.md#running-a-lane-for-a-card).
 - **Hand-back.** A thread never writes into the main session. Each of its replies ends with the four-heading digest and an ordered step map. `/thread:report` gives the digest to the main session; the step map is only drawn on the board. Reporting does not need your approval: the digest enters the main session as it is, and a thread card cannot carry acceptance criteria, so the [done gate](board.md#card-fields-workers-and-the-done-gate) does not cover it.
 - **Reported status.** A thread counts as reported once the session that started it has pulled its newest result. A follow-up that produces a new result makes it "not reported" again. A follow-up that fails leaves it as it was.
 - **Announcements.** When a thread finishes, the session that started it is told on your next message, not in the middle of a turn.

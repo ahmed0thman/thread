@@ -11,11 +11,11 @@ import crypto from 'node:crypto';
 import vm from 'node:vm';
 import { spawn } from 'node:child_process';
 import {
-  PARENT_SESSION, setupThreadEnv, cleanAmbientEnv, McpClient, freePort, waitFor, sleep, isAlive, writeStateFile, emptyState, threadCard, TEST_DIR, FAKE_DELEGATE,
+  PARENT_SESSION, setupThreadEnv, cleanAmbientEnv, McpClient, freePort, waitFor, sleep, isAlive, writeStateFile, emptyState, threadCard, TEST_DIR, FAKE_DELEGATE, oldServerFrom, runNode,
 } from './helpers.mjs';
 import * as core from '../server/core.mjs';
 import { addWait } from '../server/waits.mjs';
-import { startBoardServer, boardToken, tunnelRequest, pingBoard, closeBoardServer } from '../server/http.mjs';
+import { startBoardServer, boardToken, tunnelRequest, openCodeRequest, createCodeStore, rotateBoardToken, pingBoard, closeBoardServer } from '../server/http.mjs';
 import { findCloudflared, installHelp, parseTunnelHost, redact, reapStaleTunnel, TunnelError } from '../server/tunnel.mjs';
 
 cleanAmbientEnv();
@@ -228,6 +228,43 @@ test('the lifetime ends the tunnel by itself', async (t) => {
   await waitFor(() => !isAlive(a.child.pid));
 });
 
+// board_open saves the remote link in a file for the user; it must not outlive the tunnel it points at.
+const linkOf = (b) => path.join(b.dataDir, 'tunnel-link.txt');
+const saveLink = (b) => fs.writeFileSync(linkOf(b), 'https://x.trycloudflare.com/#t=' + 'a'.repeat(64) + '\n');
+
+test('the saved remote link goes when the lifetime runs out', async (t) => {
+  const b = await boot(t, { tunnel: { lifetimeMs: 400 } });
+  await open(b);
+  saveLink(b);
+  await waitFor(() => b.tunnel.status().active === false, { timeout: 4000 });
+  assert.equal(fs.existsSync(linkOf(b)), false);
+});
+
+test('the saved remote link goes when cloudflared dies and when the board closes', async (t) => {
+  const b = await boot(t);
+  const a = await open(b);
+  saveLink(b);
+  process.kill(a.child.pid, 'SIGKILL');
+  await waitFor(() => b.tunnel.status().active === false);
+  assert.equal(fs.existsSync(linkOf(b)), false, 'cloudflared died');
+  const a2 = await open(b);
+  saveLink(b);
+  closeBoardServer(b.server);
+  await waitFor(() => b.tunnel.status().active === false);
+  assert.equal(fs.existsSync(linkOf(b)), false, 'the board closed');
+  assert.ok(a2.child.pid);
+});
+
+test('a link file left by a killed owner is not shown by the Phone link, and the next start removes it with the dead owner\'s record', async (t) => {
+  const b = await boot(t);
+  saveLink(b);
+  const r = await raw(b.port, { path: '/api/tunnel-link', headers: { host: `127.0.0.1:${b.port}`, 'x-thread-token': b.token } });
+  assert.deepEqual(r.json, { active: false }, 'the route asks the manager, never the file');
+  fs.writeFileSync(path.join(b.dataDir, 'tunnel.pid'), JSON.stringify({ pid: 1, owner: 2 ** 22 + 12345 }));
+  await reapStaleTunnel();
+  assert.equal(fs.existsSync(linkOf(b)), false);
+});
+
 test('a board that has closed starts no tunnel', async (t) => {
   const b = await boot(t);
   if (b.server.listening) {
@@ -421,6 +458,7 @@ test('over the tunnel a person can read, edit, answer and ask for a report, but 
     ['PUT', `${P}/cards/c1`, {}],
     ['POST', `${P}/cards/c1`, {}],
     ['GET', '/api/nothing-here'],
+    ['GET', '/api/update'],
     ['GET', `${P}/nothing-here`],
     ['DELETE', '/api/projects'],
     ['POST', '/api/state', {}],
@@ -689,7 +727,7 @@ test('board_open with tunnel works from the owner and from a guest, board_stop c
   const owner = new McpClient(e, mcpEnv(port));
   t.after(() => owner.kill());
   await owner.init();
-  assert.match((await owner.call('board_open')).text, /^Board: http:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]{32}#\/[0-9a-f]{12}\n/, 'without tunnel the answer is as before');
+  assert.match((await owner.call('board_open')).text, /^Board: http:\/\/127\.0\.0\.1:\d+\/#\/[0-9a-f]{12}\n/, 'without tunnel the answer is the address, with no token');
   const guest = new McpClient(e, mcpEnv(port));
   t.after(() => guest.kill());
   await guest.init();
@@ -702,7 +740,7 @@ test('board_open with tunnel works from the owner and from a guest, board_stop c
   assert.match(ask, /every project on the board with its absolute path \(which contains your username\)/);
   assert.match(ask, /create and edit cards \(which gives Claude new instructions\), answer waiting items \(which can approve a review and wake Claude\)/);
   assert.match(ask, /move a card that has criteria to done, or edit those criteria/);
-  assert.doesNotMatch(ask, /Remote link:/);
+  assert.doesNotMatch(ask, /remote link is open/i);
   assert.equal(spawned().length, 0, 'no code, no tunnel');
   const code = /confirm_code "([0-9a-f]{8})"/.exec(ask)[1];
   assert.match((await guest.call('board_open', { tunnel: 'start', confirm_code: 'deadbeef' })).text, /CONFIRMATION REQUIRED/, 'a wrong code is refused');
@@ -710,19 +748,29 @@ test('board_open with tunnel works from the owner and from a guest, board_stop c
   assert.equal(spawned().length, 0);
 
   const fromGuest = await openLink(guest);
-  const linkRe = new RegExp(`Remote link: https://${HOST.replace(/\./g, '\\.')}/#t=([0-9a-f]{64})/${core.projectKey(e.projectDir)}\\n`);
-  const m = linkRe.exec(fromGuest);
-  assert.ok(m, fromGuest);
-  assert.match(fromGuest, /It works until .+ \(in 12 h\)\./);
+  // the answer says where the link is, and is not the link: the tunnel's token can answer waiting items, so Claude never gets it
+  const linkFile = path.join(e.dataDir, 'tunnel-link.txt');
+  assert.match(fromGuest, new RegExp(`(?:^|\\n)The remote link is open until .+ \\(in 12 h\\)\\. It is on the board \\(Phone link\\) and in ${linkFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.\n`));
+  const fileText = fs.readFileSync(linkFile, 'utf8').trim();
+  const m = new RegExp(`^https://${HOST.replace(/\./g, '\\.')}/#t=([0-9a-f]{64})/${core.projectKey(e.projectDir)}$`).exec(fileText);
+  assert.ok(m, 'the file holds the remote link');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(linkFile).mode & 0o077, 0, 'owner-only');
+  assert.doesNotMatch(fromGuest, /https:\/\/|#t=|[0-9a-f]{32}/, 'no link and no token in the answer');
   assert.match(fromGuest, /Whoever has this link acts as you on this board/);
   assert.match(fromGuest, /It can read: every project on the board with its absolute path \(which contains your username\), thread reports and transcripts, sub-agent run prompts, reports and steps, the session list, the agents list and the lane settings\./);
   assert.match(fromGuest, /It can do: create and edit cards \(which gives Claude new instructions\), answer waiting items \(which can approve a review and wake Claude\), notify Claude about a card \(its title and note reach Claude as if you had typed them, whether or not waking is on; with waking on that also wakes it\), and ask for thread reports\. It acts as you, so it can also move a card that has criteria to done, or edit those criteria/);
   assert.doesNotMatch(fromGuest, /already open/);
-  assert.equal(fromGuest.slice(fromGuest.indexOf('Remote link:')).includes(boardToken()), false, 'the board token is not in the remote link');
+  assert.equal(fileText.includes(boardToken()), false, 'the board token is not in the remote link');
+  // the page on this computer reads the link over the board token
+  const tl = await fetch(`http://127.0.0.1:${port}/api/tunnel-link`, { headers: { 'X-Thread-Token': boardToken() } });
+  assert.equal(tl.status, 200);
+  const shown = await tl.json();
+  assert.deepEqual([shown.active, shown.token, shown.url], [true, m[1], `https://${HOST}/`]);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/api/tunnel-link`)).status, 401, 'the board token is needed to ask');
 
   const fromOwner = (await owner.call('board_open', { tunnel: 'start' })).text;
-  assert.ok(fromOwner.includes(m[0].trim()), 'the same link');
   assert.match(fromOwner, /already open; asking again does not extend it/);
+  assert.equal(fs.readFileSync(linkFile, 'utf8').trim(), fileText, 'the same link');
   assert.equal(spawned().length, 1);
 
   // the link works through the tunnel's listener
@@ -731,6 +779,8 @@ test('board_open with tunnel works from the owner and from a guest, board_stop c
   assert.equal(via.status, 200);
 
   assert.match((await guest.call('board_open', { tunnel: 'stop' })).text, /The tunnel is stopped\. The remote link no longer works\./);
+  assert.equal(fs.existsSync(linkFile), false, 'the link file goes with the tunnel');
+  assert.equal((await (await fetch(`http://127.0.0.1:${port}/api/tunnel-link`, { headers: { 'X-Thread-Token': boardToken() } })).json()).active, false);
   await waitFor(() => !isAlive(spawned()[0].pid));
   assert.match((await owner.call('board_open', { tunnel: 'stop' })).text, /No tunnel was open\./);
   assert.equal((await owner.call('board_open', { tunnel: 'bogus' })).isError, true);
@@ -759,18 +809,19 @@ test('the cloudflared of a session ends with the session; one left by a killed s
   const a = new McpClient(e, mcpEnv(await freePort()));
   t.after(() => a.kill());
   await a.init();
-  assert.match(await openLink(a), /Remote link:/);
+  assert.match(await openLink(a), /The remote link is open until/);
   assert.equal(isAlive(spawned()[0].pid), true);
   a.child.kill('SIGTERM');
   await a.exited;
   await waitFor(() => !isAlive(spawned()[0].pid));
   assert.equal(fs.existsSync(pidFile), false);
+  assert.equal(fs.existsSync(path.join(e.dataDir, 'tunnel-link.txt')), false, 'and its saved remote link');
 
   // a session that is killed outright cannot clean up, but the watchdog sees its pipe close and ends cloudflared
   const b = new McpClient(e, mcpEnv(await freePort()));
   t.after(() => b.kill());
   await b.init();
-  assert.match(await openLink(b), /Remote link:/);
+  assert.match(await openLink(b), /The remote link is open until/);
   const left = spawned()[1].pid;
   const rec = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
   assert.equal(rec.cloudflared, left, 'the record names cloudflared');
@@ -869,7 +920,7 @@ test('opening the tunnel needs the code once; a side thread may not open or clos
   await c.init();
   const code = /confirm_code "([0-9a-f]{8})"/.exec((await c.call('board_open', { tunnel: 'start' })).text)[1];
   assert.equal(spawned().length, 0);
-  assert.match((await c.call('board_open', { tunnel: 'start', confirm_code: code })).text, /Remote link:/);
+  assert.match((await c.call('board_open', { tunnel: 'start', confirm_code: code })).text, /The remote link is open until/);
   assert.equal(spawned().length, 1);
   assert.match((await c.call('board_open', { tunnel: 'stop' })).text, /The tunnel is stopped/, 'stopping needs no code');
   assert.match((await c.call('board_open', { tunnel: 'start', confirm_code: code })).text, /CONFIRMATION REQUIRED/, 'a code works once');
@@ -924,10 +975,11 @@ function pageSource() {
 
 // Runs the page's token block against a stand-in address bar. `search` and `hash` are what the browser has; the result says what the
 // page keeps and what is left in the address bar.
-function runTokenBlock({ search = '', hash = '', stored = '' }) {
+function runTokenBlock({ search = '', hash = '', stored = '', storedSession = '', noLocal = false }) {
   const m = /\/\/ ---- token in the address[^\n]*\n([\s\S]*?)\/\/ ---- end token in the address ----/.exec(pageSource());
   assert.ok(m, 'the token block is missing from base.js');
   const store = { 'thread-board-token': stored };
+  const session = { 'thread-board-token': storedSession };
   const loc = { search, hash, pathname: '/' };
   const out = { replaced: [] };
   const ctx = vm.createContext({
@@ -940,12 +992,13 @@ function runTokenBlock({ search = '', hash = '', stored = '' }) {
         Object.assign(loc, { pathname, search: q.length ? '?' + q.join('?') : '', hash: frag.length ? '#' + frag.join('#') : '' });
       },
     },
-    sessionStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; } },
+    localStorage: noLocal ? { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } } : { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; } },
+    sessionStorage: { getItem: (k) => session[k] || null, setItem: (k, v) => { session[k] = v; } },
     URLSearchParams,
     TOKEN_KEY: 'thread-board-token',
   });
   vm.runInContext(`${m[1]}\nthis.result = { token: () => token };`, ctx);
-  return { token: ctx.result.token(), stored: store['thread-board-token'], url: loc.pathname + loc.search + loc.hash, replaced: out.replaced };
+  return { token: ctx.result.token(), stored: store['thread-board-token'], storedSession: session['thread-board-token'], url: loc.pathname + loc.search + loc.hash, replaced: out.replaced };
 }
 
 test('the page reads a token from ?t= as before and from #t= for the tunnel, and cleans the address bar of both', () => {
@@ -973,6 +1026,26 @@ test('the page reads a token from ?t= as before and from #t= for the tunnel, and
   assert.equal(junk.token, '', 'a fragment that is not a token is left alone');
 });
 
+test('the page keeps the token in localStorage, reads an older tab\'s sessionStorage as a fallback, and works without storage', () => {
+  const tok = 'e'.repeat(32);
+  const fresh = runTokenBlock({ search: '?t=' + tok, hash: '#/0123456789ab' });
+  assert.equal(fresh.stored, tok, 'a token that comes in the address is written to localStorage');
+  assert.equal(fresh.storedSession, tok, 'and to sessionStorage, which a board served by version 0.23 reads');
+  const partial = runTokenBlock({ search: '?t=' + tok, hash: '#/0123456789ab', noLocal: true });
+  assert.equal(partial.storedSession, tok, 'each write is tried on its own: a blocked localStorage does not stop the other');
+  const tokenless = runTokenBlock({ hash: '#/0123456789ab/c1', stored: tok });
+  assert.equal(tokenless.token, tok, 'a tokenless address in a browser that opened the board once');
+  assert.equal(tokenless.url, '/#/0123456789ab/c1');
+  const older = runTokenBlock({ hash: '#/0123456789ab', storedSession: 'f'.repeat(32) });
+  assert.equal(older.token, 'f'.repeat(32), 'a tab from an older version has it in sessionStorage');
+  const both = runTokenBlock({ hash: '#/0123456789ab', stored: tok, storedSession: 'f'.repeat(32) });
+  assert.equal(both.token, tok, 'localStorage wins');
+  const none = runTokenBlock({ hash: '#/0123456789ab' });
+  assert.equal(none.token, '', 'nothing stored, nothing in the address');
+  const blocked = runTokenBlock({ search: '?t=' + tok, hash: '#/0123456789ab', noLocal: true });
+  assert.equal(blocked.token, tok, 'storage unavailable: the variable still holds it');
+});
+
 test('the board_open tool and the board skill tell Claude to ask the user before it passes the code', () => {
   const tool = fs.readFileSync(path.join(TEST_DIR, '..', 'server', 'mcp.mjs'), 'utf8');
   assert.match(tool, /never done on the first call: the tool answers "CONFIRMATION REQUIRED" with a confirm_code and opens nothing/);
@@ -980,3 +1053,203 @@ test('the board_open tool and the board skill tell Claude to ask the user before
   assert.match(skill, /never opened on the first call/);
   assert.match(skill, /only after they agree/);
 });
+
+// ---------------------------------------------------------------- the one-time code (board_open's link) and the phone link
+
+test('a code works once, for two minutes; a wrong or used code is refused; the codes waiting are capped; too many misses stop the exchange', () => {
+  let clock = 5_000_000;
+  const codes = createCodeStore({ now: () => clock });
+  const { code, expiresAt } = codes.issue();
+  assert.match(code, /^[0-9a-f]{32}$/);
+  assert.equal(expiresAt, clock + 120_000);
+  assert.equal(codes.take('0'.repeat(32)), 'bad');
+  assert.equal(codes.take('not a code'), 'bad');
+  assert.equal(codes.take(undefined), 'bad');
+  assert.equal(codes.take(code), 'ok');
+  assert.equal(codes.take(code), 'bad', 'single use');
+  const late = codes.issue().code;
+  clock += 120_000;
+  assert.equal(codes.take(late), 'bad', 'expired after two minutes');
+  const first = codes.issue().code;
+  for (let i = 0; i < 12; i++) codes.issue();
+  assert.equal(codes.take(first), 'bad', 'the oldest of more than ten waiting is dropped');
+  // ten misses in a minute: everything is refused until the minute is over, a good code too
+  const store = createCodeStore({ now: () => clock });
+  const good = store.issue().code;
+  for (let i = 0; i < 10; i++) assert.equal(store.take('f'.repeat(32)), 'bad');
+  assert.equal(store.take(good), 'limit');
+  clock += 61_000;
+  assert.equal(store.take(good), 'ok');
+});
+
+test('the exchange route: the token for a code, once, from the board\'s own origin only; no token is needed but none is given to the wrong asker', async (t) => {
+  const b = await boot(t);
+  const { code } = (await tunnelOrCode(b));
+  const post = (c, origin, extra = {}) => raw(b.port, { method: 'POST', path: '/api/exchange', headers: { host: `127.0.0.1:${b.port}`, ...JSON_HDR, ...(origin ? { origin } : {}), ...extra }, body: JSON.stringify({ code: c }) });
+  const own = `http://127.0.0.1:${b.port}`;
+  assert.equal((await post(code, undefined)).status, 403, 'a request with no origin is not the page');
+  assert.equal((await post(code, 'https://evil.example')).status, 403, 'another origin');
+  assert.equal((await post(code, `http://127.0.0.1:${b.port + 1}`)).status, 403, 'another port');
+  assert.equal((await post(code, own, { host: 'evil.example' })).status, 403, 'another host');
+  assert.equal((await raw(b.port, { method: 'POST', path: '/api/exchange', headers: { host: `127.0.0.1:${b.port}`, origin: own }, body: '{"code":"x"}' })).status, 415, 'JSON only');
+  const ok = await post(code, own);
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.json, { token: b.token });
+  assert.equal(ok.headers['cache-control'], 'no-store');
+  const again = await post(code, own);
+  assert.equal(again.status, 401);
+  assert.equal(JSON.stringify(again.json).includes(b.token), false);
+  // after ten wrong codes in a minute the exchange stops answering
+  const fresh = (await tunnelOrCode(b)).code;
+  for (let i = 0; i < 10; i++) await post('e'.repeat(32), own);
+  assert.equal((await post(fresh, own)).status, 429);
+});
+
+async function tunnelOrCode(b) {
+  const r = await openCodeRequest(`http://127.0.0.1:${b.port}/`);
+  assert.equal(r.status, 200);
+  return r.body;
+}
+
+test('the code route needs the board token and the local listener; the tunnel\'s listener has neither it nor the exchange nor the phone-link route', async (t) => {
+  const b = await boot(t);
+  const base = `http://127.0.0.1:${b.port}`;
+  assert.equal((await raw(b.port, { method: 'POST', path: '/api/open-code', headers: { host: `127.0.0.1:${b.port}`, ...JSON_HDR }, body: '{}' })).status, 401);
+  assert.equal((await raw(b.port, { method: 'POST', path: '/api/open-code', headers: { host: `127.0.0.1:${b.port}`, ...JSON_HDR, 'x-thread-token': 'a'.repeat(32) }, body: '{}' })).status, 401);
+  assert.equal((await openCodeRequest(base)).status, 200);
+  assert.equal(await openCodeRequest('http://127.0.0.1:1/'), null);
+
+  const a = await open(b);
+  const code = (await tunnelOrCode(b)).code;
+  for (const [method, p, body] of [['POST', '/api/exchange', { code }], ['POST', '/api/open-code', {}], ['GET', '/api/tunnel-link']]) {
+    const viaTunnel = await a.write(method, p, body);
+    assert.equal(viaTunnel.status, 403, `${method} ${p} is closed to the tunnel`);
+    assert.equal(JSON.stringify(viaTunnel.json).includes(b.token), false);
+  }
+  // not even with no tunnel token and no origin: the exchange does not leave the code or the board token to the tunnel's listener
+  const bare = await raw(a.remotePort, { method: 'POST', path: '/api/exchange', headers: { host: a.view.host, ...JSON_HDR }, body: JSON.stringify({ code }) });
+  assert.ok(bare.status === 401 || bare.status === 403);
+  // the code is still good on the board's own port: the tunnel did not use it up
+  const own = await raw(b.port, { method: 'POST', path: '/api/exchange', headers: { host: `127.0.0.1:${b.port}`, ...JSON_HDR, origin: base }, body: JSON.stringify({ code }) });
+  assert.equal(own.status, 200);
+});
+
+test('the phone-link route hands the tunnel\'s link to a page that has the board token, and nothing while there is no tunnel', async (t) => {
+  const b = await boot(t);
+  const get = () => raw(b.port, { path: '/api/tunnel-link', headers: { host: `127.0.0.1:${b.port}`, 'x-thread-token': b.token } });
+  assert.deepEqual((await get()).json, { active: false });
+  const a = await open(b);
+  const shown = (await get()).json;
+  assert.deepEqual(shown, { active: true, url: `https://${a.view.host}/`, token: a.view.token, expiresAt: a.view.expiresAt });
+  assert.equal((await raw(b.port, { path: '/api/tunnel-link', headers: { host: `127.0.0.1:${b.port}` } })).status, 401);
+  await b.tunnel.stop();
+  assert.deepEqual((await get()).json, { active: false });
+});
+
+test('the board token is replaced on request: the file goes and the next one is new', (t) => {
+  setupThreadEnv(t);
+  const first = boardToken();
+  assert.equal(boardToken(), first);
+  rotateBoardToken();
+  const next = boardToken();
+  assert.match(next, /^[0-9a-f]{32}$/);
+  assert.notEqual(next, first);
+  rotateBoardToken();
+  rotateBoardToken();   // none to replace is no error
+});
+
+function codeBlockOf(search, stored = '') {
+  return runTokenBlockWithCode({ search, stored });
+}
+
+function runTokenBlockWithCode({ search = '', hash = '', stored = '' }) {
+  const m = /\/\/ ---- token in the address[^\n]*\n([\s\S]*?)\/\/ ---- end token in the address ----/.exec(pageSource());
+  const store = { 'thread-board-token': stored };
+  const loc = { search, hash, pathname: '/' };
+  const ctx = vm.createContext({
+    location: loc,
+    history: { replaceState: (a, b, url) => { const [before, ...frag] = url.split('#'); const [pathname, ...q] = before.split('?'); Object.assign(loc, { pathname, search: q.length ? '?' + q.join('?') : '', hash: frag.length ? '#' + frag.join('#') : '' }); } },
+    localStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; } },
+    sessionStorage: { getItem: () => null, setItem() {} },
+    URLSearchParams,
+    TOKEN_KEY: 'thread-board-token',
+  });
+  vm.runInContext(`${m[1]}\nthis.result = { token: () => token, code: () => pendingCode };`, ctx);
+  return { token: ctx.result.token(), code: ctx.result.code(), stored: store['thread-board-token'], url: loc.pathname + loc.search + loc.hash };
+}
+
+test('the page takes a one-time code from ?c=, cleans the address bar, and lets what is in the address replace what was stored', () => {
+  const code = 'a1'.repeat(16);
+  const viaCode = codeBlockOf(`?c=${code}`, 'd'.repeat(32));
+  assert.equal(viaCode.code, code);
+  assert.equal(viaCode.token, '', 'the stored token does not win over a code: the exchange comes first');
+  assert.equal(viaCode.stored, 'd'.repeat(32), 'and is left alone until the exchange answers');
+  assert.equal(viaCode.url, '/', 'the code is not left in the address bar');
+  const keepsRoute = runTokenBlockWithCode({ search: `?x=1&c=${code}`, hash: '#/0123456789ab/c3' });
+  assert.equal(keepsRoute.url, '/?x=1#/0123456789ab/c3');
+  const both = runTokenBlockWithCode({ search: `?t=${'b'.repeat(32)}&c=${code}`, stored: 'd'.repeat(32) });
+  assert.equal(both.token, 'b'.repeat(32), 'a token in the address replaces the stored one');
+  assert.equal(both.stored, 'b'.repeat(32));
+  assert.equal(both.code, '', 'and no code is then traded');
+  assert.equal(both.url, '/');
+  assert.equal(codeBlockOf('?c=not-a-code', 'd'.repeat(32)).token, 'd'.repeat(32), 'a value that is no code is ignored');
+  assert.equal(codeBlockOf('?c=not-a-code', 'd'.repeat(32)).code, '');
+});
+
+test('the page trades the code through /api/exchange and keeps the token; without a valid code it falls back to what was stored', () => {
+  const src = fs.readFileSync(path.join(TEST_DIR, '..', 'server', 'board', 'js', 'remote.js'), 'utf8');
+  const m = /async function exchangeCode\(\) \{[\s\S]*?\n  \}\n/.exec(src);
+  assert.ok(m, 'exchangeCode is in the page');
+  const run = async ({ answer, stored }) => {
+    const store = { 'thread-board-token': stored };
+    const session = {};
+    const sent = [];
+    const ctx = vm.createContext({
+      pendingCode: 'c'.repeat(32), token: '', TOKEN_KEY: 'thread-board-token',
+      sessionStorage: { getItem: (k) => session[k] || null, setItem: (k, v) => { session[k] = v; } },
+      fetch: async (url, opts) => { sent.push({ url, opts }); return { ok: answer.ok, text: async () => JSON.stringify(answer.body) }; },
+      parseJson: (t) => { try { return JSON.parse(t); } catch { return null; } },
+      localStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; } },
+      readStoredToken: () => store['thread-board-token'] || '',
+    });
+    const sm = /function storeToken\(t\) \{[\s\S]*?\n  \}\n/.exec(pageSource());
+    assert.ok(sm, 'storeToken is in the page');
+    vm.runInContext(`${sm[0]}\n${m[0]}\nthis.run = async () => { await exchangeCode(); return { token, pendingCode }; };`, ctx);
+    const out = await ctx.run();
+    return { ...out, stored: store['thread-board-token'], storedSession: session['thread-board-token'], sent };
+  };
+  return (async () => {
+    const ok = await run({ answer: { ok: true, body: { token: 'e'.repeat(32) } }, stored: 'd'.repeat(32) });
+    assert.equal(ok.token, 'e'.repeat(32));
+    assert.equal(ok.stored, 'e'.repeat(32), 'the exchange replaces a stale stored token');
+    assert.equal(ok.storedSession, 'e'.repeat(32), 'and is also kept in sessionStorage, for a board an older version serves');
+    assert.equal(ok.pendingCode, '');
+    assert.equal(ok.sent.length, 1);
+    assert.equal(ok.sent[0].url, '/api/exchange');
+    assert.equal(JSON.parse(ok.sent[0].opts.body).code, 'c'.repeat(32));
+    assert.equal(ok.sent[0].opts.headers['X-Thread-Token'], undefined, 'no token is sent');
+    const used = await run({ answer: { ok: false, body: { error: 'x' } }, stored: 'd'.repeat(32) });
+    assert.equal(used.token, 'd'.repeat(32), 'a code that is not valid leaves the stored token to be tried');
+    const none = await run({ answer: { ok: false, body: {} }, stored: '' });
+    assert.equal(none.token, '', 'with none the access-link page shows');
+    const junk = await run({ answer: { ok: true, body: { token: 'not a token' } }, stored: '' });
+    assert.equal(junk.token, '');
+  })();
+});
+
+// Rotating the token is safe only if every plugin version still in use reads board.token afresh on each use, as these two released ones do.
+for (const ref of ['v0.22.0', 'v0.23.0']) {
+  test(`${ref} reads the board token afresh, so a token replaced after board_stop is the one it then uses`, async (t) => {
+    const e = setupThreadEnv(t);
+    const old = oldServerFrom(t, ref);
+    if (!old) return;
+    const first = boardToken();
+    const before = await runNode([path.join(TEST_DIR, 'fixtures', 'old-board-token.mjs'), old], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir } });
+    assert.equal(before.code, 0, before.stderr);
+    rotateBoardToken();
+    const after = await runNode([path.join(TEST_DIR, 'fixtures', 'old-board-token.mjs'), old], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir } });
+    assert.equal(after.code, 0, 'the older version makes a new token when the file is gone, and reads that one');
+    assert.notEqual(boardToken(), first);
+    assert.equal(boardToken(), fs.readFileSync(path.join(e.dataDir, 'board.token'), 'utf8').trim());
+  });
+}

@@ -1,0 +1,6 @@
+{"type": "step_start"}
+{"type": "tool_use", "part": {"type": "tool", "tool": "read", "callID": "read1", "state": {"status": "completed", "input": {"filePath": "src/a.js"}, "output": "const café = 1;", "title": "Read file", "metadata": {"exit": 0}}}}
+{"type": "tool_use", "part": {"type": "tool", "tool": "bash", "callID": "cmd2", "state": {"status": "error", "input": {"command": "false"}, "error": "Command failed", "title": "Run command"}}}
+{"type": "text", "part": {"id": "text1", "type": "text", "text": "Checked the invoice.", "time": {"start": 1, "end": 2}}}
+{"type": "text", "part": {"id": "text1", "type": "text", "text": "Checked the invoice.", "time": {"start": 1, "end": 2}}}
+{"type": "step_finish"}

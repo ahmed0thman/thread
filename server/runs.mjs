@@ -2,6 +2,9 @@
 // Agent call's description ("[c24] fix the tax rounding"); the board reads the run's transcript through
 // runActivity. Imports only state.mjs, config.mjs and sessions.mjs, so a hook can load it quickly.
 //
+// A run can also stand for one turn of a thread that does the work of a card (thread_start with card): a "linked" run. It has no agent id and
+// no transcript; its steps are the thread turn's activity file, and the runner closes it when the turn is recorded (openLinkedRun, closeLinkedRun).
+//
 // Claude Code writes a sub-agent's transcript to <projects>/<project folder>/<session id>/subagents/agent-<id>.jsonl
 // next to agent-<id>.meta.json. That layout is not documented: it is read, never written, and a future
 // Claude Code version may change it.
@@ -11,7 +14,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { StringDecoder } from 'node:string_decoder';
 import { PRIVATE_FILE, envValue, legacyStoreOf, mkdirPrivateSync, now, projectPaths, readState, runInStore, storePinned, updateState } from './state.mjs';
 import { collapse, SESSION_ID_RE } from './sessions.mjs';
-import { CARD_ID_RE, CARD_ID_SRC, cardById, claudeCard } from './fields.mjs';
+import { CARD_ID_RE, CARD_ID_SRC, cardById, claudeCard, threadById } from './fields.mjs';
 import { readConfig } from './config.mjs';
 
 export const MAX_RUNS = 50;                   // runs kept on one card; the oldest go first
@@ -212,8 +215,8 @@ export function lineEnd(buf, got) {
 // The complete lines of `file` from byte `offset`, at most one chunk and MAX_RESPONSE_EVENTS events:
 // { events, next, more, prompt, reset, quietMs }. `next` is where the next read starts; `more` says there is already more to read.
 // An offset past the end of the file (it shrank or was replaced) starts over from 0 and says `reset`, so the reader drops what it had.
-// `quietMs` is how long ago the file last changed.
-export function readRunActivity(file, offset) {
+// `quietMs` is how long ago the file last changed. `toEvents` turns a parsed line into events: a thread turn's activity file already holds events.
+export function readRunActivity(file, offset, toEvents = eventsOfLine) {
   const fd = openSync(file, 'r');
   try {
     const st = fstatSync(fd);
@@ -237,7 +240,7 @@ export function readRunActivity(file, offset) {
       const v = parseLine(buf.toString('utf8', p, nl));
       if (v) {
         if (from + p === 0) prompt = promptOfLine(v);
-        for (const e of eventsOfLine(v)) events.push(e);
+        for (const e of toEvents(v)) events.push(e);
       }
       p = nl + 1;
       if (events.length >= MAX_RESPONSE_EVENTS) { capped = true; break; }
@@ -534,6 +537,11 @@ async function recordStop(projectDirArg, input, { found, late, id, find, settleM
   return closed;
 }
 
+// A run of a thread cannot be marked as stopped while the thread is running its turn (the board answers 409).
+export class RunLiveError extends Error {
+  constructor(message) { super(message); this.status = 409; }
+}
+
 // The board's "Mark as stopped": a run that is still running and will never be closed (its session ended, or its stop event was lost).
 // Only this run's state fields are written.
 export async function markRunStopped(projectDirArg, cardId, n) {
@@ -543,12 +551,196 @@ export async function markRunStopped(projectDirArg, cardId, n) {
     const run = Array.isArray(card.runs) ? card.runs.find((r) => r && r.n === n) : null;
     if (!run) throw new Error(`card ${cardId} has no run ${n}`);
     if (run.state !== 'running') throw new Error(`run ${n} of ${cardId} is not running`);
+    if (isLinkedRun(run) && linkedAlive(run, state.cards)) throw new RunLiveError(`run ${n} of ${cardId} is still going: its thread is running that turn. End the thread to stop it.`);
     run.state = 'stopped';
     run.ok = false;
     run.finishedAt = now();
     run.note = 'Marked as stopped on the board: no stop was reported for this run.';
     return { ...run, transcript: undefined };
   });
+}
+
+// ---------------------------------------------------------------- runs of a thread that does a card's work
+
+// One turn's activity file of a thread (core.activityPath is this function: runs.mjs cannot import core.mjs).
+export function turnActivityPath(projectDirArg, cardId, turnNumber) {
+  if (!CARD_ID_RE.test(String(cardId))) throw new Error(`invalid card id: ${cardId}`);
+  if (!Number.isInteger(turnNumber) || turnNumber < 1) throw new Error(`invalid turn number: ${turnNumber}`);
+  return join(projectPaths(projectDirArg).logs, `${cardId}.t${turnNumber}.activity.jsonl`);
+}
+
+// A run that stands for a thread's turn: it names the thread and the turn and has no agent id. An older plugin version ignores both fields.
+export const isLinkedRun = (r) => !!r && typeof r === 'object' && typeof r.thread === 'string' && CARD_ID_RE.test(r.thread) && Number.isInteger(r.turn) && r.turn >= 1 && r.agentId === undefined;
+
+// Whether the thread is running the turn a linked run stands for. A thread that is gone, or a turn that is not the newest, is not.
+export function linkedAlive(run, cards) {
+  const th = threadById(cards, run.thread);
+  return !!th && th.thread.runState === 'running' && Array.isArray(th.thread.turns) && th.thread.turns.length === run.turn;
+}
+
+// The task or idea a thread does the work of (its forCard), when it still is one.
+function forCardOf(state, threadCard) {
+  const id = threadCard && threadCard.thread && threadCard.thread.forCard;
+  const card = typeof id === 'string' ? cardById(state.cards, id) : null;
+  return isWorkCard(card) ? card : null;
+}
+
+// Opens the run for turn `turnNo` of a thread on the card it works for, or returns the one it already has. Inside updateState, which the caller
+// holds. `prompt` is what the provider is given. null when the thread does the work of no card (any more).
+export function openLinkedRun(projectDirArg, state, threadCard, turnNo, prompt, { startedAt } = {}) {
+  const card = forCardOf(state, threadCard);
+  if (!card) return null;
+  const th = threadCard.thread;
+  if (!Array.isArray(card.runs)) card.runs = [];
+  const known = card.runs.find((r) => isLinkedRun(r) && r.thread === threadCard.id && r.turn === turnNo);
+  if (known) return known;
+  const n = card.runs.reduce((top, r) => Math.max(top, Number(r && r.n) || 0), 0) + 1;
+  const lane = th.lane && typeof th.lane.name === 'string' ? th.lane.name : '';
+  const run = {
+    n,
+    thread: threadCard.id,
+    turn: turnNo,
+    ...(lane ? { lane: clip(lane, 60) } : {}),
+    agentType: clip((typeof th.agent === 'string' && th.agent) || lane || 'thread', 60),
+    mode: 'background',
+    description: clip(threadCard.title, 300),
+    state: 'running',
+    sessionId: typeof th.parentSessionId === 'string' ? th.parentSessionId : '',
+    startedAt: typeof startedAt === 'string' && Number.isFinite(Date.parse(startedAt)) ? startedAt : now(),
+    finishedAt: null,
+    ok: null,
+    prompt: null,
+    result: null,
+  };
+  card.runs.push(run);
+  const dropped = [];
+  while (card.runs.length > MAX_RUNS) dropped.push(card.runs.shift().n);
+  givePrompt(projectDirArg, card.id, run, typeof prompt === 'string' ? cut(prompt, MAX_PROMPT) : '');
+  dropFiles(projectDirArg, card.id, dropped);
+  return run;
+}
+
+// The events of a thread turn's activity file, the newest MAX_RUN_EVENTS; null when there is no file.
+function turnEvents(projectDirArg, threadId, turnNo) {
+  try {
+    const file = turnActivityPath(projectDirArg, threadId, turnNo);
+    if (statSync(file).size > MAX_SNAPSHOT) return null;
+    const events = [];
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      const v = parseLine(line);
+      if (v && typeof v.kind === 'string') events.push(v);
+    }
+    return events.length > MAX_RUN_EVENTS ? [{ kind: 'earlier', dropped: events.length - MAX_RUN_EVENTS }, ...events.slice(-MAX_RUN_EVENTS)] : events;
+  } catch {
+    return null;
+  }
+}
+
+function finishLinked(projectDirArg, card, run, { ok, result, error, steps, usage }) {
+  run.state = ok ? 'done' : 'stopped';
+  run.finishedAt = now();
+  run.ok = !!ok;
+  if (ok) delete run.note;
+  else run.note = clip(typeof error === 'string' && error ? error : 'the thread\'s turn ended without a result', 300);
+  if (ok && typeof result === 'string' && result.trim()) {
+    const k = keepText(projectDirArg, card.id, run.n, 'report', cut(result, MAX_REPORT));
+    run.result = k.preview;
+    if (k.kept) run.reportFile = true;
+  }
+  if (Number.isInteger(steps) && steps >= 0) run.steps = steps;
+  if (usage && typeof usage === 'object') run.usage = usage;
+  // the trace is kept apart from the thread card, which can be removed
+  const events = turnEvents(projectDirArg, run.thread, run.turn);
+  if (events) {
+    try { writeSnapshot(projectDirArg, card.id, run.n, events); run.snapshot = true; } catch { /* the board then reads the thread's activity file while it exists */ }
+  }
+}
+
+// Closes the run for turn `turnNo` of a thread: done with the report, or stopped with the error. Inside updateState. false when there is none
+// to close. A run the sweep closed early (stopped, and with no report) is updated too: the turn's own record is the authority on how it ended.
+export function closeLinkedRun(projectDirArg, state, threadCardId, turnNo, outcome) {
+  const card = forCardOf(state, threadById(state.cards, threadCardId));
+  const early = (r) => r.state === 'stopped' && r.result == null && r.reportFile === undefined;
+  const run = card && Array.isArray(card.runs) ? card.runs.find((r) => isLinkedRun(r) && r.thread === threadCardId && r.turn === turnNo && (r.state === 'running' || early(r))) : null;
+  if (!run) return false;
+  finishLinked(projectDirArg, card, run, outcome || {});
+  return true;
+}
+
+// Closes a run from how its thread's turn ended (the thread's record of it): done with the report, else stopped with the turn's error, else
+// with a note that the user ended the thread, or that the turn ended without a result.
+function closeFromTurn(projectDirArg, state, card, run) {
+  const th = threadById(state.cards, run.thread);
+  const turn = th && Array.isArray(th.thread.turns) ? th.thread.turns[run.turn - 1] : null;
+  if (turn && turn.ok === true) return finishLinked(projectDirArg, card, run, { ok: true, result: turn.result, steps: turn.steps, usage: turn.usage });
+  const own = turn && turn.finishedAt && typeof turn.error === 'string' ? turn.error : '';
+  finishLinked(projectDirArg, card, run, { ok: false, error: own || (th && th.thread.runState === 'ended' ? 'ended by the user' : ''), steps: turn ? turn.steps : undefined, usage: turn ? turn.usage : undefined });
+}
+
+// Removing a thread: closes the running runs it has on its card from the turn's stored result, steps and usage, before the thread and its
+// files are gone. Inside updateState. Returns how many it closed.
+export function closeThreadRuns(projectDirArg, state, threadCard) {
+  const card = forCardOf(state, threadCard);
+  if (!card || !Array.isArray(card.runs)) return 0;
+  let closed = 0;
+  for (const run of card.runs) {
+    if (!isLinkedRun(run) || run.thread !== threadCard.id || run.state !== 'running') continue;
+    closeFromTurn(projectDirArg, state, card, run);
+    closed += 1;
+  }
+  return closed;
+}
+
+// The running linked runs whose thread is not running their turn any more: [{ card, run }]. A thread whose runner is still writing
+// (`busy(threadCard)`: it was ended and has not stopped yet) is left alone; its runner records the turn and closes the run.
+export function staleLinkedRuns(cards, busy = () => false) {
+  const out = [];
+  for (const card of cards) {
+    if (!isWorkCard(card) || !Array.isArray(card.runs)) continue;
+    for (const run of card.runs) {
+      if (!isLinkedRun(run) || run.state !== 'running' || linkedAlive(run, cards)) continue;
+      const th = threadById(cards, run.thread);
+      if (th && busy(th)) continue;
+      out.push({ card, run });
+    }
+  }
+  return out;
+}
+
+// The turns of a thread that does a card's work that have no run on the card: [{ card, thread, turn }]. An older plugin version that
+// continues such a thread appends a turn and opens no run. Only the newest MAX_RUNS turns, and only while the card has room for runs: a card
+// at its limit may have dropped the run of an older turn, which must not come back.
+export function missingLinkedRuns(cards) {
+  const out = [];
+  for (const th of cards) {
+    if (!th || th.kind !== 'thread' || !th.thread || typeof th.thread.forCard !== 'string' || !Array.isArray(th.thread.turns)) continue;
+    const card = cardById(cards, th.thread.forCard);
+    if (!isWorkCard(card)) continue;
+    const runs = Array.isArray(card.runs) ? card.runs : [];
+    if (runs.length >= MAX_RUNS) continue;
+    const have = new Set(runs.filter((r) => isLinkedRun(r) && r.thread === th.id).map((r) => r.turn));
+    for (let n = Math.max(1, th.thread.turns.length - MAX_RUNS + 1); n <= th.thread.turns.length; n++) if (!have.has(n)) out.push({ card, thread: th, turn: n });
+  }
+  return out;
+}
+
+// Whether the sweep has anything to do (a read, so a board poll that finds nothing writes nothing).
+export const linkedRunsPending = (cards, busy) => staleLinkedRuns(cards, busy).length > 0 || missingLinkedRuns(cards).length > 0;
+
+// The sweep: opens the runs that are missing, then closes those whose turn is over from the thread's record of it. Inside updateState.
+// Returns how many it changed.
+export function closeStaleLinkedRuns(projectDirArg, state, busy) {
+  let changed = 0;
+  for (const { card, thread, turn } of missingLinkedRuns(state.cards)) {
+    if ((card.runs || []).length >= MAX_RUNS) continue;   // opening one more would drop the oldest
+    const t = thread.thread.turns[turn - 1];
+    if (openLinkedRun(projectDirArg, state, thread, turn, t && t.prompt, { startedAt: t && t.startedAt })) changed += 1;
+  }
+  for (const { card, run } of staleLinkedRuns(state.cards, busy)) {
+    closeFromTurn(projectDirArg, state, card, run);
+    changed += 1;
+  }
+  return changed;
 }
 
 // ---------------------------------------------------------------- the board's reader
@@ -560,7 +752,7 @@ export const RUN_QUIET_MS = 10 * 60 * 1000;
 // Whether a running run has been quiet for RUN_QUIET_MS: its transcript has not changed that long (a run whose transcript cannot be
 // read counts from its start, as the board's activity route does). The board tile shows it as `quiet`, computed per response, never stored.
 export function runQuiet(run, nowMs = Date.now()) {
-  if (!run || run.state !== 'running') return false;
+  if (!run || run.state !== 'running' || isLinkedRun(run)) return false;
   let last = Date.parse(run.startedAt);
   try {
     const file = runTranscript(run);
@@ -578,7 +770,19 @@ export function runActivity(projectDirArg, cardId, run, offset = 0) {
     const events = readSnapshot(projectDirArg, cardId, run.n);
     if (events) return { run: run.n, running, events, next: null, more: false };
   }
-  const gone = { run: run.n, running, events: [], next: null, more: false, gone: true, quietMs: Math.max(0, Date.now() - (Date.parse(run.startedAt) || Date.now())) };
+  const quietMs = Math.max(0, Date.now() - (Date.parse(run.startedAt) || Date.now()));
+  const gone = { run: run.n, running, events: [], next: null, more: false, gone: true, quietMs };
+  if (isLinkedRun(run)) {
+    // the thread turn's activity file, built from the thread's id and the turn's number, never from a stored path
+    let linked = null;
+    try { linked = turnActivityPath(projectDirArg, run.thread, run.turn); } catch { return gone; }
+    if (!existsSync(linked)) return running ? { run: run.n, running, events: [], next: 0, more: false, quietMs } : gone;   // the runner has not made it yet
+    try {
+      return { run: run.n, running, ...readRunActivity(linked, offset, (v) => (typeof v.kind === 'string' ? [v] : [])) };
+    } catch {
+      return gone;
+    }
+  }
   let file = null;
   try { file = runTranscript(run); } catch { /* treated as gone */ }
   if (!file) return gone;

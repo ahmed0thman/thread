@@ -35,6 +35,8 @@ claude plugin install thread@thread-marketplace
 
 Restart Claude Code, or reload the editor window, so the plugin loads. [Updating, trying a clone and the one-time setup](docs/configuration.md#installing-updating-and-trying-a-clone) are in the docs.
 
+To get new releases by themselves, turn on auto-update (it is off by default for this marketplace): `/plugin`, **Marketplaces**, `thread-marketplace`, **Enable auto-update**. Without it, and unless you turn on the [update check](docs/configuration.md#staying-up-to-date) (off by default), nothing tells you a release exists; the docs show the two commands that update by hand.
+
 ### First use
 
 This walkthrough shows the hook that matters most. Ask Claude for two tasks in one message, one of them with acceptance criteria, and tell it to ask you when it is unsure:
@@ -43,7 +45,7 @@ This walkthrough shows the hook that matters most. Ask Claude for two tasks in o
 Add two tasks. First: fix the rounding in the cart total; it is done when cart and checkout show the same total with any coupons and a regression test covers two stacked coupons. Second: rename the "moderator" role to "agent" in the UI copy. Ask me whatever you are unsure about.
 ```
 
-1. Claude is told to put each task on the board before it starts. Open the board with `/thread:board` and follow the link it prints.
+1. Claude is told to put each task on the board before it starts. Open the board with `/thread:board`: it opens the board in your browser.
 2. When Claude needs you (a question, a choice, a to-do or a review) it raises a waiting item on that card and writes one line in the chat, such as `Waiting on you: c2.w1`. The board shows a red **Waiting for you** count; open the **Waiting** view to see both items.
 3. Answer both, on their cards. An answer is a draft until you press **Send N answers** in the bar at the bottom, which sends every draft together.
 4. The answers reach Claude with your next message in that session, or at once when [waking](docs/reviews-and-waking.md#waking-the-session) is on.
@@ -57,7 +59,8 @@ For a side thread (a background session that reports back only when you ask), se
 - Tracking is on by default. To use only side threads, run `/thread:setup` and choose threads only (chat-only mode): no cards, no waiting items, and Claude is told only about threads.
 - Answers arrive with your next message in the session that asked, unless you turn waking on in `/thread:setup`.
 - The plugin adds an MCP server and five hooks, and keeps cards and threads in its data directory on your machine (or in `.claude/thread/` if you opt in).
-- Nothing leaves the machine from the board: it listens on `127.0.0.1` only, needs an access token and makes no network calls.
+- Nothing leaves the machine from the board: it listens on `127.0.0.1` only, needs an access token and makes no network calls. After an update, the first session and the board say so once, with the release's changelog entry (no network).
+- A check for a new release is off by default (`updateCheck`, asked in `/thread:setup`).
 - What Claude sessions send to Anthropic, and what delegation lanes send to their providers, is unchanged.
 
 ## Short tour
@@ -83,16 +86,17 @@ A sub-agent call whose description starts with the card id, or a thread on a Cod
 ## Limits and data flow
 
 - **Capture is instructed, not enforced.** Claude is told to record tasks and questions, and nothing forces it: a task it never records is not on the board, and a question asked only in the chat is not either. [Instructed or enforced](docs/agent-behavior.md#instructed-or-enforced) lists which is which.
-- **The approval gate covers task cards with acceptance criteria.** `board_update` refuses to move such a card to done until an approval is recorded on this machine's board. It does not cover cards without criteria. You can move any card yourself on the board; one with criteria is then marked **not verified**. The board's API accepts any request that carries the token, and Claude is shown the board link, so an agent with shell access could record an approval itself: the gate guards the normal path, it is not a sandbox.
+- **The approval gate covers task cards with acceptance criteria.** `board_update` refuses to move such a card to done until an approval is recorded on this machine's board. It does not cover cards without criteria. You can move any card yourself on the board; one with criteria is then marked **not verified**. The board's API accepts any request that carries the token, and Claude is not shown the board token or the tunnel's token in a tool result (`/thread:board` opens your browser itself, with a one-time code, and the remote link is on the board and in a file, not in the answer), but an agent with shell access could read `board.token`, `board-link.txt` or `tunnel-link.txt` from the data directory and record an approval itself: the gate guards the normal path, it is not a sandbox. The confirmation codes do go to Claude in the tool's reply.
 - **Thread cards cannot carry acceptance criteria.** Reporting a thread returns its digest to the main session without needing your approval, and ending a thread needs none.
 - **A write thread edits the same working tree** as the main session, at the same time.
 - **Read threads are read-only** because of the CLI flags the plugin passes. That is not a sandbox: a command your own allow rules approve by name still runs.
 - **The board is local.** It listens on `127.0.0.1`, needs a token, checks Host and Origin on writes and makes no network calls.
+- **The opt-in update check calls GitHub.** With `updateCheck` on, the MCP server asks `api.github.com` once a day which release is the latest: a plain request that carries nothing about you or the project.
 - **The opt-in tunnel uses Cloudflare.** `/thread:board --tunnel` lasts 12 hours and has its own token and route limits.
 - **Claude and the lanes still talk to their providers.** Claude sessions send context to Anthropic; a lane sends its brief and files to Codex, Antigravity, OpenCode or another Claude session under that provider's terms.
 - **Stored unencrypted.** Card text and thread replies sit in the data directory, owner-only on macOS and Linux.
 - **Tokens, measured once.** In the author's one real test (two runs each), a side thread cost about 66% more than answering a medium side question inline, and about 29% less than a fresh built-in sub-agent on a big audit with two follow-ups. One repository, one model. It is not a reason on its own to install thread. See [the evidence](docs/evidence.md#token-use-measured-once).
-- **Not tested:** drag and drop between custom stages with a real browser, the clipboard write of **Copy report**, `/thread:setup` in a live session, `--full` together with `--agent`, threads started from the board with the real CLI, screen readers, Windows.
+- **Not tested:** drag and drop between custom stages with a real browser, the clipboard write of **Copy report**, `/thread:setup` in a live session, `--full` together with `--agent`, threads started from the board with the real CLI, a real browser opener launch on each platform (`open`, `xdg-open`, `cmd /c start`; only a stand-in opener has run), real Codex and OpenCode lanes with live steps (the relays are fakes in the tests), screen readers, Windows.
 
 More in [Security](docs/security.md).
 
@@ -100,7 +104,7 @@ More in [Security](docs/security.md).
 
 All of it is the author's own; no outside user reports exist yet. Details, dates and the checks not run are on the [evidence page](docs/evidence.md).
 
-- **Automated suite:** `node --test` runs 1298 tests, all passing on 0.23.0 on Node 20, 22 and 24, together with `claude plugin validate .`. The [CI workflow](.github/workflows/test.yml) runs both on pushes to main and on pull requests.
+- **Automated suite:** `node --test` runs 1392 tests, all passing on 0.24.0 on Node 20, 22 and 24 in CI, together with `claude plugin validate .`. The [CI workflow](.github/workflows/test.yml) runs both on pushes to main and on pull requests.
 - **The gate and the answers, on 0.22.0, for real** ([details](docs/evidence.md#6-smoke-test-of-the-promoted-workflow-on-0220)): one fresh Claude Code 2.1.299 session in a scratch project, whose first turn asked whether the plugin's guide had arrived and which was then given two tasks with no mention of the board. Claude put both on the board before editing and raised one review item (the second task needed none, so sending two answers at once was not shown). The answer, sent through the board's own route, reached the next turn; asked in the chat to mark the card done, Claude was refused; after an approval through the same route, the move went through. One run, one model.
 - **Real Claude Code checks, on record** ([details](docs/evidence.md#real-claude-code-checks)):
   - a lean thread run on 0.7.0 (2026-10-13);
@@ -131,16 +135,16 @@ The [full index](docs/README.md) groups every feature by what you want to do. By
   - [what is shared](docs/storage-and-sync.md#what-is-in-the-repo-and-what-stays-on-the-machine) · [turning it on](docs/storage-and-sync.md#turning-it-on) · [committing](docs/storage-and-sync.md#committing-the-folder) · [worktrees](docs/storage-and-sync.md#worktrees-and-sub-folders)
   - [card ids](docs/storage-and-sync.md#card-ids) · [conflicts](docs/storage-and-sync.md#conflicts) · [older sessions and the import hint](docs/storage-and-sync.md#older-sessions-and-the-import-hint)
 - **[Security and the tunnel](docs/security.md)**
-  - [security](docs/security.md#security) · [opening the board from your phone](docs/security.md#opening-the-board-from-your-phone-tunnel)
+  - [security](docs/security.md#security) · [the update check](docs/security.md#the-update-check) · [opening the board from your phone](docs/security.md#opening-the-board-from-your-phone-tunnel)
 - **Reference:** [commands](docs/commands.md) · [configuration](docs/configuration.md#configuration) · [where the settings live](docs/configuration.md#where-the-settings-live) · [troubleshooting](docs/troubleshooting.md) · [evidence](docs/evidence.md) · [changelog](CHANGELOG.md)
 
 ## Latest release
 
-**0.23.0** (2026-10-20)
+**0.24.0** (2026-10-22)
 
-- This short README, with the full reference in [docs](docs/README.md), a [demo](docs/demo.gif) of the questions-and-review loop and an [evidence page](docs/evidence.md) with the dated real checks.
-- Claude's "Waiting on you" line now links each item to its card on the board, so you can click it from the chat.
-- CI runs the tests on Node 20, 22 and 24 and the plugin validator.
+- Work on a Codex, OpenCode or Claude lane shows on its task card like a sub-agent run, with live steps and the report.
+- Claude is no longer shown the board's token: `/thread:board` opens the board in your browser itself.
+- You hear about updates: "Updated to X" once with What's new, how to turn on auto-update, and an opt-in daily check for a newer release.
 
 All releases: [CHANGELOG.md](CHANGELOG.md).
 

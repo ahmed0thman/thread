@@ -1,7 +1,7 @@
 {
   "name": "thread",
-  "version": "0.23.0",
-  "description": "A local board for Claude Code: Claude records tasks and asks its questions and reviews as waiting items on cards, you answer them together, and a task with acceptance criteria is not marked done until you approve. Side threads, sub-agent runs and delegation lanes show on the cards they belong to.",
+  "version": "0.24.0",
+  "description": "A local board for Claude Code: Claude records tasks and asks its questions and reviews as waiting items on cards, you answer them together, and a task with acceptance criteria is not marked done until you approve. Sub-agent runs, side threads and Codex, OpenCode or Claude lane work show live on the cards they belong to.",
   "author": {
     "name": "Ahmed Hisham"
   },
@@ -21,5 +21,16 @@
     "mcp"
   ],
   "homepage": "https://github.com/ahmed0thman/thread",
-  "repository": "https://github.com/ahmed0thman/thread"
+  "repository": "https://github.com/ahmed0thman/thread",
+  "mcpServers": {
+    "thread": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/server/mcp.mjs"
+      ],
+      "env": {
+        "THREAD_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
+      }
+    }
+  }
 }

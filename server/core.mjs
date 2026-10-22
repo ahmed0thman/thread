@@ -16,6 +16,7 @@ import { notifyActive } from './notify.mjs';
 import { CARD_ID_RE, CARD_ID_SRC, FIELD_NAMES, MAX_DEPENDS, addHistory, cardById, claudeCard, cleanDependsOn, cleanFields, cleanLinkNames, cleanWorker, criteriaCut, criteriaHash, finishedStageIds, gatedByCriteria, hasCriteria, leftDoneAt, liveBlockers, liveDependsOn, liveLinkNames, milestoneCardLinks, pinLeftDone as pinExit, threadById, watchFinished } from './fields.mjs';
 import { codeMapNote } from './codemap.mjs';
 import { RESUME, laneSnapshot, requireRunnableLane, unusableLane } from './lanes.mjs';
+import { closeLinkedRun, closeStaleLinkedRuns, closeThreadRuns, linkedRunsPending, openLinkedRun, turnActivityPath } from './runs.mjs';
 
 export * from './state.mjs';
 export * from './sessions.mjs';
@@ -252,6 +253,17 @@ function runnerAlive(projectDirArg, card) {
   try {
     const hb = JSON.parse(readFileSync(join(projectPaths(projectDirArg).logs, `${card.id}.alive`), 'utf8'));
     return hb.pid === th.pid && Date.now() - hb.at < HEARTBEAT_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+// Whether a runner is still writing for this thread: its heartbeat is fresh and names a live process. Unlike runnerAlive it does not need
+// the pid in the thread's record, which "end" clears before the runner has stopped.
+function runnerBeating(projectDirArg, card) {
+  try {
+    const hb = JSON.parse(readFileSync(join(projectPaths(projectDirArg).logs, `${card.id}.alive`), 'utf8'));
+    return isAlive(hb.pid) && Date.now() - hb.at < HEARTBEAT_STALE_MS;
   } catch {
     return false;
   }
@@ -851,6 +863,8 @@ export async function removeCard(projectDirArg, id, { source = 'claude' } = {}) 
     if (th && th.thread.runState === 'running' && isAlive(th.thread.pid)) {
       throw new Error(`thread ${card.id} is still running; end it before removing the card`);
     }
+    // A run this thread has on its card is closed from the turn's own record now: nothing is left to close it from once the thread is gone.
+    if (th) closeThreadRuns(projectDirArg, state, th);
     let keptFile = false;
     if (state.repoBacked && isThread(card) && card.fromRepo === card.id && state.base.shadowed.has(card.id)) {
       const now = state.base.snap.get(card.id);
@@ -1113,9 +1127,7 @@ export function buildRelayArgs(projectDirArg, card, { brief, outDir, timeoutMs }
 
 // One turn's activity file. Shared by the runner (writes) and readActivity (reads).
 export function activityPath(projectDirArg, cardId, turnNumber) {
-  if (!CARD_ID_RE.test(String(cardId))) throw new Error(`invalid card id: ${cardId}`);
-  if (!Number.isInteger(turnNumber) || turnNumber < 1) throw new Error(`invalid turn number: ${turnNumber}`);
-  return join(projectPaths(projectDirArg).logs, `${cardId}.t${turnNumber}.activity.jsonl`);
+  return turnActivityPath(projectDirArg, cardId, turnNumber);   // runs.mjs reads the same file for a card's linked runs and cannot import this module
 }
 
 // What a turn did, from its activity file. A line that does not parse (the
@@ -1284,8 +1296,23 @@ function beginThread(projectDirArg, card, { sessionId, mode, prompt, ...opts }) 
   launchRunner(projectDirArg, card);
 }
 
-export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs, context, brief, agent, model, effort, parent, lane } = {}) {
+// A thread that does the work of a card (`forCard`) has a run on that card for each turn, opened here when the turn is launched and closed
+// by the runner when it records the turn (runs.openLinkedRun, closeLinkedRun). Called inside updateState, after the turn was launched.
+function openTurnRun(projectDirArg, state, card) {
+  const th = card.thread;
+  if (!th.forCard) return;
+  const turnNo = th.turns.length;
+  if (!openLinkedRun(projectDirArg, state, card, turnNo, buildPrompt(card, projectDirArg))) return;
+  if (th.runState !== 'running') {   // the runner could not even be started
+    const turn = th.turns[turnNo - 1];
+    closeLinkedRun(projectDirArg, state, card.id, turnNo, { ok: false, error: turn && turn.error });
+  }
+}
+
+export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs, context, brief, agent, model, effort, parent, lane, card: forCard } = {}) {
   refuseInsideThread('start');
+  const wantCard = typeof forCard === 'string' ? forCard.trim() : '';
+  if (wantCard) requireTasks(readConfig(projectDirArg));
   const t = typeof title === 'string' ? title.trim() : '';
   const k = typeof task === 'string' ? task.trim() : '';
   const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief, agent, model, effort, lane });
@@ -1295,6 +1322,13 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
   return updateState(projectDirArg, (state) => {
     const parentId = claudeId(state, parentId0);
     if (parentId) checkParent(state, parentId, 'thread');
+    let forId = '';
+    if (wantCard) {
+      const target = findCard(state, wantCard, true);
+      if (target.kind === 'thread') throw new Error(`card ${wantCard} is a thread: a thread does the work of a task or an idea`);
+      if (target.kind === 'milestone') throw new Error(`card ${wantCard} is a milestone: a thread does the work of a task or an idea`);
+      forId = target.id;
+    }
     const ts = now();
     const card = {
       id: nextCardId(state, { thread: true }),
@@ -1309,7 +1343,8 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
     };
     if (parentId) card.parent = parentId;
     state.cards.push(card);
-    beginThread(projectDirArg, card, { sessionId, mode, prompt: k, ...opts });
+    beginThread(projectDirArg, card, { sessionId, mode, prompt: k, ...opts, ...(forId ? { forCard: forId } : {}) });
+    openTurnRun(projectDirArg, state, card);
     return card;
   });
 }
@@ -1412,6 +1447,7 @@ export async function continueThread(projectDirArg, id, message, { sessionId } =
     th.pid = null;
     setRunState(projectDirArg, card, 'running');
     launchRunner(projectDirArg, card);
+    openTurnRun(projectDirArg, state, card);
     return card;
   });
 }
@@ -1486,7 +1522,10 @@ export async function endThread(projectDirArg, id, { sessionId, confirmCode } = 
     const pid = th.pid;
     if (wasRunning) {
       if (runnerAlive(projectDirArg, c)) pidToKill = pid; // runner records the turn when it exits
-      else closeOpenTurn(c, 'ended by user');
+      else {
+        closeOpenTurn(c, 'ended by user');
+        closeLinkedRun(projectDirArg, state, c.id, th.turns.length, { ok: false, error: 'ended by user' });
+      }
     }
     th.pid = null;
     delete th.reportRequestedAt;
@@ -1564,7 +1603,16 @@ export async function reconcile(projectDirArg) {
       }
     }
   });
-  return readState(projectDirArg);
+  // A run on a task or idea for a thread's turn that has ended without the runner closing it, or a turn that has no run (an older plugin version
+  // continued the thread). The check reads first and writes only when there is something to do, and then the one read answers: this runs on every
+  // board request. The runs of a repo-backed project's cards are in this machine's overlay, which updateState writes.
+  const busy = (c) => runnerBeating(projectDirArg, c);
+  let state = readState(projectDirArg);
+  if (linkedRunsPending(state.cards, busy)) {
+    await updateState(projectDirArg, (st) => { closeStaleLinkedRuns(projectDirArg, st, busy); });
+    state = readState(projectDirArg);
+  }
+  return state;
 }
 
 export async function pendingAnnouncements(projectDirArg, sessionId) {

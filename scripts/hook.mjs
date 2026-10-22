@@ -37,7 +37,7 @@ function emit(eventName, additionalContext) {
   return new Promise((resolve) => process.stdout.write(out + '\n', () => resolve()));
 }
 
-const SETUP_HINT = 'The thread plugin has not been set up. Tell the user once, when it does not interrupt their request, that /thread:setup lets them choose chat-only or the task board, their own stages, and whether that applies to every project.';
+const SETUP_HINT = 'The thread plugin has not been set up. Tell the user once, when it does not interrupt their request, that /thread:setup lets them choose chat-only or the task board, their own stages, and whether that applies to every project. Updates arrive by themselves only when the user turns on auto-update in /plugin, under Marketplaces, thread-marketplace (Claude cannot do that for them).';
 
 // Tasks mode only: when to raise a waiting item, and the answers no session has received. Never fails the note.
 function waitNote(core, projectDir, sessionId) {
@@ -100,6 +100,23 @@ function setupHint(core, projectDir) {
   }
 }
 
+// Once per update, said by the first session after it (the record is seen-version.json in the data dir, see server/update.mjs): the plugin
+// was updated, and, when the opt-in update check knows of a newer release, that it is out. A first install says nothing. Never fails the note.
+async function updateNote(core, projectDir) {
+  try {
+    if (!core || !core.VERSION) return '';
+    const u = await import(new URL('../server/update.mjs', import.meta.url).href);
+    const on = !!projectDir && core.readConfig(projectDir).updateCheck;
+    const r = u.announce(core.VERSION, on ? u.readCheck().latest : null);
+    const lines = [];
+    if (r.updated) lines.push(`thread was updated to ${core.VERSION}. Tell the user once, in one line, and point them to the board's What's new.`);
+    if (r.out) lines.push(`thread ${r.out} is out (this is ${core.VERSION}): tell the user once and how to update (claude plugin marketplace update thread-marketplace, then claude plugin update thread@thread-marketplace, then reload the window).`);
+    return lines.join('\n');
+  } catch {
+    return '';
+  }
+}
+
 // A sub-agent started or stopped: the runs module records it on the card named in the Agent call's description
 // ("[c24] ..."), and does nothing when the description has no such marker. Prints nothing, ever.
 async function subagent(event, input, projectDir) {
@@ -151,8 +168,12 @@ async function main() {
   let core = null;
   try { core = await import(new URL('../server/core.mjs', import.meta.url).href); } catch { /* the note below does not need it */ }
 
-  // Register the session and its name. Never hold up the user's prompt waiting on the state lock.
+  // Before the session is registered (which makes the project's state file): the update note asks whether this machine has run the plugin
+  // before, and a first session's own state file would answer yes.
   const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
+  const update = event === 'SessionStart' ? await updateNote(core, projectDir) : '';
+
+  // Register the session and its name. Never hold up the user's prompt waiting on the state lock.
   if (core && projectDir) {
     process.env.THREAD_LOCK_WAIT_MS = '1000';
     try {
@@ -172,6 +193,7 @@ async function main() {
     if (repo) note += `\n${repo}`;
     const hint = core && projectDir ? setupHint(core, projectDir) : '';
     if (hint) note += `\n${hint}`;
+    if (update) note += `\n${update}`;
     await emit('SessionStart', note);
     return;
   }

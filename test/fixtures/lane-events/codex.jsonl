@@ -1,0 +1,9 @@
+{"type": "thread.started", "thread_id": "invented"}
+{"type": "item.started", "item": {"id": "cmd1", "type": "command_execution", "command": "cat src/a.js", "aggregated_output": "", "status": "in_progress"}}
+{"type": "item.completed", "item": {"id": "cmd1", "type": "command_execution", "command": "cat src/a.js", "aggregated_output": "const café = 1;", "exit_code": 0, "status": "completed"}}
+{"type": "item.completed", "item": {"id": "edit1", "type": "file_change", "changes": [{"path": "src/a.js", "kind": "update"}, {"path": "b.js", "kind": "add"}], "status": "completed"}}
+{"type": "item.started", "item": {"id": "mcp1", "type": "mcp_tool_call", "server": "docs", "tool": "find", "arguments": {"query": "invoice"}, "status": "in_progress"}}
+{"type": "item.completed", "item": {"id": "mcp1", "type": "mcp_tool_call", "server": "docs", "tool": "find", "arguments": {"query": "invoice"}, "status": "completed", "result": {"content": [{"type": "text", "text": "Found docs"}], "structured_content": null}}}
+{"type": "item.completed", "item": {"id": "web1", "type": "web_search", "query": "invoice rounding"}}
+{"type": "item.completed", "item": {"id": "msg1", "type": "agent_message", "text": "Checked the invoice."}}
+{"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 20}}

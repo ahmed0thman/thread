@@ -8,7 +8,7 @@
     {
       "name": "thread",
       "source": ".",
-      "description": "A local board for Claude Code: Claude records tasks and asks its questions and reviews as waiting items on cards, you answer them together, and a task with acceptance criteria is not marked done until you approve. Side threads, sub-agent runs and delegation lanes show on the cards they belong to."
+      "description": "A local board for Claude Code: Claude records tasks and asks its questions and reviews as waiting items on cards, you answer them together, and a task with acceptance criteria is not marked done until you approve. Sub-agent runs, side threads and Codex, OpenCode or Claude lane work show live on the cards they belong to."
     }
   ]
 }

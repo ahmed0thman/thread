@@ -69,6 +69,29 @@ test('the saved sub-agent that is also the one running needs no caption', () => 
   assert.equal(eff(page, task({ agent: 'deep-analyst', runs: [run(), run({ n: 2, agentType: 'worker' })] })).caption, 'Start as thread uses: agent: deep-analyst', 'two kinds working: the saved one is not all of them');
 });
 
+test('a run of a thread that does the card\'s work is the lane\'s: it is working now as that lane, and the last one used when it is over', () => {
+  const page = load();
+  const linked = (over = {}) => ({ n: 1, thread: 'c9', turn: 1, lane: 'code-codex', agentType: 'code-codex', state: 'running', startedAt: '2026-10-14T03:26:00.000Z', ...over });
+  const now = eff(page, task({ runs: [linked()] }));
+  assert.deepEqual([now.state, now.text], ['now', 'code-codex · working now']);
+  assert.deepEqual(now.running, ['lane:code-codex'], 'the picker badge goes to the lane, not to an agent of that name');
+  assert.deepEqual(plain(page.workerMarks(task({ runs: [linked()] }))), { 'lane:code-codex': 'now' });
+  assert.equal(eff(page, task({ lane: 'code-codex', runs: [linked()] })).caption, '', 'the saved lane is the one working: nothing to add');
+  const over = task({ runs: [linked({ state: 'done' })] });
+  assert.equal(page.lastWorkerOf(over).key, 'lane:code-codex');
+  assert.equal(eff(page, over).text, 'code-codex · last used');
+  assert.equal(startKeyOf(page, over), 'lane:code-codex');
+  // newer than an older sub-agent run, older than a newer one
+  assert.equal(page.lastWorkerOf(task({ runs: [run({ state: 'done' }), linked({ n: 2, state: 'done', startedAt: '2026-10-14T03:27:00.000Z' })] })).key, 'lane:code-codex');
+  assert.equal(page.lastWorkerOf(task({ runs: [linked({ state: 'done' }), run({ n: 2, state: 'done', startedAt: '2026-10-14T03:28:00.000Z' })] })).key, 'agent:deep-analyst');
+  // a thread that is no lane's is nobody to show, as in the history
+  assert.equal(page.lastWorkerOf(task({ runs: [linked({ lane: undefined, agentType: 'thread', state: 'done' })] })), null);
+  // a thread that runs as an agent (no lane) is that agent's, as workedBy counts it
+  const asAgent = linked({ lane: undefined, agentType: 'worker', state: 'done' });
+  assert.equal(page.lastWorkerOf(task({ runs: [asAgent] })).key, 'agent:worker');
+  assert.deepEqual(plain(page.workerMarks(task({ runs: [{ ...asAgent, state: 'running' }] }))), { 'agent:worker': 'now' });
+});
+
 test('a quiet run is muted, not "working now"; a live run beside it wins', () => {
   const page = load();
   const q = eff(page, task({ runs: [run({ quiet: true })] }));

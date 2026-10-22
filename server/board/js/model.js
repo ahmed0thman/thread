@@ -269,7 +269,14 @@
     }
     const running = Array.isArray(card.runs) ? card.runs.filter((r) => r && typeof r === 'object' && r.state === 'running') : [];
     if (!running.length) return null;
-    const runs = running.map((r) => ({ type: typeof r.agentType === 'string' && r.agentType ? r.agentType : 'agent', since: typeof r.startedAt === 'string' ? r.startedAt : '', quiet: r.quiet === true }));
+    // `key` is the worker the run is of ('agent:<type>', or 'lane:<name>' for a run of a thread on a lane; '' for a plain thread's run)
+    const runs = running.map((r) => {
+      const type = typeof r.agentType === 'string' && r.agentType ? r.agentType : 'agent';
+      const linked = typeof r.thread === 'string' && r.thread !== '';
+      const lane = linked && typeof r.lane === 'string' ? r.lane.replace(/…$/, '') : '';
+      // a thread's run is of its lane, or of its agent (its type); a plain thread is nobody to show
+      return { type, key: linked ? (lane ? 'lane:' + lane : type !== 'thread' && type !== 'agent' ? 'agent:' + type.replace(/…$/, '') : '') : 'agent:' + type.replace(/…$/, ''), since: typeof r.startedAt === 'string' ? r.startedAt : '', quiet: r.quiet === true };
+    });
     const live = runs.filter((r) => !r.quiet);
     const shown = live.length ? live : runs;
     const isLive = live.length > 0;
@@ -305,7 +312,7 @@
   // ---- effective worker (worker-effective.test.mjs runs this block, with the tokens and agents, delegation lanes, workers and working now ones) ----
   // The Worker field of a task or idea shows who works on the card, not only the worker saved on it (the one Start as thread uses). In this
   // order: what runs on it now, the saved worker, the last worker Claude used on it, Claude (default). The last one used is the newest of the
-  // card's runs (their agent type) and of the history entries that name a sub-agent or a lane; 'main' and threads are nobody to show.
+  // card's runs (their agent type, or the lane of a thread's run) and of the history entries that name a sub-agent or a lane; 'main' and threads are nobody to show.
   // { key, at }: `key` is 'agent:<type>' or 'lane:<name>', `at` the time in ms (-Infinity when the entry has none); null when there is none.
   function lastWorkerOf(card) {
     if (!card || typeof card !== 'object') return null;
@@ -316,7 +323,16 @@
       if (!best || at >= best.at) best = { key, at };   // a tie goes to the later entry
     };
     (Array.isArray(card.runs) ? card.runs : []).forEach((r) => {
-      const type = r && typeof r === 'object' && typeof r.agentType === 'string' ? r.agentType.replace(/…$/, '') : '';   // a run keeps a long type cut with …
+      if (!r || typeof r !== 'object') return;
+      // a run of a thread that does the card's work (it names its thread) counts for its lane or its agent, as workedBy counts it; a plain thread is nobody to show
+      if (typeof r.thread === 'string' && r.thread) {
+        const lane = typeof r.lane === 'string' ? r.lane.replace(/…$/, '') : '';
+        const type = typeof r.agentType === 'string' ? r.agentType.replace(/…$/, '') : '';
+        if (lane) add('lane:' + lane, r.startedAt);
+        else if (type && type !== 'thread') add('agent:' + type, r.startedAt);
+        return;
+      }
+      const type = typeof r.agentType === 'string' ? r.agentType.replace(/…$/, '') : '';   // a run keeps a long type cut with …
       if (type) add('agent:' + type, r.startedAt);
     });
     (Array.isArray(card.history) ? card.history : []).forEach((e) => {
@@ -347,8 +363,8 @@
       const names = work.kind === 'thread' ? [work.lane || 'thread'] : shown.map((r) => r.type).filter((x, i, a) => a.indexOf(x) === i);
       out.state = work.live ? 'now' : 'quiet';
       out.text = work.kind === 'thread' ? names[0] + ' · working now' : shown.length === 1 ? shown[0].type + (work.live ? ' · working now' : ' · quiet') : shown.length + ' agents ' + (work.live ? 'working' : 'quiet');
-      if (work.live) out.running = work.kind === 'thread' ? (work.lane ? ['lane:' + work.lane] : []) : names.map((n) => 'agent:' + n);
-      const same = work.kind === 'runs' && workerKind(saved) === 'agent' && names.every((n) => 'agent:' + n === saved);
+      if (work.live) out.running = work.kind === 'thread' ? (work.lane ? ['lane:' + work.lane] : []) : shown.map((r) => r.key).filter((k, i, a) => k && a.indexOf(k) === i);
+      const same = work.kind === 'runs' && !!saved && shown.length > 0 && shown.every((r) => r.key === saved);
       out.caption = same ? '' : startText;
       out.title = workTitle(work, nowMs) + '\n' + savedText + '\n' + startText;
     } else if (saved) {

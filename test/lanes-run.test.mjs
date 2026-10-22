@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { setupThreadEnv, cleanAmbientEnv, waitFor, sleep, isAlive, McpClient, runNode, HOOK_PATH, PARENT_SESSION, FAKE_DELEGATE, writeStateFile, emptyState } from './helpers.mjs';
 import * as core from '../server/core.mjs';
@@ -315,7 +316,77 @@ test('a running lane thread stays running for reconcile while its runner beats, 
 
 // ------------------------------------------------------------ trace and tokens, and the hook mark
 
-test('a claude lane gives the turn its steps and token use from events.jsonl, counted once; other providers give none', async (t) => {
+for (const provider of ['codex', 'opencode', 'claude']) {
+  test(`${provider}: lane tools appear while running, then finish in order with steps counted once`, async (t) => {
+    const e = setup(t, 'live', { FAKE_RELAY_STEP_MS: provider === 'opencode' ? '600' : '350' });
+    await start(e, { lane: PROVIDER_LANE[provider] });
+    await waitFor(() => core.readActivity(e.projectDir, 'c1', 1).some((v) => v.kind === 'tool') && thread(e.projectDir)?.runState === 'running');
+    await untilState(e, 'idle');
+    const activity = core.readActivity(e.projectDir, 'c1', 1).map(({ at, ...event }) => event);
+    const expected = provider === 'codex' ? [
+      { kind: 'tool', id: 'cmd1', name: 'shell', summary: 'cat src/a.js' },
+      { kind: 'tool_result', id: 'cmd1', ok: true, preview: 'const café = 1;' },
+      { kind: 'tool', id: 'edit1', name: 'edit', summary: 'update src/a.js, add b.js' },
+      { kind: 'tool_result', id: 'edit1', ok: true, preview: '' },
+      { kind: 'tool', id: 'mcp1', name: 'docs.find', summary: 'invoice' },
+      { kind: 'tool_result', id: 'mcp1', ok: true, preview: 'Found docs' },
+      { kind: 'tool', id: 'web1', name: 'web_search', summary: 'invoice rounding' },
+      { kind: 'tool_result', id: 'web1', ok: true, preview: '' },
+      { kind: 'text', text: 'Checked the invoice.' },
+    ] : provider === 'opencode' ? [
+      { kind: 'tool', id: 'read1', name: 'read', summary: 'src/a.js' },
+      { kind: 'tool_result', id: 'read1', ok: true, preview: 'const café = 1;' },
+      { kind: 'tool', id: 'cmd2', name: 'bash', summary: 'false' },
+      { kind: 'tool_result', id: 'cmd2', ok: false, preview: 'Command failed' },
+      { kind: 'text', text: 'Checked the invoice.' },
+    ] : [
+      { kind: 'text', text: 'Looking at the file.' },
+      { kind: 'tool', id: 'tu1', name: 'Read', summary: 'a.txt' },
+      { kind: 'tool_result', id: 'tu1', ok: true, preview: 'file text' },
+      { kind: 'tool', id: 'tu2', name: 'Grep', summary: 'x' },
+      { kind: 'tool_result', id: 'tu2', ok: true, preview: 'a.txt:1' },
+    ];
+    assert.deepEqual(activity, expected);
+    const turn = thread(e.projectDir).turns[0];
+    assert.equal(turn.steps, provider === 'codex' ? 4 : 2);
+    if (provider === 'claude') assert.deepEqual(plain(turn.usage), { input: 10, cacheRead: 100, cacheWrite: 5, output: 20 });
+    else assert.equal(turn.usage, undefined);
+  });
+}
+
+test('a lane turn whose events include hostile values still records its report and keeps the good steps', async (t) => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'thread-hostile-')), 'events.jsonl');
+  t.after(() => fs.rmSync(path.dirname(file), { recursive: true, force: true }));
+  const lines = [
+    '{"type":"item.started","item":{"type":"command_execution","id":"ok1","command":"ls"}}',
+    '{"type":"item.completed","item":{"type":"file_change","id":"f1","status":"completed","changes":[{"kind":"add","path":{"toString":1}}]}}',
+    '{"type":"item.started","item":{"type":"mcp_tool_call","id":"m1","server":{"toString":1},"tool":{"toString":1}}}',
+    '{"type":"item.started","item":{"type":"command_execution","id":"s1","command":[{"toString":1}]}}',
+    'not json at all',
+    '{"type":"item.completed","item":{"type":"command_execution","id":"ok1","command":"ls","exit_code":0,"aggregated_output":"fine"}}',
+    '{"type":"item.started","item":{"type":"mcp_tool_call","id":"m2","server":{"toString":1},"tool":{"toString":1}}}',   // the last line has no newline: finish() reads it
+  ];
+  fs.writeFileSync(file, lines.join('\n'));
+  const e = setup(t, 'live', { FAKE_RELAY_STEP_MS: '80', FAKE_RELAY_EVENTS_FILE: file });
+  await start(e);
+  await untilState(e, 'idle');
+  const turn = thread(e.projectDir).turns[0];
+  assert.equal(turn.ok, true);
+  assert.match(thread(e.projectDir).lastResult, /codex lane reply/);
+  const tools = core.readActivity(e.projectDir, 'c1', 1).filter((v) => v.kind === 'tool');
+  assert.ok(tools.some((v) => v.id === 'ok1'), 'the good lines before and after the hostile ones are kept');
+  assert.ok(turn.steps >= 1);
+});
+
+test('an agy live turn has no activity or steps', async (t) => {
+  const e = setup(t, 'live');
+  await start(e, { lane: 'agy-fast' });
+  await untilState(e, 'idle');
+  assert.deepEqual(core.readActivity(e.projectDir, 'c1', 1), []);
+  assert.equal(thread(e.projectDir).turns[0].steps, 0);
+});
+
+test('a claude lane gives the turn its steps and token use from events.jsonl, counted once', async (t) => {
   const e = setup(t, 'ok', { FAKE_RELAY_EVENTS: '1' });
   await start(e, { lane: 'claude-edit' });
   await untilState(e, 'idle');
@@ -332,7 +403,7 @@ test('a claude lane gives the turn its steps and token use from events.jsonl, co
   assert.equal(turns[1].steps, 2);
 });
 
-test('a claude lane without events takes its token use from result.json once; codex, agy and opencode have no trace and no tokens', async (t) => {
+test('a claude lane without events takes its token use from result.json once; other providers without events have no trace or tokens', async (t) => {
   const e = setup(t, 'ok', { FAKE_RELAY_EVENTS: 'usage' });
   await start(e, { lane: 'claude-edit' });
   await untilState(e, 'idle');

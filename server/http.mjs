@@ -6,10 +6,11 @@ import { join, resolve } from 'node:path';
 import * as core from './core.mjs';
 import { listLanesWithRelay, requireLane } from './lanes.mjs';
 import { assembleBoardPage } from './page.mjs';
-import { markRunStopped, readRunText, runActivity, runQuiet } from './runs.mjs';
+import { RunLiveError, isLinkedRun, linkedAlive, markRunStopped, readRunText, runActivity, runQuiet } from './runs.mjs';
 import { TunnelError, createTunnelManager, reapStaleTunnel } from './tunnel.mjs';
+import { olderVersion, updateView } from './update.mjs';
 
-export { TunnelError };
+export { TunnelError, olderVersion };
 
 const MAX_BODY = 64 * 1024;
 const MAX_PORT_TRIES = 20;
@@ -528,6 +529,59 @@ function remoteGate(req, res, remote, method, path) {
   return false;
 }
 
+// ---------------------------------------------------------------- the one-time code that opens the browser
+
+const CODE_RE = /^[0-9a-f]{32}$/;
+const CODE_TTL_MS = 2 * 60 * 1000;
+const MAX_CODES = 10;            // codes waiting to be used; the oldest goes first
+const MAX_CODE_MISSES = 10;      // wrong or used codes a minute, then the exchange refuses everything until the minute has passed
+
+/**
+ * The codes board_open puts in the link it opens in the browser instead of the access token (a token in the link would sit in the browser's
+ * command line, where any process of the user can read it). A code is 128 random bits, works once, for two minutes, and is held in memory
+ * only, by the process that serves the board. The page trades it for the token with one POST (/api/exchange). `now` is for tests.
+ */
+export function createCodeStore({ now = Date.now, ttlMs = CODE_TTL_MS, maxMisses = MAX_CODE_MISSES } = {}) {
+  const live = new Map();   // sha256 of the code -> when it stops working
+  let misses = [];
+  const hash = (code) => createHash('sha256').update(code).digest('hex');
+  const sweep = () => { const t = now(); for (const [k, until] of live) if (until <= t) live.delete(k); };
+  return {
+    issue() {
+      sweep();
+      while (live.size >= MAX_CODES) live.delete(live.keys().next().value);
+      const code = randomBytes(16).toString('hex');
+      const expiresAt = now() + ttlMs;
+      live.set(hash(code), expiresAt);
+      return { code, expiresAt };
+    },
+    /** 'ok' (the code is used up), 'bad' (unknown, used or expired) or 'limit' (too many misses lately). */
+    take(code) {
+      const t = now();
+      misses = misses.filter((at) => t - at < 60000);
+      if (misses.length >= maxMisses) return 'limit';
+      sweep();
+      const key = typeof code === 'string' && CODE_RE.test(code) ? hash(code) : null;
+      if (key && live.delete(key)) return 'ok';
+      misses.push(t);
+      return 'bad';
+    },
+  };
+}
+
+// POST /api/exchange { code }: the page's one request without the token. A browser page asks from this server's own origin (the origin is
+// required, not only checked when present), and the code is consumed whatever the answer after it. The tunnel's listener never reaches it.
+async function handleExchange(req, res, codes, token) {
+  const origin = req.headers.origin;
+  if (typeof origin !== 'string' || !originAllowed(origin, req.socket.localPort)) { req.resume(); send(res, 403, { error: 'forbidden origin' }); return; }
+  requireJson(req);
+  const body = await readJsonBody(req);
+  const result = codes.take(body && body.code);
+  if (result === 'limit') { send(res, 429, { error: 'too many wrong codes; wait a minute' }, { 'Retry-After': '60' }); return; }
+  if (result !== 'ok') { send(res, 401, { error: 'that code is not valid (any more)' }); return; }
+  send(res, 200, { token });
+}
+
 async function handleTunnelControl(req, res, tunnel) {
   requireJson(req);
   const body = await readJsonBody(req);
@@ -544,7 +598,7 @@ async function handleTunnelControl(req, res, tunnel) {
 }
 
 // `remote` is the policy of the tunnel's listener (null on the normal one); `tunnel` is the manager the normal listener controls.
-function makeHandler(homeDir, token, stop, { remote = null, tunnel = null } = {}) {
+function makeHandler(homeDir, token, stop, { remote = null, tunnel = null, codes = null } = {}) {
   const requireToken = typeof token === 'string' && token.length > 0;
   return async function handle(req, res) {
     if (remote) {
@@ -578,6 +632,13 @@ function makeHandler(homeDir, token, stop, { remote = null, tunnel = null } = {}
       return;
     }
 
+    // The page trades a one-time code for the token: the only /api/ route that takes no token. Never on the tunnel's listener.
+    if (method === 'POST' && path === '/api/exchange' && !remote) {
+      if (!codes || !requireToken) { req.resume(); send(res, 404, { error: 'not found' }); return; }
+      await handleExchange(req, res, codes, token);
+      return;
+    }
+
     if (path.startsWith('/api/') && !remote) {
       if (WRITE_METHODS.has(method) && typeof req.headers.origin === 'string' && !originAllowed(req.headers.origin, req.socket.localPort)) {
         req.resume();
@@ -594,6 +655,29 @@ function makeHandler(homeDir, token, stop, { remote = null, tunnel = null } = {}
     // What this page may do: everything on the normal listener, the allowlist on the tunnel's.
     if (method === 'GET' && path === '/api/caps') {
       send(res, 200, remote ? { remote: true, expiresAt: remote.expiresAt } : { remote: false });
+      return;
+    }
+
+    // The update banners: this version, the one this machine came from, a newer release the opt-in check found, the changelog entry.
+    // Read-only, but only the page on the computer itself needs it, so it is not on the tunnel's allowlist.
+    if (method === 'GET' && path === '/api/update' && !remote) {
+      send(res, 200, updateView(core.VERSION, core.readConfig(homeDir).updateCheck));
+      return;
+    }
+
+    // A one-time code for the link board_open opens in the browser (a guest session's board_open comes here, with the board token).
+    if (method === 'POST' && path === '/api/open-code' && !remote) {
+      if (!codes) { req.resume(); send(res, 404, { error: 'not found' }); return; }
+      req.resume();
+      send(res, 200, codes.issue());
+      return;
+    }
+
+    // The remote link, for the "Phone link" item of the page on this computer. The tunnel's token is in it: the board token is needed to
+    // ask, and the tunnel's own listener has no such route.
+    if (method === 'GET' && path === '/api/tunnel-link' && !remote) {
+      const st = tunnel ? tunnel.status() : { active: false };
+      send(res, 200, st.active ? { active: true, url: st.url, token: st.token, expiresAt: st.expiresAt } : { active: false });
       return;
     }
 
@@ -676,7 +760,8 @@ function withViews(card, cfg, cards, aliases) {
   delete view.localCriteria;   // how many criteria this machine's board last had; the page is told the result (criteriaCut)
   delete view.approvals;   // this machine's own record of the approvals it was given; the page is told the result (verified, approvalElsewhere)
   // where the transcript of a sub-agent run lies stays on the server; a running run that has gone quiet says so (`quiet`, computed here, never stored)
-  if (Array.isArray(view.runs)) view.runs = view.runs.filter((r) => r && typeof r === 'object').map(({ transcript, ...run }) => (runQuiet({ ...run, transcript }) ? { ...run, quiet: true } : run));
+  // A run of a thread that does the card's work has no transcript; it is quiet when its thread is not running that turn any more (the page then offers "Mark as stopped").
+  if (Array.isArray(view.runs)) view.runs = view.runs.filter((r) => r && typeof r === 'object').map(({ transcript, ...run }) => ((isLinkedRun(run) ? run.state === 'running' && !linkedAlive(run, cards) : runQuiet({ ...run, transcript })) ? { ...run, quiet: true } : run));
   // an older plugin version can remove a milestone without clearing its cards
   if (view.parent && !cards.some((c) => c.id === view.parent && c.kind === 'milestone')) delete view.parent;
   if (card.kind === 'milestone') {
@@ -758,7 +843,7 @@ function listenOnce(server, port) {
 function buildServer(handle) {
   const server = http.createServer((req, res) => {
     handle(req, res).catch((e) => {
-      if (e instanceof HttpError || e instanceof core.ChatOnlyError || e instanceof core.WaitError || e instanceof core.StaleCardError) send(res, e.status, { error: e.message });
+      if (e instanceof HttpError || e instanceof core.ChatOnlyError || e instanceof core.WaitError || e instanceof core.StaleCardError || e instanceof RunLiveError) send(res, e.status, { error: e.message });
       else if (e && e.message) send(res, 400, { error: String(e.message).split('\n')[0] });
       else send(res, 500, { error: 'internal error' });
     });
@@ -786,11 +871,13 @@ async function startRemoteListener(projectDir, policy) {
 
 /**
  * Starts the board's web server. `tunnel` holds test options for the tunnel manager (clock, lifetime, limits, timeouts).
- * Resolves { server, port, url, tunnel }: `tunnel` starts, shows and stops the Cloudflare tunnel for this board, and ends with it.
+ * Resolves { server, port, url, tunnel, codes }: `tunnel` starts, shows and stops the Cloudflare tunnel for this board, and ends with it;
+ * `codes` hands out the one-time codes of the link that opens the browser (`codeOptions` are for tests).
  */
-export async function startBoardServer(projectDir, { port = 0, token, tunnel: tunnelOptions } = {}) {
+export async function startBoardServer(projectDir, { port = 0, token, tunnel: tunnelOptions, codes: codeOptions } = {}) {
   const tunnel = createTunnelManager({ serve: (policy) => startRemoteListener(projectDir, policy), ...tunnelOptions });
-  const server = buildServer(makeHandler(projectDir, token, () => closeBoardServer(server), { tunnel }));
+  const codes = createCodeStore(codeOptions);
+  const server = buildServer(makeHandler(projectDir, token, () => closeBoardServer(server), { tunnel, codes }));
 
   try {
     await listenOnce(server, port);
@@ -804,7 +891,7 @@ export async function startBoardServer(projectDir, { port = 0, token, tunnel: tu
   core.sweepOrphanLogs(projectDir).catch(() => {});   // logs an older version left behind
   reapStaleTunnel().catch(() => {});                  // a cloudflared an owner that crashed left behind
   const actual = server.address().port;
-  return { server, port: actual, url: `http://127.0.0.1:${actual}/`, tunnel };
+  return { server, port: actual, url: `http://127.0.0.1:${actual}/`, tunnel, codes };
 }
 
 export function closeBoardServer(server) {
@@ -819,15 +906,6 @@ export function boardStopped() { return existsSync(stoppedFile()); }
 export function setBoardStopped(on) {
   if (on) { core.mkdirPrivateSync(core.dataDir()); writeFileSync(stoppedFile(), '', { mode: core.PRIVATE_FILE }); }
   else try { unlinkSync(stoppedFile()); } catch { /* not stopped */ }
-}
-
-/** True when plugin version `a` is lower than `b`; false when either is not x.y.z. */
-export function olderVersion(a, b) {
-  const parse = (v) => { const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(v)); return m ? m.slice(1).map(Number) : null; };
-  const x = parse(a), y = parse(b);
-  if (!x || !y) return false;
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i];
-  return false;
 }
 
 /** Ask the board at <base> to stop. Resolves true when it agreed; boards before 0.8.2 cannot. */
@@ -850,20 +928,18 @@ export function stopBoard(baseUrl) {
   });
 }
 
-/**
- * Ask the board at <base> to start, show or stop its tunnel (a guest session's way to the owner). Resolves { status, body }, or null
- * when the board cannot be reached. A board from a version before the tunnel answers 404.
- */
-export function tunnelRequest(baseUrl, action) {
+// POST a JSON body to a local control route of the board at <base>, with the board token. Resolves { status, body }, or null when the board
+// cannot be reached. A board from a version before that route answers 404.
+function localPost(baseUrl, route, payload, timeout) {
   return new Promise((resolveP) => {
-    const payload = JSON.stringify({ action });
+    const data = JSON.stringify(payload);
     let req;
     try {
-      req = http.request(new URL('/api/tunnel', baseUrl), {
+      req = http.request(new URL(route, baseUrl), {
         method: 'POST',
         agent: false,
-        timeout: 60000,   // starting the tunnel can take 30 s
-        headers: { 'X-Thread-Token': boardToken(), 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+        timeout,
+        headers: { 'X-Thread-Token': boardToken(), 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
       }, (res) => {
         const chunks = [];
         let size = 0;
@@ -881,8 +957,21 @@ export function tunnelRequest(baseUrl, action) {
     }
     req.on('timeout', () => req.destroy());
     req.on('error', () => resolveP(null));
-    req.end(payload);
+    req.end(data);
   });
+}
+
+/**
+ * Ask the board at <base> to start, show or stop its tunnel (a guest session's way to the owner). Resolves { status, body }, or null
+ * when the board cannot be reached. A board from a version before the tunnel answers 404.
+ */
+export function tunnelRequest(baseUrl, action) {
+  return localPost(baseUrl, '/api/tunnel', { action }, 60000);   // starting the tunnel can take 30 s
+}
+
+/** Ask the board at <base> for a one-time code for the browser link (a guest session's way to the owner). Same answers as tunnelRequest. */
+export function openCodeRequest(baseUrl) {
+  return localPost(baseUrl, '/api/open-code', {}, 3000);
 }
 
 /** The board's access token: 32 random hex characters in <data dir>/board.token (0600). */
@@ -926,6 +1015,15 @@ export function boardToken() {
   throw new Error(`cannot create the board token file: ${file}`);
 }
 
+/**
+ * Replaces the board's access token: the file goes, and the next boardToken() makes a new one. Called once the board has been stopped, so a
+ * token a browser keeps from the old board opens nothing, whoever takes the port next. Every plugin version reads the file afresh on each use
+ * (to start a board, to stop it, to make a link), so none keeps a token that is no longer there.
+ */
+export function rotateBoardToken() {
+  try { unlinkSync(join(core.dataDir(), 'board.token')); } catch { /* none to replace */ }
+}
+
 /** GET <base>/api/ping with a 1 s timeout. Resolves to the parsed body or null. */
 export function pingBoard(baseUrl) {
   return new Promise((resolveP) => {
@@ -967,7 +1065,7 @@ export async function ensureBoard(projectDir, { port } = {}) {
     if (p > 65535) break;
     try {
       const b = await startBoardServer(projectDir, { port: p, token });
-      return { url: b.url, owned: true, server: b.server, tunnel: b.tunnel };
+      return { url: b.url, owned: true, server: b.server, tunnel: b.tunnel, codes: b.codes };
     } catch (e) {
       lastErr = e;
       if (!e || e.code !== 'EADDRINUSE') continue;
@@ -979,7 +1077,7 @@ export async function ensureBoard(projectDir, { port } = {}) {
         for (let n = 0; n < 20; n++) {
           try {
             const b = await startBoardServer(projectDir, { port: p, token });
-            return { url: b.url, owned: true, server: b.server, tunnel: b.tunnel };
+            return { url: b.url, owned: true, server: b.server, tunnel: b.tunnel, codes: b.codes };
           } catch { await new Promise((r) => setTimeout(r, 50)); }
         }
         if (!(await pingBoard(url))) continue;   // someone else's port now

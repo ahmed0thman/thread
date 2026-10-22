@@ -1,7 +1,8 @@
 // Board settings: chat-only or task mode, the stages and which stage the plugin itself uses, and whether the board may wake the session.
 // Two optional files with the same shape, <data dir>/config.json and <project data>/config.json. A repo-backed project (see repo.mjs) keeps
 // its mode, stages and roles in `.claude/thread/config.json` instead, and only the `wake` setting in its local file: whether the board may
-// wake a session is the machine's own choice, so a committed file can never turn it on. `codeMap` (a note in a new thread's prompt) is shared like the mode.
+// wake a session is the machine's own choice, so a committed file can never turn it on; `updateCheck` (the opt-in daily call to GitHub, see
+// update.mjs) is kept the same way, for the same reason. `codeMap` (a note in a new thread's prompt) is shared like the mode.
 // Imports only state.mjs and repo.mjs.
 import { randomBytes } from 'node:crypto';
 import { mkdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
@@ -92,6 +93,10 @@ export function validateConfig(obj) {
     if (typeof obj.codeMap !== 'boolean') throw new Error('codeMap must be true or false');
     out.codeMap = obj.codeMap;
   }
+  if (obj.updateCheck !== undefined) {
+    if (typeof obj.updateCheck !== 'boolean') throw new Error('updateCheck must be true or false');
+    out.updateCheck = obj.updateCheck;
+  }
   if (obj.stages !== undefined) out.stages = cleanStages(obj.stages);
   if (obj.roles !== undefined) {
     if (!out.stages) throw new Error('roles belong to the stages of the same config file: give stages as well');
@@ -172,6 +177,7 @@ function projectFile(paths, backed) {
   if (from.stages !== undefined) config.stages = from.stages;
   if (from.stages !== undefined && from.roles !== undefined) config.roles = from.roles;
   if (lc.wake !== undefined) config.wake = lc.wake;
+  if (lc.updateCheck !== undefined) config.updateCheck = lc.updateCheck;
   return { exists: repo.exists || local.exists, config: repo.config || local.config ? config : null, invalid: repo.invalid || local.invalid };
 }
 
@@ -187,10 +193,12 @@ export function readConfig(projectDirArg) {
   const stagesFrom = pick((c) => c.stages !== undefined);
   const wakeFrom = pick((c) => c.wake !== undefined);
   const codeMapFrom = pick((c) => c.codeMap !== undefined);
+  const updateCheckFrom = pick((c) => c.updateCheck !== undefined);
   const stagesFile = stagesFrom === 'default' ? {} : files[stagesFrom].config;
   const stages = stagesFile.stages || DEFAULT_STAGES;
   const wake = wakeFrom === 'default' ? false : files[wakeFrom].config.wake;
   const codeMap = codeMapFrom === 'default' ? false : files[codeMapFrom].config.codeMap;
+  const updateCheck = updateCheckFrom === 'default' ? false : files[updateCheckFrom].config.updateCheck;
   const mode = modeFrom === 'default' ? 'tasks' : files[modeFrom].config.mode;
   const taskStages = stages.map((s) => ({ ...s }));
   const taskRoles = fillRoles(stagesFile.roles, stages, stages.map((s) => s.id).join() === DEFAULT_STAGES.map((s) => s.id).join());
@@ -199,11 +207,12 @@ export function readConfig(projectDirArg) {
     mode,
     wake,
     codeMap,
+    updateCheck,
     stages: chat ? CHAT_STAGES.map((s) => ({ ...s })) : taskStages,
     roles: chat ? { ...CHAT_ROLES } : taskRoles,
     taskStages,
     taskRoles,
-    source: { mode: modeFrom, stages: stagesFrom, wake: wakeFrom, codeMap: codeMapFrom },
+    source: { mode: modeFrom, stages: stagesFrom, wake: wakeFrom, codeMap: codeMapFrom, updateCheck: updateCheckFrom },
     exists: { global: files.global.exists, project: files.project.exists },
     invalid: { global: files.global.invalid, project: files.project.invalid },
     configured: files.global.exists || files.project.exists,
@@ -248,17 +257,17 @@ export async function saveConfig(projectDirArg, scope, patch) {
   if (!isObject(patch)) throw new Error('config changes must be an object');
   const paths = configPaths(projectDirArg);
   if (scope === 'project' && repoRootOf(projectDirArg)) {
-    // mode, codeMap, stages and roles are the project's and go in the repo; wake is this machine's. A removal is made in both files, so the older
+    // mode, codeMap, stages and roles are the project's and go in the repo; wake and updateCheck are this machine's. A removal is made in both files, so the older
     // local value does not show through again.
     const shared = ['mode', 'codeMap', 'stages', 'roles'];
     if (shared.some((k) => patch[k] !== undefined)) await mergeIntoFile(paths.project, 'project', patch, shared, { repo: true });
     const removing = shared.some((k) => patch[k] === null) && existsSync(paths.local);
-    if (patch.wake !== undefined || removing) {
-      const localPatch = { wake: patch.wake, ...Object.fromEntries(shared.filter((k) => patch[k] === null).map((k) => [k, null])) };
-      await mergeIntoFile(paths.local, 'project', localPatch, ['wake', ...shared]);
+    if (patch.wake !== undefined || patch.updateCheck !== undefined || removing) {
+      const localPatch = { wake: patch.wake, updateCheck: patch.updateCheck, ...Object.fromEntries(shared.filter((k) => patch[k] === null).map((k) => [k, null])) };
+      await mergeIntoFile(paths.local, 'project', localPatch, ['wake', 'updateCheck', ...shared]);
     }
   } else {
-    await mergeIntoFile(paths[scope], scope, patch, ['mode', 'wake', 'codeMap', 'stages', 'roles']);
+    await mergeIntoFile(paths[scope], scope, patch, ['mode', 'wake', 'codeMap', 'updateCheck', 'stages', 'roles']);
   }
   return readConfig(projectDirArg);
 }

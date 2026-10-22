@@ -508,11 +508,12 @@ test('a card with criteria or blockers cannot be started as a thread', async (t)
   // a blocker that is gone no longer counts
   await core.removeCard(e.projectDir, blocker.id);
   assert.equal((await bd.api('POST', `/api/cards/${blocked.id}/start`, opts)).status, 200);
-  // no tool starts a card as a thread: thread_start makes a new card and takes no card id
+  // no tool starts a card as a thread: thread_start makes a new card; its `card` names the task the new thread does the work of, and that task stays one
   const mc = mcp(t, e);
   await mc.init();
   const props = (await mc.request('tools/list', {})).result.tools.find((x) => x.name === 'thread_start').inputSchema.properties;
-  assert.equal('card' in props || 'id' in props, false);
+  assert.equal('id' in props, false);
+  assert.match(props.card.description, /the card stays a task/);
   assert.equal(cardOf(e, plain.id).kind, 'task');
 });
 

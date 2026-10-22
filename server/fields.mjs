@@ -218,7 +218,19 @@ export function workedBy(card) {
     else if (isObject(th.lane) && typeof th.lane.name === 'string') add(derived('lane:', th.lane.name), card.createdAt);
   }
   if (Array.isArray(card.history)) for (const h of card.history) if (isObject(h)) add(h.worker, h.at);
-  if (Array.isArray(card.runs)) for (const r of card.runs) if (isObject(r) && typeof r.agentType === 'string' && r.agentType) add(derived('agent:', r.agentType), r.startedAt);
+  // A run of a thread that does the card's work (runs.openLinkedRun) is named as the thread card is: its agent, else its lane, else the thread
+  // itself (its agentType is the agent, else the lane, else 'thread'). A sub-agent run is named after its agent type.
+  if (Array.isArray(card.runs)) {
+    for (const r of card.runs) {
+      if (!isObject(r)) continue;
+      const type = typeof r.agentType === 'string' ? r.agentType : '';
+      if (typeof r.thread === 'string' && CARD_ID_RE.test(r.thread)) {
+        if (typeof r.lane === 'string' && r.lane) add(derived('lane:', r.lane), r.startedAt);
+        else if (type && type !== 'thread') add(derived('agent:', type), r.startedAt);
+        else add(`thread:${r.thread}`, r.startedAt);
+      } else if (type) add(derived('agent:', type), r.startedAt);
+    }
+  }
   // by time; an entry without a usable time goes after the dated ones, and ties keep the order above
   const key = (x) => (Number.isFinite(x.at) ? x.at : Infinity);
   const out = [];

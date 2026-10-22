@@ -8,7 +8,8 @@
 // an aborted result and exits 143), garbage (result.json is not JSON), emptyreport (completed, finalMessage "").
 // failedevents: failed with no error and an empty stderrTail; the reason is only in events.jsonl, as a real codex run with a bad model
 // writes it (opencode: an error event; claude: a result event with is_error).
-// FAKE_RELAY_EVENTS_FILE: with failedevents, a file to use as events.jsonl instead.
+// live: streams fixture events every FAKE_RELAY_STEP_MS (default 50); opencode writes split UTF-8 chunks.
+// FAKE_RELAY_EVENTS_FILE: with failedevents, a file to use as events.jsonl instead; in live mode (codex, opencode), a file whose lines are streamed instead of the fixture.
 // FAKE_RELAY_STDERR_TAIL: the failed run's stderrTail lines, separated by "|" (default "boom").
 // FAKE_RELAY_TOUCHED: touchedFiles as git porcelain lines separated by "|" (default none); FAKE_RELAY_VIOLATION: true or null,
 // readOnlyViolation of a read-only agy or claude run (default false).
@@ -16,6 +17,7 @@
 // FAKE_RELAY_EVENTS=usage: only the usage in result.json.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const RESUME = { codex: ['--session', 'threadId'], agy: ['--conversation', 'conversationId'], opencode: ['--session', 'sessionId'], claude: ['--session', 'sessionId'] };
 
@@ -92,10 +94,10 @@ export function run(implementer) {
     }
     const extra = { finalMessage: mode === 'emptyreport' ? '' : message };
     if (implementer === 'agy' && !extra.finalMessage) extra.stderrTail = [];
-    if (implementer === 'claude' && process.env.FAKE_RELAY_EVENTS) {
+    if (implementer === 'claude' && (process.env.FAKE_RELAY_EVENTS || mode === 'live')) {
       extra.usage = usage; extra.numTurns = 2; extra.totalCostUsd = 0.01; extra.resultSubtype = 'success';
     }
-    if (implementer === 'claude' && process.env.FAKE_RELAY_EVENTS === '1') {
+    if (implementer === 'claude' && process.env.FAKE_RELAY_EVENTS === '1' && mode !== 'live') {
       const sid = id || 'none';
       const lines = [
         { type: 'system', subtype: 'init', session_id: sid },
@@ -112,7 +114,34 @@ export function run(implementer) {
     process.stdout.write(`relay: completed (exit 0)  ·  ${implementer}\n`);
     process.exit(0);
   };
-  if (mode === 'slow') {
+  if (mode === 'live') {
+    const stepMs = Number(process.env.FAKE_RELAY_STEP_MS) || 50;
+    const lines = implementer === 'agy' ? [] : implementer === 'claude' ? [
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Looking at the file.' }, { type: 'tool_use', id: 'tu1', name: 'Read', input: { file_path: 'a.txt' } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'file text' }] } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu2', name: 'Grep', input: { pattern: 'x' } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu2', content: 'a.txt:1' }] } },
+      { type: 'result', result: message, usage },
+    ].map((v) => JSON.stringify(v)) : fs.readFileSync(process.env.FAKE_RELAY_EVENTS_FILE || fileURLToPath(new URL(`../fixtures/lane-events/${implementer}.jsonl`, import.meta.url)), 'utf8').trimEnd().split('\n');
+    fs.mkdirSync(outDir, { recursive: true });
+    const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    (async () => {
+      for (let i = 0; i < lines.length; i++) {
+        await pause(stepMs);
+        // Final unterminated line also exercises the runner's finish drain.
+        const bytes = Buffer.from(lines[i] + (i < lines.length - 1 ? '\n' : ''));
+        if (implementer === 'opencode') {
+          const unicode = bytes.indexOf(Buffer.from('é'));
+          const split = unicode >= 0 ? unicode + 1 : Math.floor(bytes.length / 2);
+          fs.appendFileSync(p('events.jsonl'), bytes.subarray(0, split));
+          await pause(stepMs);
+          fs.appendFileSync(p('events.jsonl'), bytes.subarray(split));
+        } else fs.appendFileSync(p('events.jsonl'), bytes);
+      }
+      await pause(stepMs);
+      done();
+    })().catch((e) => { process.stderr.write(String(e)); process.exit(1); });
+  } else if (mode === 'slow') {
     process.on('SIGTERM', () => { write('aborted', 143, { signal: 'SIGTERM', stderrTail: [], error: `the relay was killed by SIGTERM; ${implementer} was terminated with it — inspect the working tree before re-dispatching` }); process.exit(143); });
     setTimeout(done, Number(process.env.FAKE_RELAY_DELAY_MS) || 60000);
   } else done();

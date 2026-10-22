@@ -37,10 +37,13 @@
   // ---------- start ----------
 
   (async function start() {
+    if (pendingCode) await exchangeCode();   // the link /thread:board opened came with a one-time code instead of the token
     if (!token) { haltForAuth(); return; }
     await loadCaps();   // before anything is drawn, so no control that the tunnel refuses is ever shown
+    if (!remote) refreshPhoneLink();   // not awaited: the item is shown when the answer comes
     try { applyProjects(await loadProjects()); if (!selKey) setOnline(true); }   // a project's own poll shows the connection
     catch (e) { if (e.auth) return; setOnline(false); }
     projectsAt = Date.now();
+    refreshUpdate();   // not awaited: the notes are drawn when the answer comes
     if (!halted) loopTimer = setTimeout(tick, POLL_MS);
   })();

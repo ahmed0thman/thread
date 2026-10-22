@@ -17,6 +17,8 @@ export const SERVER_DIR = path.join(ROOT, 'server');
 export const CORE_PATH = path.join(SERVER_DIR, 'core.mjs');
 export const MCP_PATH = path.join(SERVER_DIR, 'mcp.mjs');
 export const HOOK_PATH = path.join(ROOT, 'scripts', 'hook.mjs');
+export const RECORD_OPENER = path.join(TEST_DIR, 'fixtures', 'record-opener.mjs');
+export const FAIL_OPENER = path.join(TEST_DIR, 'fixtures', 'fail-opener.mjs');
 
 export const PARENT_SESSION = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 export const THREAD_SESSION = '11111111-2222-4333-8444-555555555555';
@@ -32,7 +34,7 @@ export const REPLY_WITH_MAP = [
 
 /** Remove environment that would change behaviour when the suite runs inside a Claude session. */
 export function cleanAmbientEnv() {
-  for (const k of ['THREAD_DEPTH', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_PID', 'CLAUDE_PROJECT_DIR', 'CLAUDE_PLUGIN_DATA', 'THREAD_PROJECT_DIR', 'THREAD_NO_HTTP', 'THREAD_TIMEOUT_MS', 'FAKE_CLAUDE_MODE', 'FAKE_CLAUDE_DELAY_MS', 'THREAD_DELEGATE_DIR', 'FAKE_DELEGATE_MODE', 'FAKE_DELEGATE_LOG', 'FAKE_DELEGATE_SANDBOX', 'FAKE_RELAY_MODE', 'FAKE_RELAY_LOG', 'FAKE_RELAY_VIOLATION', 'FAKE_RELAY_TOUCHED', 'FAKE_RELAY_STDERR_TAIL', 'FAKE_RELAY_EVENTS', 'FAKE_RELAY_EVENTS_FILE']) {
+  for (const k of ['THREAD_DEPTH', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_PID', 'CLAUDE_PROJECT_DIR', 'CLAUDE_PLUGIN_DATA', 'THREAD_PROJECT_DIR', 'THREAD_NO_HTTP', 'THREAD_UPDATE_URL', 'THREAD_TIMEOUT_MS', 'FAKE_CLAUDE_MODE', 'FAKE_CLAUDE_DELAY_MS', 'THREAD_DELEGATE_DIR', 'FAKE_DELEGATE_MODE', 'FAKE_DELEGATE_LOG', 'FAKE_DELEGATE_SANDBOX', 'FAKE_RELAY_MODE', 'FAKE_RELAY_LOG', 'FAKE_RELAY_VIOLATION', 'FAKE_RELAY_TOUCHED', 'FAKE_RELAY_STDERR_TAIL', 'FAKE_RELAY_EVENTS', 'FAKE_RELAY_EVENTS_FILE']) {
     delete process.env[k];
   }
 }
@@ -111,6 +113,7 @@ export function setupThreadEnv(t, extra = {}) {
   const wanted = {
     THREAD_DATA_DIR: env.dataDir,
     THREAD_CLAUDE_BIN: FAKE_CLAUDE,
+    THREAD_NO_OPEN: '1',
     FAKE_CLAUDE_LOG: env.logFile,
     FAKE_CLAUDE_PIDFILE: env.pidFile,
     ...extra,
@@ -232,7 +235,7 @@ export class McpClient {
     this.nextId = 1;
     this.pending = new Map();
     this.child = spawn(process.execPath, [MCP_PATH], {
-      env: { ...process.env, THREAD_NO_HTTP: '1', THREAD_PROJECT_DIR: e.projectDir, ...extraEnv },
+      env: { ...process.env, THREAD_NO_HTTP: '1', THREAD_NO_OPEN: '1', THREAD_PROJECT_DIR: e.projectDir, ...extraEnv },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.child.stdin.on('error', () => {});

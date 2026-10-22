@@ -94,18 +94,30 @@
     const top = max <= 4 ? 4 : Math.ceil(max / 4) * 4;
     return { top, ticks: [0, 1, 2, 3, 4].map((i) => i * top / 4) };
   }
-  // The name a thread's tokens are listed under in Work by worker
-  function threadWorker(th) {
+  // The name a thread's tokens are listed under in Work by worker: its agent, else its lane, else 'thread'. A thread that does a card's work
+  // (it has forCard) with neither is named after itself, as the run it has on that card is (workedBy names that run 'thread:<id>').
+  function threadWorker(th, id) {
     return typeof th.agent === 'string' && th.agent ? derivedWorker('agent:', th.agent)
-      : th.lane && typeof th.lane.name === 'string' && th.lane.name ? derivedWorker('lane:', th.lane.name) : 'thread';
+      : th.lane && typeof th.lane.name === 'string' && th.lane.name ? derivedWorker('lane:', th.lane.name)
+        : typeof th.forCard === 'string' && th.forCard && typeof id === 'string' && id ? 'thread:' + id : 'thread';
+  }
+  // The worker a run counts for, as workedBy names it. A run of a thread that does the card's work is named as that thread is: its agent
+  // (the run's agentType), else its lane, else the thread itself; any other run its agent type.
+  function runWorker(r) {
+    const type = typeof r.agentType === 'string' ? r.agentType : '';
+    if (typeof r.thread === 'string' && r.thread) {
+      if (typeof r.lane === 'string' && r.lane) return derivedWorker('lane:', r.lane);
+      return type && type !== 'thread' ? derivedWorker('agent:', type) : 'thread:' + r.thread;
+    }
+    return derivedWorker('agent:', type || 'unknown');
   }
   // Every worker a card has, named as Work by worker names them: those it records in workedBy, its sub-agent runs and its thread.
   function cardWorkers(c) {
     const out = [];
     const add = (w) => { if (typeof w === 'string' && w && !out.includes(w)) out.push(w); };
     (Array.isArray(c.workedBy) ? c.workedBy : []).forEach(add);
-    (Array.isArray(c.runs) ? c.runs : []).forEach((r) => { if (r && typeof r === 'object') add(derivedWorker('agent:', typeof r.agentType === 'string' && r.agentType ? r.agentType : 'unknown')); });
-    if (c.kind === 'thread' && c.thread) add(threadWorker(c.thread));
+    (Array.isArray(c.runs) ? c.runs : []).forEach((r) => { if (r && typeof r === 'object') add(runWorker(r)); });
+    if (c.kind === 'thread' && c.thread) add(threadWorker(c.thread, c.id));
     return out;
   }
   // The Type filter's own idea of a type: "bug" is the type field whatever the kind (as in the List); otherwise the kind, a task by default.
@@ -201,9 +213,10 @@
     doneCards.forEach((c) => (Array.isArray(c.workedBy) ? c.workedBy : []).forEach((w) => { rowOf(w).done += 1; }));
     work.forEach((c) => {
       (Array.isArray(c.runs) ? c.runs : []).forEach((r) => {
-        if (r && typeof r === 'object') addTokens(derivedWorker('agent:', typeof r.agentType === 'string' && r.agentType ? r.agentType : 'unknown'), turnTokens(r));
+        // a run of a thread that does the card's work is not counted here: the thread card's own turns already are
+        if (r && typeof r === 'object' && !(typeof r.thread === 'string' && r.thread)) addTokens(runWorker(r), turnTokens(r));
       });
-      if (c.kind === 'thread' && c.thread) addTokens(threadWorker(c.thread), threadTokens(Array.isArray(c.thread.turns) ? c.thread.turns : []));
+      if (c.kind === 'thread' && c.thread) addTokens(threadWorker(c.thread, c.id), threadTokens(Array.isArray(c.thread.turns) ? c.thread.turns : []));
     });
     const rows = [...byWorker.values()].map((r) => ({ name: r.name, done: r.done, tokens: r.in + r.out }))
       .filter((r) => (r.done > 0 || r.tokens > 0) && (!f.worker || r.name === f.worker))   // a worker filter keeps that worker's row

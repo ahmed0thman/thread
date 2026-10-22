@@ -2,7 +2,11 @@
 // stdout carries JSON-RPC only; every log line goes to stderr.
 import * as core from './core.mjs';
 import { accessText, listLanes, relayPath, requireLane } from './lanes.mjs';
-import { existsSync } from 'node:fs';
+import { checkAllowed, runUpdateCheck } from './update.mjs';
+import { removeTunnelLink, tunnelLinkFile } from './tunnel.mjs';
+import { chmodSync, existsSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 const SERVER_INFO = { name: 'thread', version: core.VERSION };
@@ -84,6 +88,7 @@ const TOOLS = [
         mode: { type: 'string', enum: MODES, description: '"read" (default) forbids file edits. "write" lets the thread edit files; use it only when the user asks for that.' },
         extra_dirs: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Absolute paths of folders outside the project that the task needs to read, for example another repository the user named. Only list folders the task actually requires.' },
         parent: { type: 'string', description: 'Optional: the id of a milestone card this thread belongs to.' },
+        card: { type: 'string', description: 'Optional: the id of the task or idea this thread does the work of. The card then shows each turn as a run, with its live steps and report, like a sub-agent run; the card stays a task, so its criteria and done gate are unchanged. Refused for a milestone, a thread, an unknown id, and in chat-only mode.' },
         lane: { type: 'string', description: 'Optional: the name of a delegation lane (see lane_list) to run the thread on: another coding CLI (codex, agy, opencode or claude) with its own model and effort. Use it only when the user or the project\'s instructions say which lane suits the work. It cannot be combined with agent, model, effort or context "full", and extra_dirs are not supported. The lane\'s CLI sends the brief and the files it reads to its own provider. Mode "write" needs a lane that can edit files.' },
       },
       required: ['title', 'task'],
@@ -238,10 +243,11 @@ const TOOLS = [
   },
   {
     name: 'board_open',
-    description: 'Return the URL of the local board web page for this project. Starts the board again if it was stopped. With tunnel: "start" it also opens (or shows the one already open) a remote link, through a Cloudflare quick tunnel, that works from another device for 12 hours; "stop" closes it. The remote link puts the board on the internet: whoever holds it acts as the user, can read every project and thread report and can create cards and answer waiting items. So opening it is never done on the first call: the tool answers "CONFIRMATION REQUIRED" with a confirm_code and opens nothing. Use tunnel "start" only when the user asked for it, show them what the link allows, and call again with the confirm_code only after they agree. Showing a link that is already open needs no code, and "stop" needs none. A side thread cannot use tunnel. Give the user the link and the warning exactly as returned.',
+    description: 'Open the local board web page for this project in the user\'s browser and return its address, which has no access token in it. Starts the board again if it was stopped. The browser is opened with a one-time code that the page trades for the access token (the token is never on a command line); the link with the token is saved to a file only the user needs to read (the answer names the file). You never get the token. With open: false nothing is opened and you only get the address. With tunnel: "start" it also opens (or shows the one already open) a remote link, through a Cloudflare quick tunnel, that works from another device for 12 hours; "stop" closes it. The remote link itself is not in the answer either: the user finds it on the board (Phone link) and in a file (the answer names it). The remote link puts the board on the internet: whoever holds it acts as the user, can read every project and thread report and can create cards and answer waiting items. So opening it is never done on the first call: the tool answers "CONFIRMATION REQUIRED" with a confirm_code and opens nothing. Use tunnel "start" only when the user asked for it, show them what the link allows, and call again with the confirm_code only after they agree. Showing a link that is already open needs no code, and "stop" needs none. A side thread cannot use tunnel. Give the user the warning and the time as returned, and tell them where the link is.',
     inputSchema: {
       type: 'object',
       properties: {
+        open: { type: 'boolean', description: 'false: do not open the browser, only return the address (for when the user wants the address, not the page). The default is true.' },
         tunnel: { type: 'string', enum: ['start', 'stop'], description: '"start": open the remote link (needs the user\'s agreement: see confirm_code), or show the current one (it does not extend it). "stop": close it. Leave out for the local link only.' },
         confirm_code: CONFIRM_PROP,
       },
@@ -261,13 +267,15 @@ const TOOLS = [
   {
     name: 'config_set',
     description: 'Change the plugin settings in the global config (every project) or this project\'s config. Use it only when the user asks to set up or change the plugin (the /thread:setup skill does). Cards are never changed. Returns the new effective settings. ' +
-      'Turning waking on (wake: true) makes the board able to start turns in an idle session, so it is never saved on the first call: the tool answers "CONFIRMATION REQUIRED" with a confirm_code and saves nothing. Set wake: true only when the user asked for it, show the user what it does, and call again with the same arguments and the confirm_code only after the user agrees. wake: false and null need no confirmation.',
+      'Turning waking on (wake: true) makes the board able to start turns in an idle session, so it is never saved on the first call: the tool answers "CONFIRMATION REQUIRED" with a confirm_code and saves nothing. Set wake: true only when the user asked for it, show the user what it does, and call again with the same arguments and the confirm_code only after the user agrees. wake: false and null need no confirmation. ' +
+      'The same holds for updateCheck: true, which lets this machine ask GitHub once a day for the latest thread release (the only network call thread makes besides the optional tunnel). Set it only when the user asked for it.',
     inputSchema: {
       type: 'object',
       properties: {
         scope: { type: 'string', enum: CONFIG_SCOPES, description: '"global" applies to every project that has no setting of its own; "project" only to this one.' },
         mode: { type: ['string', 'null'], enum: [...CONFIG_MODES, null], description: '"tasks" (threads and the task board) or "chat" (threads only). null removes it from this scope.' },
         wake: { type: ['boolean', 'null'], description: 'true lets an answer, a "Report to main session" click or a "Notify Claude" click on the board wake an idle session within a few seconds, instead of waiting for the next message; false is the default. null removes it from this scope. true needs the user\'s agreement: see confirm_code.' },
+        updateCheck: { type: ['boolean', 'null'], description: 'true lets the plugin ask GitHub, at most once every 24 hours, which thread release is the latest (a plain request that sends nothing about the user or the project), so the session note and the board can say when a newer version is out; false is the default. It is this machine\'s own choice: for a project kept in the repo it is stored on this machine, never in the repo. null removes it from this scope. true needs the user\'s agreement: see confirm_code.' },
         codeMap: { type: ['boolean', 'null'], description: 'true tells every new thread in the project to use its Graphify code map (graphify-out/GRAPH_REPORT.md) when one exists, to find where to look; false is the default. The map can be out of date, so the thread is also told to confirm in the code. thread only checks that the file exists: the user installs Graphify and builds the map. null removes it from this scope. No confirmation needed.' },
         confirm_code: CONFIRM_PROP,
         stages: {
@@ -440,7 +448,7 @@ function fieldMarks(c, cards, cfg, aliases) {
 
 function threadLine(c, state, caller) {
   const t = c.thread;
-  return `${c.id} "${core.clip(c.title, 80)}"${milestoneTag(state.cards, c)} — ${t.runState}, mode ${t.mode}, ${core.threadContext(t)} context, ${runsAs(t)}, ${t.turns.length} turn(s)${usageText(t)}, reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, ${t.lane ? `${t.lane.implementer} session ${t.lane.session || 'not known (no follow-up possible)'}` : `session ${t.sessionId || 'not known yet'}`}${t.reportRequestedAt ? ', report requested' : ''}`;
+  return `${c.id} "${core.clip(c.title, 80)}"${milestoneTag(state.cards, c)} — ${t.runState}, mode ${t.mode}, ${core.threadContext(t)} context, ${runsAs(t)}${t.forCard ? `, for ${t.forCard}` : ''}, ${t.turns.length} turn(s)${usageText(t)}, reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, ${t.lane ? `${t.lane.implementer} session ${t.lane.session || 'not known (no follow-up possible)'}` : `session ${t.sessionId || 'not known yet'}`}${t.reportRequestedAt ? ', report requested' : ''}`;
 }
 
 // The answer to a report or end that came from a session other than the one
@@ -571,6 +579,7 @@ function configText(cfg, info) {
     `Mode: ${chat ? 'chat (threads only; the task board is off)' : 'tasks (threads and the task board)'} — from ${from(cfg.source.mode)}`,
     `Code map (Graphify) note for new threads: ${cfg.codeMap ? 'on' : 'off (default)'} — from ${from(cfg.source.codeMap)}`,
     `Wake the session from the board: ${cfg.wake ? 'on (an answer or a click on the board wakes an idle session)' : 'off (they reach the session with the next message)'} — from ${from(cfg.source.wake)}`,
+    `Check GitHub once a day for a new thread release: ${cfg.updateCheck ? 'on' : 'off (default)'} — from ${from(cfg.source.updateCheck)}`,
     ...board,
     `Global config file: ${file('global')}`,
     `Project config file: ${file('project')}`,
@@ -671,11 +680,15 @@ async function tunnelText(action) {
   }
   const body = r.body || {};
   if (r.status !== 200) return `The tunnel did not start: ${body.error || 'the board answered with status ' + r.status}`;
-  if (action === 'stop') return body.stopped ? 'The tunnel is stopped. The remote link no longer works.' : 'No tunnel was open.';
-  const link = `${body.url}#t=${body.token}/${core.storeKey(core.projectDir())}`;
+  if (action === 'stop') { removeTunnelLink(); return body.stopped ? 'The tunnel is stopped. The remote link no longer works.' : 'No tunnel was open.'; }
+  // The link carries the tunnel's token, which can answer waiting items: it goes to a file for the user and to the board's page, never into this answer.
+  let file;
+  try { file = saveTunnelLink(`${body.url}#t=${body.token}/${core.storeKey(core.projectDir())}`); } catch (e) {
+    log('tunnel link could not be saved:', e instanceof Error ? e.message : '');
+    file = null;
+  }
   return [
-    `Remote link: ${link}`,
-    `It works until ${untilText(body.expiresAt)}.${body.reused ? ' This is the tunnel that was already open; asking again does not extend it.' : ''}`,
+    `The remote link is open until ${untilText(body.expiresAt)}.${body.reused ? ' This is the tunnel that was already open; asking again does not extend it.' : ''} It is on the board (Phone link)${file ? ` and in ${file}` : ''}.`,
     TUNNEL_EXPOSES,
     'It stops working when it expires or when /thread:board --tunnel stop closes it.',
   ].join('\n');
@@ -730,26 +743,32 @@ async function tunnelStartGuard(code) {
 const WAKE_CONFIRM_TTL_MS = 10 * 60 * 1000;
 let wakeConfirm = null;
 
-function wakeConfirmText(scope, code) {
+// `what`: the settings the call turns on, 'wake' and/or 'updateCheck'; one code covers exactly that set.
+function wakeConfirmText(scope, code, what) {
+  const applies = scope === 'global' ? 'every project that has no setting of its own' : 'this project';
+  const paragraphs = [];
+  if (what.includes('wake')) paragraphs.push(`Waking lets the thread board start a turn in an idle session by itself: when the user answers a waiting item that session asked, clicks "Report to main session" for one of its threads, or clicks "Notify Claude" on a card for it, the session wakes and acts on it as if the user had typed it. That costs tokens while the user is away, it runs without permission prompts in a session that skips them, and anyone who has the board link could start a turn that way. It applies to ${applies}.`);
+  if (what.includes('updateCheck')) paragraphs.push(`The update check makes this computer send a request to GitHub (api.github.com), at most once every 24 hours, to ask which thread release is the latest. It sends no data about the user or the project, only the standard request headers and a User-Agent that names the plugin and its version; GitHub sees the computer's address. It is the only network call thread makes besides the optional tunnel. When a newer version is out, the session note and the board say so. It applies to ${applies}.`);
+  const names = what.map((w) => (w === 'wake' ? 'waking' : 'the update check')).join(' and ');
   return [
     'CONFIRMATION REQUIRED. Nothing was saved.',
     '',
-    `Waking lets the thread board start a turn in an idle session by itself: when the user answers a waiting item that session asked, clicks "Report to main session" for one of its threads, or clicks "Notify Claude" on a card for it, the session wakes and acts on it as if the user had typed it. That costs tokens while the user is away, it runs without permission prompts in a session that skips them, and anyone who has the board link could start a turn that way. It applies to ${scope === 'global' ? 'every project that has no setting of its own' : 'this project'}.`,
-    '',
-    'Do not decide for the user. Show them the paragraph above in your own words and ask whether to turn waking on. Do this only when they asked for it.',
-    `Only if they agree, call config_set again with the same arguments and confirm_code "${code}". If they decline, do not call it again with wake: true.`,
+    ...paragraphs.flatMap((p) => [p, '']),
+    `Do not decide for the user. Show them ${paragraphs.length > 1 ? 'the paragraphs' : 'the paragraph'} above in your own words and ask whether to turn ${names} on. Do this only when they asked for it.`,
+    `Only if they agree, call config_set again with the same arguments and confirm_code "${code}". If they decline, do not call it again with ${what.map((w) => `${w}: true`).join(' or ')}.`,
   ].join('\n');
 }
 
 // null when this call may go ahead; otherwise the answer to give instead.
-function wakeGuard(scope, code) {
+function wakeGuard(scope, code, what = ['wake']) {
   const given = typeof code === 'string' ? code.trim().toLowerCase() : '';
-  if (wakeConfirm && given && wakeConfirm.code === given && wakeConfirm.scope === scope && wakeConfirm.expiresAt > Date.now()) {
+  const key = what.join();
+  if (wakeConfirm && given && wakeConfirm.code === given && wakeConfirm.scope === scope && wakeConfirm.what === key && wakeConfirm.expiresAt > Date.now()) {
     wakeConfirm = null;
     return null;
   }
-  wakeConfirm = { code: randomBytes(4).toString('hex'), scope, expiresAt: Date.now() + WAKE_CONFIRM_TTL_MS };
-  return wakeConfirmText(scope, wakeConfirm.code);
+  wakeConfirm = { code: randomBytes(4).toString('hex'), scope, what: key, expiresAt: Date.now() + WAKE_CONFIRM_TTL_MS };
+  return wakeConfirmText(scope, wakeConfirm.code, what);
 }
 
 const HANDLERS = {
@@ -769,10 +788,11 @@ const HANDLERS = {
       effort: optEnum(args, 'effort', EFFORTS),
       parent: optStr(args, 'parent'),
       lane: optStr(args, 'lane'),
+      card: optStr(args, 'card'),
     });
     const t = card.thread;
     const extra = t.dirs.length ? `, extra folders: ${t.dirs.join(', ')}` : '';
-    return `Thread ${card.id} "${core.clip(card.title, 80)}" started in the background (mode ${mode}, ${t.lane ? 'brief' : t.context} context, ${runsAs(t)}${extra}). Results come back only through thread_report; call it with id ${card.id} when the user asks or the result is needed.`;
+    return `Thread ${card.id} "${core.clip(card.title, 80)}" started in the background (mode ${mode}, ${t.lane ? 'brief' : t.context} context, ${runsAs(t)}${t.forCard ? `, for ${t.forCard}` : ''}${extra}). Results come back only through thread_report; call it with id ${card.id} when the user asks or the result is needed.`;
   },
 
   async thread_continue(args) {
@@ -1048,8 +1068,9 @@ const HANDLERS = {
     if (!scope) throw new ToolError('argument "scope" is required (global or project)');
     if (process.env.THREAD_DEPTH) throw new ToolError('a side thread cannot change the plugin settings');
     const mode = args.mode === null ? null : optEnum(args, 'mode', CONFIG_MODES);
-    const { stages, roles, reset, wake, repo, codeMap } = args;
+    const { stages, roles, reset, wake, repo, codeMap, updateCheck } = args;
     if (wake !== undefined && wake !== null && typeof wake !== 'boolean') throw new ToolError('argument "wake" must be true, false or null');
+    if (updateCheck !== undefined && updateCheck !== null && typeof updateCheck !== 'boolean') throw new ToolError('argument "updateCheck" must be true, false or null');
     if (codeMap !== undefined && codeMap !== null && typeof codeMap !== 'boolean') throw new ToolError('argument "codeMap" must be true, false or null');
     if (repo !== undefined && typeof repo !== 'boolean') throw new ToolError('argument "repo" must be true or false');
     if (repo === false) throw new ToolError('keeping the board in the repo is turned off by deleting the .claude/thread/ folder by hand (the cards in it go with it: commit them or copy them first)');
@@ -1063,21 +1084,22 @@ const HANDLERS = {
       await core.startRepo(pd);
     }
     if (reset === true) {
-      if (mode !== undefined || wake !== undefined || codeMap !== undefined || stages !== undefined || roles !== undefined) throw new ToolError('reset deletes the config file; give no other setting with it');
+      if (mode !== undefined || wake !== undefined || codeMap !== undefined || updateCheck !== undefined || stages !== undefined || roles !== undefined) throw new ToolError('reset deletes the config file; give no other setting with it');
       cfg = await core.resetConfig(pd, scope);
     } else {
-      if (mode === undefined && wake === undefined && codeMap === undefined && stages === undefined && roles === undefined && repo !== true) throw new ToolError('nothing to change: give mode, wake, codeMap, stages, roles, repo or reset');
-      if (wake === true) {
-        const ask = wakeGuard(scope, optStr(args, 'confirm_code'));
+      if (mode === undefined && wake === undefined && codeMap === undefined && updateCheck === undefined && stages === undefined && roles === undefined && repo !== true) throw new ToolError('nothing to change: give mode, wake, codeMap, updateCheck, stages, roles, repo or reset');
+      const risky = [...(wake === true ? ['wake'] : []), ...(updateCheck === true ? ['updateCheck'] : [])];
+      if (risky.length) {
+        const ask = wakeGuard(scope, optStr(args, 'confirm_code'), risky);
         if (ask) return ask;
       }
-      cfg = await core.saveConfig(pd, scope, { mode, wake, codeMap, stages, roles });
+      cfg = await core.saveConfig(pd, scope, { mode, wake, codeMap, updateCheck, stages, roles });
     }
     const gone = core.readState(pd).cards.filter((c) => c.kind !== 'thread' && !cfg.taskStages.some((st) => st.id === c.status)).length;
     const cards = gone
       ? `In this project, ${gone} card(s) have a status that is no longer a stage; they show in the start stage (${cfg.taskRoles.start}). Threads follow their state.`
       : 'In this project, every card is in a current stage. Threads follow their state.';
-    const saved = reset === true ? `The ${scope} config file was deleted.` : mode === undefined && wake === undefined && codeMap === undefined && stages === undefined && roles === undefined ? 'The board of this project is now kept in the repo.' : `Saved to the ${scope} config file.`;
+    const saved = reset === true ? `The ${scope} config file was deleted.` : mode === undefined && wake === undefined && codeMap === undefined && updateCheck === undefined && stages === undefined && roles === undefined ? 'The board of this project is now kept in the repo.' : `Saved to the ${scope} config file.`;
     return `${saved}\n\n${configText(cfg, core.repoInfo(pd))}\n\n${cards}`;
   },
 
@@ -1098,19 +1120,32 @@ const HANDLERS = {
       board = null;
     }
     if (!board) return 'The board is unavailable: the HTTP server failed to start (see the plugin log on stderr).';
-    let link;
-    try {
-      link = `${board.url}?t=${boardMod.boardToken()}#/${core.storeKey(core.projectDir())}`;
-    } catch (e) {
-      log('board token failed:', e);
-      return 'The board is unavailable: its access token could not be read (see the plugin log on stderr).';
-    }
-    const local = `Board: ${link}\nThis link opens this project's tab; the same board shows every project.`;
-    if (!tunnel) return local;
+    const address = `${board.url}#/${core.storeKey(core.projectDir())}`;
+    const plain = `Board: ${address}\n${ADDRESS_NOTE}`;
     if (tunnel === 'start') {
       const ask = await tunnelStartGuard(optStr(args, 'confirm_code'));
-      if (ask) return `${local}\n\n${ask}`;
+      if (ask) return `${plain}\n\n${ask}`;
     }
+    let local = plain;
+    if (tunnel !== 'stop') {
+      let file;
+      try {
+        file = saveBoardLink(`${board.url}?t=${boardMod.boardToken()}#/${core.storeKey(core.projectDir())}`);
+      } catch (e) {
+        log('board link could not be made or saved:', e instanceof Error ? e.message : '');
+        return 'The board is unavailable: its access token could not be read or saved (see the plugin log on stderr).';
+      }
+      const byHand = `The link with the access token, to open by hand, is in ${file}.`;
+      if (args.open === false || process.env.THREAD_NO_OPEN === '1') local = `${plain}\n${byHand}`;
+      else {
+        // The browser gets a one-time code, not the token: a link's arguments are visible to every process of the user while the opener runs.
+        const code = await oneTimeCode();
+        if (!code) local = `Could not open a browser: this board cannot hand out a one-time code (it is served by an older plugin version). ${byHand} The address is ${address}\n${ADDRESS_NOTE}`;
+        else if (await openInBrowser(`${board.url}?c=${code}#/${core.storeKey(core.projectDir())}`)) local = `Opened the board in your browser: ${address}\n${byHand} ${ADDRESS_NOTE}`;
+        else local = `Could not open a browser. ${byHand} The address is ${address}\n${ADDRESS_NOTE}`;
+      }
+    }
+    if (!tunnel) return local;
     return `${local}\n\n${await tunnelText(tunnel)}`;
   },
 
@@ -1123,14 +1158,20 @@ const HANDLERS = {
     if (!board) return 'The board is not running. ' + again;
     if (board.owned) {
       const tunnelWas = board.tunnel ? await board.tunnel.stop() : false;
+      removeTunnelLink();
       boardMod.closeBoardServer(board.server);
+      boardMod.rotateBoardToken();   // a token a browser kept from this board opens nothing from now on
       return 'Board stopped.' + (tunnelWas ? ' The remote tunnel link is closed too.' : '') + ' ' + again;
     }
     const info = await boardMod.pingBoard(board.url);
     if (!info) return 'The board is not running. ' + again;
     const closed = await boardMod.tunnelRequest(board.url, 'stop');   // the owner ends its tunnel with its board anyway; this says whether there was one
     const tunnelNote = closed && closed.status === 200 && closed.body && closed.body.stopped ? ' The remote tunnel link is closed too.' : '';
-    if (await boardMod.stopBoard(board.url)) return 'Board stopped.' + tunnelNote + ' ' + again;
+    if (await boardMod.stopBoard(board.url)) {
+      removeTunnelLink();
+      boardMod.rotateBoardToken();
+      return 'Board stopped.' + tunnelNote + ' ' + again;
+    }
     boardMod.setBoardStopped(false);
     return `The board was not stopped: it is served by another session on plugin version ${info.version}, which is too old to be stopped from here. Reload that session's window, or stop its process.`;
   },
@@ -1155,28 +1196,90 @@ async function callTool(params) {
 }
 
 // The chat pointer to a waiting item: a Markdown link to its card's page on the running board, so the user can click it where they read
-// the chat; the plain id when this process serves no board or its token cannot be read. It never starts the board.
+// the chat; the plain id when this process serves no board. The address has no token (the page keeps it from when the board was opened
+// in the browser), so Claude never sees it. It never starts the board.
 function waitPointer(itemId, cardId) {
   try {
     if (!board || !boardMod || process.env.THREAD_NO_HTTP === '1') return itemId;
-    return `[${itemId}](${board.url}?t=${boardMod.boardToken()}#/${core.storeKey(core.projectDir())}/${encodeURIComponent(cardId)})`;
+    return `[${itemId}](${board.url}#/${core.storeKey(core.projectDir())}/${encodeURIComponent(cardId)})`;
   } catch {
     return itemId;
   }
+}
+
+const ADDRESS_NOTE = 'The address works in a browser that has opened the board before; /thread:board opens it again.';
+
+// The link with the access token goes to a file in the data directory (owner-only) for the user, never into an answer to Claude.
+// Returns the file's path.
+function saveBoardLink(link) {
+  const file = join(core.dataDir(), 'board-link.txt');
+  core.mkdirPrivateSync(core.dataDir());
+  writeFileSync(file, link + '\n', { mode: core.PRIVATE_FILE });
+  try { chmodSync(file, core.PRIVATE_FILE); } catch { /* best effort */ }
+  return file;
+}
+
+// The remote link (with the tunnel's token) goes to a file in the data directory (owner-only) for the user, and to the board's page; never into
+// an answer to Claude. Returns the file's path.
+function saveTunnelLink(link) {
+  const file = tunnelLinkFile();
+  core.mkdirPrivateSync(core.dataDir());
+  writeFileSync(file, link + '\n', { mode: core.PRIVATE_FILE });
+  try { chmodSync(file, core.PRIVATE_FILE); } catch { /* best effort */ }
+  return file;
+}
+
+// A one-time code for the link that opens the browser: made here when this process serves the board, else by the process that does (over its
+// local control route). null when there is none to be had (a board from an older plugin version cannot make one).
+async function oneTimeCode() {
+  try {
+    if (board.owned && board.codes) return board.codes.issue().code;
+    const r = await boardMod.openCodeRequest(board.url);
+    return r && r.status === 200 && r.body && typeof r.body.code === 'string' ? r.body.code : null;
+  } catch {
+    return null;
+  }
+}
+
+const OPENER_WAIT_MS = 3000;
+
+// Opens a link in the user's browser with the platform's opener (THREAD_OPENER replaces it, for tests). The link is an argument of the
+// process, never part of a shell string. Resolves true when the opener exits with 0, or is still running after a few seconds (a browser
+// that stays in the foreground is a success); false when it cannot be started, fails or exits with an error.
+function openInBrowser(link) {
+  const custom = process.env.THREAD_OPENER;
+  let cmd, argv;
+  if (custom) { cmd = custom; argv = [link]; }
+  else if (process.platform === 'darwin') { cmd = 'open'; argv = [link]; }
+  else if (process.platform === 'win32') { cmd = 'cmd'; argv = ['/c', 'start', '', link]; }
+  else { cmd = 'xdg-open'; argv = [link]; }
+  return new Promise((resolve) => {
+    let timer = null;
+    let settled = false;
+    const done = (ok) => { if (settled) return; settled = true; clearTimeout(timer); resolve(ok); };
+    try {
+      const child = spawn(cmd, argv, { detached: true, stdio: 'ignore' });
+      child.once('error', () => done(false));
+      child.once('exit', (code) => done(code === 0));
+      timer = setTimeout(() => { try { child.unref(); } catch { /* gone */ } done(true); }, OPENER_WAIT_MS);
+    } catch {
+      done(false);
+    }
+  });
 }
 
 // ---------- instructions ----------
 
 const BOARD_GUIDE = [
   'thread keeps this project\'s task board; the user reads it on a web page.',
-  '- Before you start work the user asked for, put it on the board: board_add, or board_update an existing card to the working stage. An instruction that arrives mid-task becomes a card; do not drop the current task for it.',
-  '- Never put a question, a choice, a review request or a to-do for the user only in the chat. Record it with wait_add on the card for that work (board_add one first if there is none) and write in the chat only the line wait_add returns ("Waiting on you: c37.w2", linked to its card); keep that link whenever you name the item. Keep working on whatever the answer does not block. If you can do nothing at all until the answer, you may also ask in the chat, but still call wait_add. Put any command the user should run in its own fenced code block, one command per block: the board shows it with a Copy button. Name another card by its id (c12), not by a board URL.',
+  '- Before you start work the user asked for, put it on the board: board_add, or board_update an existing card to the working stage. A mid-task instruction becomes a card; do not drop the current task.',
+  '- Never put a question, a choice, a review request or a to-do for the user only in the chat. Record it with wait_add on the card for that work (board_add one first if there is none) and write in the chat only the line wait_add returns ("Waiting on you: c37.w2", linked to its card); keep that link when you name it. Keep working on whatever the answer does not block. If nothing can go on without the answer, you may also ask in the chat, but still call wait_add. Put any command for the user in its own fenced code block (one per block): the board adds a Copy button. Name another card by its id (c12), not by a board URL.',
   '- Answers arrive as lines "The user answered c37.w2 on the board": act on every one. If the user answers in the chat instead, call wait_close with answered_in_chat.',
   '- Start every Agent call\'s description with the card id in brackets: "[c12] fix the rounding".',
   '- Move cards as the work moves, with the stage ids and roles from board_list. Never mark a card done that you did not verify; a card with acceptance criteria needs an approved review item first.',
-  '- Pass worker ("main" or "agent:<type>") on board_add, board_update and wait_add. Call board_list at natural stopping points to pick up cards the user added.',
+  '- Pass worker ("main" or "agent:<type>") on board_add, board_update and wait_add. Call board_list at stopping points to pick up cards the user added.',
 ];
-const THREAD_GUIDE = '- A side question the user starts with /thread:new runs as a background thread (thread_start). Do not wait for it or poll it; call thread_report when the user asks or when the board says a report was requested.';
+const THREAD_GUIDE = '- A side question the user starts with /thread:new runs as a background thread (thread_start). Do not wait for it or poll it; call thread_report when the user asks or when the board says a report was requested. When a thread or lane does the work of a card, pass card to thread_start.';
 const CHAT_GUIDE = 'thread starts side threads: background Claude sessions that work on a separate task. The user starts one with /thread:new. Do not wait for it or poll it; call thread_report when the user asks or when the board says a report was requested.';
 
 // The usage guide sent in the initialize answer, which Claude Code puts in the system prompt. A board project gets the full guide, a
@@ -1305,6 +1408,10 @@ try {
   if (!process.env.THREAD_DEPTH) {
     startBoard(core.projectDir());
     core.sweepOrphanLogs(core.projectDir()).catch((e) => log('log sweep failed:', e));   // logs an older version left behind
+    // The opt-in update check (setting updateCheck, off by default): in the background, never waited for, a failure only logged.
+    if (checkAllowed() && core.readConfig(core.projectDir()).updateCheck) {
+      runUpdateCheck(core.VERSION).then((r) => { if (r.error) log('update check failed:', r.error); });
+    }
   }
 } catch (e) {
   log('startup failed:', e);

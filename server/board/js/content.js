@@ -61,8 +61,8 @@
   // A web address in running text (a bare one, or the target of a [text](url) link) is an <a> that opens in a new tab. The trailing
   // punctuation of a bare one is not part of it, and a closing bracket only when it has no opening one in the address (a Wikipedia
   // address with (parentheses) keeps them). Whatever the address, an access token in it (?t=, &t= or a leading #t=) is dropped from
-  // everything shown or linked (redactToken). An address of this board (host 127.0.0.1 or localhost on any port, or the host of this
-  // page, which covers the tunnel) is never opened in a new tab, where the token would be missing: a card's page (#/<project>/<card>)
+  // everything shown or linked (redactToken). An address of this board (the host of this page, which covers the tunnel, or a loopback
+  // address that looks like a board link) is never opened in a new tab, where the token would be missing: a card's page (#/<project>/<card>)
   // is the same a.cref as a bare card id when that card is in the open project, any other one a link to its hash in this tab.
   const BARE_URL_RE = /(?<![\w])https?:\/\/[^\s<>"'`]+/gi;
   // The board's access tokens are hex; a token in the query or at the start of the fragment is cut out, the rest of the address kept valid.
@@ -90,7 +90,12 @@
     const clean = redactToken(raw);
     let u = null;
     try { u = new URL(clean); } catch (e) { /* kept as written */ }
-    const board = !!u && (/^(127\.0\.0\.1|localhost|\[::1\])$/.test(u.hostname) || (typeof location !== 'undefined' && !!location.host && u.host === location.host));
+    // A loopback address is this board's only when it is this page's host or looks like a board link (it carried a board token, or
+    // its root path has a board route in the fragment, #/...); any other one (a dev server's page on localhost:3000) is a web page.
+    const here = !!u && typeof location !== 'undefined' && !!location.host && u.host === location.host;
+    const loop = !!u && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(u.hostname);
+    const looksBoard = /[?&#]t=[0-9a-f]{32,128}/i.test(String(raw)) || (!!u && (!!u.username || !!u.password || (u.pathname === '/' && /^#\//.test(u.hash))));
+    const board = here || (loop && looksBoard);
     if (board) { u.username = ''; u.password = ''; }
     const shown = board ? u.href : clean;
     const put = (el, dflt) => { if (fill) fill(el); else el.textContent = dflt; };

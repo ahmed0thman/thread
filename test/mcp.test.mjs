@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { setupThreadEnv, waitFor, cleanAmbientEnv, freePort, McpClient, PARENT_SESSION } from './helpers.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { setupThreadEnv, waitFor, cleanAmbientEnv, freePort, McpClient, PARENT_SESSION, RECORD_OPENER, FAIL_OPENER } from './helpers.mjs';
 import * as core from '../server/core.mjs';
 
 cleanAmbientEnv();
@@ -171,23 +173,118 @@ test('board_open returns text when the HTTP server is disabled', async (t) => {
   assert.doesNotMatch(r.content[0].text, /\?t=/);
 });
 
-test('board_open returns a tokened localhost URL with this project\'s tab when the board server is enabled', async (t) => {
+test('board_open opens the browser with a one-time code, never the token; the code trades for the token once; the tokened link stays in an owner-only file', async (t) => {
   const e = setupThreadEnv(t);
   const port = await freePort();
-  const c = start(t, e, { THREAD_NO_HTTP: '', THREAD_BOARD_PORT: String(port) });
+  const log = path.join(e.base, 'opened.txt');
+  const c = start(t, e, { THREAD_NO_HTTP: '', THREAD_BOARD_PORT: String(port), THREAD_NO_OPEN: '', THREAD_OPENER: RECORD_OPENER, THREAD_OPENER_LOG: log });
   await c.init();
   const r = await c.call('board_open');
-  const m = text(r).match(/(http:\/\/(?:127\.0\.0\.1|localhost):\d+\/)\?t=([0-9a-f]{32,64})#\/([0-9a-f]{12})\b/);
-  assert.ok(m, text(r));
-  assert.equal(m[3], core.projectKey(e.projectDir));
+  const key = core.projectKey(e.projectDir);
+  const file = path.join(e.dataDir, 'board-link.txt');
+  assert.match(text(r), new RegExp(`^Opened the board in your browser: http://127\\.0\\.0\\.1:${port}/#/${key}\\n`));
+  assert.ok(text(r).includes(file), 'the answer names the file with the link, on success too');
+  assert.doesNotMatch(text(r), /\?[tc]=|[0-9a-f]{32}/, 'no token and no code in the answer');
+  assert.match(text(r), /works in a browser that has opened the board before; \/thread:board opens it again\./);
+  const opened = await waitFor(() => { try { return fs.readFileSync(log, 'utf8').trim(); } catch { return ''; } });
+  const m = opened.match(/^(http:\/\/127\.0\.0\.1:\d+\/)\?c=([0-9a-f]{32})#\/([0-9a-f]{12})$/);
+  assert.ok(m, `the opener got a link with a code: ${opened.replace(/[0-9a-f]{32}/g, '<hex>')}`);
   assert.equal(m[1], `http://127.0.0.1:${port}/`);
-  const denied = await fetch(m[1] + 'api/state');
-  assert.equal(denied.status, 401);
-  const res = await fetch(m[1] + 'api/state', { headers: { 'X-Thread-Token': m[2] } });
-  assert.equal(res.status, 200);
+  assert.equal(m[3], key);
+  const linked = fs.readFileSync(file, 'utf8').trim();
+  const t2 = linked.match(/^(http:\/\/127\.0\.0\.1:\d+\/)\?t=([0-9a-f]{32,64})#\/([0-9a-f]{12})$/);
+  assert.ok(t2, 'the file holds the tokened link, for opening by hand');
+  assert.equal(opened.includes(t2[2]), false, 'the opener\'s argument never holds the token');
+  assert.equal((await fetch(m[1] + 'api/state')).status, 401);
+  assert.equal((await fetch(m[1] + 'api/state', { headers: { 'X-Thread-Token': t2[2] } })).status, 200);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o077, 0, 'the file is owner-only');
+  assert.doesNotMatch(text(r), new RegExp(t2[2]), 'the answer never holds the token');
+
+  // the page's trade: once, from the board's own origin
+  const post = (code, origin = `http://127.0.0.1:${port}`) => fetch(m[1] + 'api/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(origin ? { Origin: origin } : {}) }, body: JSON.stringify({ code }) });
+  const got = await post(m[2]);
+  assert.equal(got.status, 200);
+  assert.equal((await got.json()).token, t2[2]);
+  assert.equal((await post(m[2])).status, 401, 'a used code is dead');
+  // and a second call to the tool makes a new code
+  await c.call('board_open');
+  const second = await waitFor(() => { const l = fs.readFileSync(log, 'utf8').trim().split('\n'); return l.length > 1 ? l[1] : ''; });
+  assert.notEqual(second.match(/\?c=([0-9a-f]{32})/)[1], m[2]);
 });
 
-test('wait_add hands back the chat pointer as a link to the card page on the running board, and the plain id when there is no board', async (t) => {
+test('a guest session\'s board_open gets its code from the session that serves the board', async (t) => {
+  const e = setupThreadEnv(t);
+  const port = await freePort();
+  const log = path.join(e.base, 'opened.txt');
+  const env = { THREAD_NO_HTTP: '', THREAD_BOARD_PORT: String(port), THREAD_NO_OPEN: '', THREAD_OPENER: RECORD_OPENER, THREAD_OPENER_LOG: log };
+  const owner = start(t, e, env);
+  await owner.init();
+  await owner.call('board_open', { open: false });
+  const guest = start(t, e, env);
+  await guest.init();
+  const r = await guest.call('board_open');
+  assert.match(text(r), /^Opened the board in your browser:/);
+  const opened = await waitFor(() => { try { return fs.readFileSync(log, 'utf8').trim(); } catch { return ''; } });
+  const m = opened.match(/\?c=([0-9a-f]{32})#/);
+  assert.ok(m, opened.replace(/[0-9a-f]{32}/g, '<hex>'));
+  const res = await fetch(`http://127.0.0.1:${port}/api/exchange`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` }, body: JSON.stringify({ code: m[1] }) });
+  assert.equal(res.status, 200, 'the owner knows the code the guest was given');
+});
+
+test('board_open with open: false, or THREAD_NO_OPEN=1, opens nothing and still keeps the link file; an opener that fails or cannot start is said', async (t) => {
+  const e = setupThreadEnv(t);
+  const port = await freePort();
+  const log = path.join(e.base, 'opened.txt');
+  const env = { THREAD_NO_HTTP: '', THREAD_BOARD_PORT: String(port), THREAD_NO_OPEN: '', THREAD_OPENER: RECORD_OPENER, THREAD_OPENER_LOG: log };
+  const c = start(t, e, env);
+  await c.init();
+  const key = core.projectKey(e.projectDir);
+  const r = await c.call('board_open', { open: false });
+  assert.match(text(r), new RegExp(`^Board: http://127\\.0\\.0\\.1:${port}/#/${key}\\n`));
+  assert.match(text(r), /board-link\.txt/);
+  assert.doesNotMatch(text(r), /\?[tc]=|[0-9a-f]{32}/);
+  assert.ok(fs.existsSync(path.join(e.dataDir, 'board-link.txt')));
+  const never = start(t, e, { ...env, THREAD_NO_OPEN: '1' });
+  await never.init();
+  assert.doesNotMatch(text(await never.call('board_open')), /Opened the board/);
+  await new Promise((r2) => setTimeout(r2, 200));
+  assert.equal(fs.existsSync(log), false, 'nothing was opened');
+  const broken = start(t, e, { ...env, THREAD_OPENER: path.join(e.base, 'no-such-opener') });
+  await broken.init();
+  const bad = text(await broken.call('board_open'));
+  assert.match(bad, /^Could not open a browser\./);
+  assert.match(bad, /board-link\.txt/);
+  assert.doesNotMatch(bad, /\?[tc]=|[0-9a-f]{32}/);
+  // an opener that starts and then exits with an error is no success
+  const failing = start(t, e, { ...env, THREAD_OPENER: FAIL_OPENER });
+  await failing.init();
+  const failed = text(await failing.call('board_open'));
+  assert.match(failed, /^Could not open a browser\./);
+  assert.doesNotMatch(failed, /Opened the board/);
+  assert.match(failed, /board-link\.txt/);
+});
+
+test('board_stop replaces the board token, so a token a browser kept opens nothing; the next board_open makes a fresh one', async (t) => {
+  const e = setupThreadEnv(t);
+  const port = await freePort();
+  const c = start(t, e, { THREAD_NO_HTTP: '', THREAD_BOARD_PORT: String(port), THREAD_NO_OPEN: '1' });
+  await c.init();
+  await c.call('board_open', { open: false });
+  const tokenFile = path.join(e.dataDir, 'board.token');
+  const old = fs.readFileSync(tokenFile, 'utf8').trim();
+  assert.equal((await fetch(`http://127.0.0.1:${port}/api/state`, { headers: { 'X-Thread-Token': old } })).status, 200);
+  assert.match(text(await c.call('board_stop')), /^Board stopped\./);
+  assert.equal(fs.existsSync(tokenFile), false, 'the token is gone');
+  assert.equal(JSON.stringify(text(await c.call('board_stop'))).includes(old), false);
+  await c.call('board_open', { open: false });
+  const fresh = fs.readFileSync(tokenFile, 'utf8').trim();
+  assert.notEqual(fresh, old);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/api/state`, { headers: { 'X-Thread-Token': old } })).status, 401, 'the old token opens nothing');
+  assert.equal((await fetch(`http://127.0.0.1:${port}/api/state`, { headers: { 'X-Thread-Token': fresh } })).status, 200);
+  assert.ok(fs.readFileSync(path.join(e.dataDir, 'board-link.txt'), 'utf8').includes(fresh), 'the link file holds the new token');
+});
+
+test('wait_add hands back the chat pointer as a tokenless link to the card page on the running board, and the plain id when there is no board', async (t) => {
   const e = setupThreadEnv(t);
   await core.addCard(e.projectDir, { title: 'Fix the importer' });
   const port = await freePort();
@@ -195,12 +292,9 @@ test('wait_add hands back the chat pointer as a link to the card page on the run
   await c.init();
   const sid = '11111111-2222-4333-8444-555555555555';
   const r = await c.call('wait_add', { card: 'c1', kind: 'question', text: 'Which importer?', session_id: sid });
-  const m = text(r).match(/"Waiting on you: \[c1\.w1\]\((http:\/\/127\.0\.0\.1:(\d+)\/)\?t=([0-9a-f]{32,64})#\/([0-9a-f]{12})\/c1\)"/);
-  assert.ok(m, text(r));
-  assert.equal(Number(m[2]), port);
-  assert.equal(m[4], core.projectKey(e.projectDir));
-  const res = await fetch(m[1] + 'api/state', { headers: { 'X-Thread-Token': m[3] } });
-  assert.equal(res.status, 200);
+  const key = core.projectKey(e.projectDir);
+  assert.ok(text(r).includes(`"Waiting on you: [c1.w1](http://127.0.0.1:${port}/#/${key}/c1)"`), text(r));
+  assert.doesNotMatch(text(r), /\?t=|#t=|[0-9a-f]{32}/, 'no token in the answer');
 
   const off = setupThreadEnv(t);
   await core.addCard(off.projectDir, { title: 'Fix the importer' });

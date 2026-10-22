@@ -58,6 +58,22 @@ test('a run the server marks quiet is muted, not live; one live run among quiet 
   assert.equal(mixed.runs.length, 2, 'the tooltip still lists the quiet one');
 });
 
+test('a running run of a thread that does the card\'s work reads like a sub-agent\'s: its lane (the agent type the server gives it) working, a quiet one muted', () => {
+  const linked = (over = {}) => run({ n: 2, agentId: undefined, thread: 'c9', turn: 1, lane: 'code-codex', agentType: 'code-codex', ...over });
+  const w = plain(model.workState(task([linked()])));
+  assert.equal(w.live, true);
+  assert.equal(w.text, 'code-codex working');
+  assert.equal(w.aria, 'working now: code-codex');
+  assert.equal(w.runs[0].key, 'lane:code-codex');
+  assert.equal(model.workTitle(model.workState(task([linked()])), NOW), 'Working now\ncode-codex: running for 4m 00s');
+  assert.equal(plain(model.workState(task([linked({ quiet: true })]))).text, 'code-codex quiet', 'the server marks a stale one quiet');
+  assert.equal(plain(model.workState(task([linked(), run({ n: 3 })]))).text, '2 agents working', 'beside a sub-agent run');
+  const noLane = plain(model.workState(task([linked({ lane: undefined, agentType: 'thread' })])));
+  assert.equal(noLane.text, 'thread working');
+  assert.equal(noLane.runs[0].key, '', 'a thread without a lane is not a worker to pick');
+  assert.equal(plain(model.workState(task([run()]))).runs[0].key, 'agent:worker');
+});
+
 test('a running thread shows as live; a lane thread names its lane; an idle one shows nothing', () => {
   const plainThread = plain(model.workState(thread('running')));
   assert.equal(plainThread.live, true);

@@ -48,6 +48,7 @@ export const JS_PIECES = [
   'js/copy.js',
   'js/waits.js',
   'js/thread.js',
+  'js/update.js',
   'js/start.js',
 ];
 

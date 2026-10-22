@@ -507,11 +507,11 @@ test('board_stop stops the board for every session and board_open starts it agai
   const a = new McpClient(e, env);
   t.after(() => a.kill());
   await a.init();
-  assert.match((await a.call('board_open')).text, /\?t=/);
+  assert.match((await a.call('board_open')).text, /^Board: http:\/\/127\.0\.0\.1:\d+\/#\//);
   const b = new McpClient(e, env);
   t.after(() => b.kill());
   await b.init();
-  assert.match((await b.call('board_open')).text, /\?t=/);
+  assert.match((await b.call('board_open')).text, /^Board: http:\/\/127\.0\.0\.1:\d+\/#\//);
 
   // b is a guest of a's board and stops it
   assert.match((await b.call('board_stop')).text, /^Board stopped\./);
@@ -526,20 +526,20 @@ test('board_stop stops the board for every session and board_open starts it agai
   await c.call('board_list');
   assert.equal(await pingBoard(url), null);
 
-  assert.match((await c.call('board_open')).text, new RegExp(`http://127\\.0\\.0\\.1:${port}/\\?t=`));
+  assert.match((await c.call('board_open')).text, new RegExp(`http://127\\.0\\.0\\.1:${port}/#/`));
   assert.equal(boardStopped(), false);
   assert.ok(await pingBoard(url));
 
   // c owns it now and stops its own
   assert.match((await c.call('board_stop')).text, /^Board stopped\./);
   assert.equal(await pingBoard(url), null);
-  assert.match((await a.call('board_open')).text, /\?t=/);
+  assert.match((await a.call('board_open')).text, /#\//);
   assert.ok(await pingBoard(url));
 });
 
 // ------------------------------------------------------------ MCP
 
-test('board_open through the MCP server returns ?t= and #/<key>, and says unavailable with THREAD_NO_HTTP=1', async (t) => {
+test('board_open through the MCP server returns the tokenless address with #/<key>, and says unavailable with THREAD_NO_HTTP=1', async (t) => {
   const e = setupThreadEnv(t);
   const port = await freePort();
   async function openBoard(extraEnv) {
@@ -551,7 +551,8 @@ test('board_open through the MCP server returns ?t= and #/<key>, and says unavai
     return r.text;
   }
   const on = await openBoard({ THREAD_NO_HTTP: '', THREAD_BOARD_PORT: String(port) });
-  assert.match(on, new RegExp(`http://127\\.0\\.0\\.1:${port}/\\?t=[0-9a-f]{32}#/${keyOf(e.projectDir)}`));
+  assert.match(on, new RegExp(`http://127\\.0\\.0\\.1:${port}/#/${keyOf(e.projectDir)}`));
+  assert.doesNotMatch(on, /\?t=|[0-9a-f]{32}/);
   const off = await openBoard({ THREAD_NO_HTTP: '1' });
   assert.match(off, /disabled|unavailable/i);
   assert.doesNotMatch(off, /\?t=/);

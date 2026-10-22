@@ -31,6 +31,7 @@
     <span class="dir" id="dir"><span class="dir-head" id="dir-head"></span><span class="dir-tail" id="dir-tail"></span></span>
     <button type="button" class="btn" id="theme-btn"></button>
     <span class="remote-badge" id="remote-badge" role="status" hidden>Remote</span>
+    <span class="phone-link" id="phone-link" hidden title="The remote link to this board is open. Copy it and open it on your phone. Anyone who has it acts as you on this board."><span>Phone link</span> <span class="phone-until" id="phone-until"></span></span>
     <span class="conn" id="conn" role="status" data-state="connecting"><span class="shape s-ring"></span><span id="conn-text">Connecting</span></span>
   </header>
   <nav class="views" id="views" aria-label="Project views" hidden></nav>
@@ -64,6 +65,7 @@
   </div>
   <p class="mode-note" id="old-note" role="status" hidden>This board is served by a session on an older plugin version, so your stages and milestones are not shown. Run <code>/thread:board</code> in an updated session, then reload this page.</p>
   <p class="mode-note" id="version-note" role="status" hidden><span id="version-text"></span> <button type="button" class="btn small" id="version-reload">Reload</button></p>
+  <div class="update-box" id="update-note" hidden></div>
   <p class="mode-note" id="mode-note" role="status" hidden>The task board is off for this project (chat-only), so only threads are shown. Run <code>/thread:setup</code> to turn it on.</p>
   <div class="callout warn notice" id="notice" role="status" hidden></div>
   <div class="callout warn notice" id="files-notice" role="status" hidden></div>
@@ -76,7 +78,7 @@
     <div id="gate-default">
       <h1>The board needs its access link</h1>
       <p>This page does not have a valid access token, so the board server turned it away. Nothing is wrong with your cards.</p>
-      <p>In Claude Code, run <code>/thread:board</code> and open the link it prints.</p>
+      <p>Open the board from Claude Code with <code>/thread:board</code>: it opens this page in your browser with its access link.</p>
     </div>
     <div id="gate-expired" hidden>
       <h1>This remote link has expired</h1>

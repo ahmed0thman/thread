@@ -43,7 +43,7 @@ test('with no config file the effective config is the defaults', (t) => {
   assert.equal(cfg.mode, 'tasks');
   assert.deepEqual(cfg.stages.map((s) => s.id), core.STATUSES);
   assert.deepEqual(cfg.roles, { start: 'new', working: 'in_progress', review: 'review', blocked: 'blocked', done: 'done' });
-  assert.deepEqual(cfg.source, { mode: 'default', stages: 'default', wake: 'default', codeMap: 'default' });
+  assert.deepEqual(cfg.source, { mode: 'default', stages: 'default', wake: 'default', codeMap: 'default', updateCheck: 'default' });
   assert.equal(cfg.configured, false);
   assert.deepEqual(cfg.exists, { global: false, project: false });
 });
@@ -54,7 +54,7 @@ test('config precedence: default, then the global file, then the project file; s
   let cfg = core.readConfig(e.projectDir);
   assert.equal(cfg.mode, 'chat');
   assert.deepEqual(cfg.taskStages, STAGES, 'the task board\'s stages are kept while chat-only shows its own');
-  assert.deepEqual(cfg.source, { mode: 'global', stages: 'global', wake: 'default', codeMap: 'default' });
+  assert.deepEqual(cfg.source, { mode: 'global', stages: 'global', wake: 'default', codeMap: 'default', updateCheck: 'default' });
   assert.equal(cfg.configured, true);
 
   // The project file sets only the mode: mode comes from it, stages and roles still from the global file.
@@ -62,7 +62,7 @@ test('config precedence: default, then the global file, then the project file; s
   cfg = core.readConfig(e.projectDir);
   assert.equal(cfg.mode, 'tasks');
   assert.deepEqual(cfg.stages, STAGES);
-  assert.deepEqual(cfg.source, { mode: 'project', stages: 'global', wake: 'default', codeMap: 'default' });
+  assert.deepEqual(cfg.source, { mode: 'project', stages: 'global', wake: 'default', codeMap: 'default', updateCheck: 'default' });
 
   // The project file sets its own stages: the global roles are not mixed in.
   const own = [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }, { id: 'c', label: 'C' }];
@@ -71,7 +71,7 @@ test('config precedence: default, then the global file, then the project file; s
   assert.deepEqual(cfg.taskStages, own);
   assert.equal(cfg.mode, 'chat');
   assert.deepEqual(cfg.taskRoles, { start: 'a', working: 'b', review: 'b', blocked: 'b', done: 'c' });
-  assert.deepEqual(cfg.source, { mode: 'global', stages: 'project', wake: 'default', codeMap: 'default' });
+  assert.deepEqual(cfg.source, { mode: 'global', stages: 'project', wake: 'default', codeMap: 'default', updateCheck: 'default' });
 });
 
 test('an unreadable or invalid config file is ignored, not fatal', (t) => {
@@ -80,7 +80,7 @@ test('an unreadable or invalid config file is ignored, not fatal', (t) => {
     writeGlobal(e, bad);
     const cfg = core.readConfig(e.projectDir);
     assert.equal(cfg.mode, 'tasks', bad);
-    assert.deepEqual(cfg.source, { mode: 'default', stages: 'default', wake: 'default', codeMap: 'default' });
+    assert.deepEqual(cfg.source, { mode: 'default', stages: 'default', wake: 'default', codeMap: 'default', updateCheck: 'default' });
     assert.equal(cfg.exists.global, true, 'a file is there, so the plugin counts as set up');
   }
 });

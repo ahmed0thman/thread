@@ -1,7 +1,7 @@
 ---
 name: new
 description: Start a side thread, a background Claude session that gets a short brief from this one, works on a separate task and reports back only when asked.
-argument-hint: "[--full] [--agent <name>] [--model <name>] [--effort <level>] [--lane <name>] [--write] [--parent <id>] what the thread should do"
+argument-hint: "[--full] [--agent <name>] [--model <name>] [--effort <level>] [--lane <name>] [--card <id>] [--write] [--parent <id>] what the thread should do"
 ---
 
 Start a side thread for the task the user described in the arguments. For a card that should not start a thread now, use `/thread:add` instead.
@@ -13,6 +13,7 @@ Flags may appear anywhere in the arguments. Remove them from the task text.
 - `--model <name>`, optionally with `--effort <level>`: pass `model` and `effort` as given.
 - `--lane <name>`: pass `lane` with that delegation lane's name (call `lane_list` first if you need the names), so another coding CLI (codex, agy, opencode or claude) runs the thread with the lane's own model and effort. It cannot be combined with `--agent`, `--model`, `--effort` or `--full`: if the arguments have both, say so and ask which one the user wants. If the tool refuses the lane (unknown name, not approved, no delegate skills, relay missing, read-only lane, or an agy lane, with `--write`), pass its message on. The lane's CLI sends the brief and the files it reads to its own provider; say so in one clause when you report. Extra folders (`extra_dirs`) are not supported with a lane.
 - `--parent <id>`: pass `parent` with that milestone card id, so the thread belongs to the milestone.
+- `--card <id>`: pass `card` with that task or idea id, because the thread does the work of that card: the card then shows each turn as a run, with its live steps and report. Pass `card` too, without the flag, when the user names the card the thread works on. A milestone, a thread or an unknown id is refused; pass the message on.
 - `--write`, or the user plainly asking for file changes: pass `mode: "write"`, which edits the same working tree as this session. Otherwise `mode: "read"`.
 
 Without `--full` the thread is a fresh session (`context: "brief"`). It has not seen this conversation and knows only what you write:
@@ -32,6 +33,6 @@ The thread cannot answer permission prompts. It can read the project and use web
 Current session id: ${CLAUDE_SESSION_ID}
 If that line still shows a literal placeholder instead of a UUID, use the id from the "[thread plugin]" note at session start.
 
-Call the `thread_start` tool with `title`, `task`, `session_id`, `mode`, and `context`, `brief`, `agent` or `model`, or `lane`, `extra_dirs` and `parent` as above.
+Call the `thread_start` tool with `title`, `task`, `session_id`, `mode`, and `context`, `brief`, `agent` or `model`, or `lane`, `extra_dirs`, `parent` and `card` as above.
 
 After the tool returns, tell the user in one sentence the card id and what runs the thread, with the reason in a few words when you chose it, then carry on with the main task. Do not wait for the thread and do not poll it.

@@ -7,8 +7,8 @@ Guidance for Claude Code when working in this repository. `README.md` is the sho
 `thread` is a Claude Code plugin. It starts side threads (background `claude -p` sessions that get a brief, work on one task and report back only when asked) and serves a local kanban board of tasks, ideas, milestones and threads. Plain Node ES modules, no dependencies, no build step.
 
 ```text
-.claude-plugin/     plugin.json (the version lives only here), marketplace.json, icon.png
-.mcp.json           starts server/mcp.mjs as the plugin's MCP server
+.claude-plugin/     plugin.json (the version lives only here; its mcpServers starts server/mcp.mjs as the plugin's MCP server, so the repo
+                    root has no .mcp.json, which Claude Code would also read as a broken project server inside this repo), marketplace.json, icon.png
 hooks/, scripts/    SessionStart, UserPromptSubmit and Sub-agent hooks (scripts/hook.mjs); the Stop hook's background waiter that wakes an idle session (scripts/waiter.mjs)
 skills/             the slash commands; each SKILL.md tells Claude which tool to call
 server/
@@ -18,6 +18,7 @@ server/
   sessions.mjs      session names, and the model a session runs on
   core.mjs          cards, milestones, threads, the wrong-session guard, project listing
   lanes.mjs         delegation lanes: reads the lane settings from the delegate skills (never writes them)
+  laneevents.mjs    a lane turn's provider events (codex, opencode) turned into thread activity, and the reader that follows the events file as it grows; provider output is data, so it uses only strings and never throws
   runs.mjs          sub-agent runs on a card: recorded by hooks, their transcripts read for the board
   waits.mjs         the questions a session asks the user on the board, and their answers
   wake.mjs          what wakes an idle session from the board (setting `wake`), and the one-waiter-per-session file
@@ -25,9 +26,10 @@ server/
   fields.mjs        card fields (type, priority, labels, blockedBy, criteria), history workers, workedBy; no imports
   runner.mjs        the detached process that runs one thread turn
   codemap.mjs       the note a new thread gets when `codeMap` is on and the project has a Graphify map (graphify-out/GRAPH_REPORT.md); only checks the file exists
+  update.mjs        the update notices: the per-machine version record (seen-version.json), the opt-in GitHub check (setting `updateCheck`; the plugin's only network call besides the tunnel), the changelog entry for the board's /api/update
   layout.mjs        the Milestones map's dragged positions, per project and per machine (projects/<key>/milestone-layout.json); never in the repo
   mcp.mjs           the MCP server and its tools
-  http.mjs          the board server (loopback only, token, Host and Origin checks); also the remote policy and allowlist of the tunnel's listener
+  http.mjs          the board server (loopback only, token, Host and Origin checks); the one-time code board_open opens the browser with and its exchange route; also the remote policy and allowlist of the tunnel's listener
   tunnel.mjs        the opt-in Cloudflare tunnel: finds and runs cloudflared, the pid file, the manager (token, lifetime, listener)
   page.mjs          assembleBoardPage(): joins the board pieces into the one page GET / sends; lists them, in order
   board/            the board page's source pieces; no framework
@@ -104,7 +106,7 @@ The repository is also submitted to Anthropic's plugin directory, whose validato
 
 ## Not yet tested
 
-Known gaps, so nobody assumes otherwise: real drag and drop between custom stages; a real clipboard write for "Copy report"; `/thread:setup` and the one-time setup hint in a live session; `--full` together with `--agent`; threads started from the board with the real CLI; screen readers; Windows.
+Known gaps, so nobody assumes otherwise: real drag and drop between custom stages; a real clipboard write for "Copy report"; `/thread:setup` and the one-time setup hint in a live session; `--full` together with `--agent`; threads started from the board with the real CLI; a real browser opener launch on each platform; real codex and opencode lanes with live steps (the relays are fakes); screen readers; Windows.
 
 ## What is planned
 

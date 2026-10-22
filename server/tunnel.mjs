@@ -151,7 +151,7 @@ function endChild(c) {
   try { c.stdin.end(); } catch { /* closed */ }   // closing the pipe is the portable way to say stop
   try { c.kill('SIGTERM'); } catch { /* already gone */ }
 }
-function killLive() { for (const c of live) { endChild(c); clearPid(c.pid); } }
+function killLive() { for (const c of live) { endChild(c); clearPid(c.pid); removeTunnelLink(); } }
 function onSignal(sig) {
   killLive();
   // Stand aside: when ours was the only handler, the signal does what it would have done without us.
@@ -182,6 +182,13 @@ function writePid(rec) {
     mkdirPrivateSync(dataDir());
     writeFileSync(pidFile(), JSON.stringify({ ...rec, owner: process.pid, startedAt: new Date().toISOString() }) + '\n', { mode: PRIVATE_FILE });
   } catch { /* the pid file is a safety net only */ }
+}
+
+// The remote link (with the tunnel's token) that board_open saves for the user lives only as long as the tunnel: every way the tunnel ends
+// removes it, next to the pid file. (The board's Phone link never reads this file; it asks the manager.)
+export const tunnelLinkFile = () => join(dataDir(), 'tunnel-link.txt');
+export function removeTunnelLink() {
+  try { unlinkSync(tunnelLinkFile()); } catch { /* none */ }
 }
 function clearPid(pid) {
   try {
@@ -216,6 +223,7 @@ export async function reapStaleTunnel() {
   const owner = rec && rec.owner;
   if (Number.isInteger(owner) && owner > 0 && (owner === process.pid || pidAlive(owner))) return false;
   try { unlinkSync(pidFile()); } catch { /* gone */ }
+  removeTunnelLink();   // the owner that saved it is gone
   let reaped = false;
   for (const pid of new Set([rec && rec.pid, rec && rec.cloudflared])) {
     if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) continue;
@@ -331,6 +339,7 @@ export function createTunnelManager({ serve, lifetimeMs = TUNNEL_LIFETIME_MS, no
     const cur = active;
     if (!cur) return false;
     active = null;
+    removeTunnelLink();   // before anything is awaited: a tunnel started meanwhile saves its own link afterwards
     clearTimeout(cur.timer);
     clearInterval(cur.clock);
     cur.policy.token = null;

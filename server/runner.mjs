@@ -3,9 +3,10 @@
 import { spawn } from 'node:child_process';
 import { appendFileSync, createWriteStream, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { MAX_LANE_EVENTS, laneReader, laneTranslator } from './laneevents.mjs';
 import { UUID_RE, activityPath, buildClaudeArgs, buildPrompt, buildRelayArgs, clip, findThread, isThread, pinStore, projectPaths, readStateLocked, setRunState, tail, threadById, updateState } from './core.mjs';
 import { relayPath, resumeIdOf, unusableLane } from './lanes.mjs';
-import { MAX_EVENTS, MAX_TEXT, resultText, summarize } from './runs.mjs';
+import { MAX_EVENTS, MAX_TEXT, closeLinkedRun, resultText, summarize } from './runs.mjs';
 import { PRIVATE_FILE, mkdirPrivateSync } from './state.mjs';
 
 const [projectDir, cardId, storeArg] = process.argv.slice(2);
@@ -15,7 +16,6 @@ if (storeArg) pinStore(storeArg);
 const bin = process.env.THREAD_CLAUDE_BIN || 'claude';
 const LANE_GRACE_MS = Number(process.env.THREAD_LANE_GRACE_MS) > 0 ? Number(process.env.THREAD_LANE_GRACE_MS) : 20000;   // the runner's own limit comes this long after the relay's --timeout
 const LANE_KILL_MS = 15000;    // a relay told to stop gets this long to stop its child and write its result
-const MAX_LANE_EVENTS = 50 * 1024 * 1024;
 const OUT_TAIL = 2000;
 const timeoutMs = (() => {
   const n = Number(process.env.THREAD_TIMEOUT_MS);
@@ -46,6 +46,9 @@ let lane = null;        // the thread's lane while this turn runs on one: { impl
 let laneOut = null;     // that turn's relay output folder
 let laneMode = 'read';   // the thread's access, for the note about files
 let laneBad = '';       // why the thread's lane record cannot run (then nothing runs at all)
+let laneTimer = null;
+let translateLane = null;
+let laneEvents = null;  // reads a lane turn's events.jsonl as it grows (laneevents.laneReader)
 let laneRead = null;    // result.json, read once: { result: object or null }
 
 // Heartbeat: core treats the runner as alive only while this file is fresh and
@@ -87,6 +90,10 @@ function writeActivity(event) {
 
 // One line of the CLI's event stream: remember a result, note what the turn did.
 function onStreamLine(line) {
+  try { streamLine(line); } catch { /* a line that cannot be read is skipped */ }
+}
+
+function streamLine(line) {
   let v;
   try { v = JSON.parse(line); } catch { return; }
   if (!v || typeof v !== 'object' || Array.isArray(v)) return;
@@ -207,13 +214,16 @@ function failureError(r, who, detail) {
   return status === 'timeout' ? `${who} timed out${why ? ': ' + tail(why, 300) : ''}` : `${who} ${status}${why ? ': ' + tail(why, 300) : ''}`;
 }
 
-// A claude lane's events.jsonl is the stream the plugin already reads: it gives the turn its steps and token use.
-function feedLaneEvents() {
+// One line of a lane turn's events file. Translation never fails the turn: a line that cannot be read is skipped.
+function laneLine(line) {
+  if (lane.implementer === 'claude') return onStreamLine(line);
   try {
-    const file = join(laneOut, 'events.jsonl');
-    if (statSync(file).size > MAX_LANE_EVENTS) return;
-    for (const l of readFileSync(file, 'utf8').split('\n')) onStreamLine(l);
-  } catch { /* no events: the turn has no trace */ }
+    const obj = JSON.parse(line);
+    for (const event of translateLane ? translateLane(obj) : []) {
+      if (event.kind === 'tool') steps += 1;
+      writeActivity(event);
+    }
+  } catch { /* skipped */ }
 }
 
 // Tokens of the turn: the result event's usage, else the relay's own result.json. Never both.
@@ -321,6 +331,8 @@ async function record(outcome) {
     th.pid = null;
     if (ended) card.updatedAt = ts;
     else setRunState(projectDir, card, outcome.ok ? 'idle' : 'failed');
+    // a thread that does the work of a card closes that card's run for this turn in the same update
+    if (th.forCard) closeLinkedRun(projectDir, state, cardId, th.turns.length, { ok: outcome.ok, result: outcome.result, error: outcome.error, steps: turn && turn.steps, usage: turn && turn.usage });
   };
   let lastErr;
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -342,10 +354,14 @@ async function finish(crash) {
   clearTimeout(timeoutTimer);
   clearTimeout(killTimer);
   clearTimeout(finishFallback);
+  clearInterval(laneTimer);
   let recorded = false;
   try {
     onStreamLine(partialLine); // a result line the CLI did not end with a newline
-    if (lane && lane.implementer === 'claude') feedLaneEvents();
+    if (laneEvents) {
+      laneEvents.drain();
+      laneEvents.end();
+    }
     recorded = await record(computeOutcome(crash));
   } catch (e) {
     process.stderr.write(`thread runner: ${e && e.message}\n`);
@@ -446,6 +462,11 @@ async function main() {
     return finish();
   }
   childPid = child.pid ?? null;
+  if (lane && lane.implementer !== 'agy') {
+    translateLane = laneTranslator(lane.implementer);
+    laneEvents = laneReader(join(laneOut, 'events.jsonl'), laneLine, { maxBytes: MAX_LANE_EVENTS });
+    laneTimer = setInterval(() => laneEvents.drain(), 1000);
+  }
 
   child.on('error', (e) => {
     if (childPid == null) {

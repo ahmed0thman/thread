@@ -272,6 +272,8 @@
     }
     function schedule() { if (!P.runTimer && !P.runBusy) P.runTimer = setTimeout(cycle, 0); }
 
+    // A run that stands for one turn of a thread that does this card's work (it names the thread and the turn): its lane is its agent type.
+    const linkedOf = (run) => typeof run.thread === 'string' && run.thread !== '' && Number.isInteger(run.turn);
     const stepsIn = (c, run) => dataOf(c, run).events.filter((e) => e.kind === 'tool');
     const durationOf = (run) => (run.finishedAt && run.startedAt ? fmtMs(new Date(run.finishedAt) - new Date(run.startedAt)) : '');
 
@@ -290,7 +292,7 @@
         top.append(h('span', 'tnum', 'Run ' + run.n), h('span', 'run-type', run.agentType || 'agent'), runPill(runPillState(run)));
         const sub = h('span', 'run-sub');
         const tk = turnTokens(run);
-        const bits = [run.mode === 'background' ? 'background' : '', tk ? totalText(tk) : ''].filter(Boolean);
+        const bits = [linkedOf(run) ? 'thread ' + run.thread + ' · turn ' + run.turn : run.mode === 'background' ? 'background' : '', tk ? totalText(tk) : ''].filter(Boolean);
         if (bits.length) sub.append(bits.join(' · ') + ' · ');
         sub.appendChild(timeEl(run.startedAt));
         if (tk) b.title += '. ' + tokensText(tk);
@@ -400,7 +402,7 @@
       if (P.flash && P.flash.i === i && Date.now() < P.flash.until) tn.classList.add('flash');
       const u = h('div', 'msg user');
       const um = h('div', 'msg-meta');
-      um.appendChild(h('strong', null, 'Main session'));
+      um.appendChild(h('strong', null, linkedOf(run) ? 'Thread brief' : 'Main session'));
       if (run.sessionId) um.appendChild(h('span', 'tnum', sessionLabel(run.sessionId)));
       um.appendChild(timeEl(run.startedAt));
       u.appendChild(um);
@@ -412,7 +414,13 @@
       const b = h('div', 'msg bot');
       const bm = h('div', 'msg-meta');
       bm.appendChild(h('strong', null, run.agentType || 'Sub-agent'));
-      bm.appendChild(h('span', 'tnum', 'run ' + run.n + (run.mode === 'background' ? ' · background' : '')));
+      if (linkedOf(run)) {
+        // the thread's own page (the page's card reference link), when the thread card is still on the board
+        const ref = h('span', 'tnum', 'Thread ');
+        ref.appendChild(findCard(run.thread) ? refEl(run.thread) : document.createTextNode(run.thread));
+        bm.appendChild(ref);
+        bm.appendChild(h('span', 'tnum', 'run ' + run.n + ' · turn ' + run.turn));
+      } else bm.appendChild(h('span', 'tnum', 'run ' + run.n + (run.mode === 'background' ? ' · background' : '')));
       const dur = durationOf(run);
       if (dur) bm.appendChild(h('span', 'tnum', 'took ' + dur));
       const tk = turnTokens(run);
@@ -436,7 +444,8 @@
         stopBtn.dataset.fid = 'stop-' + run.n;
         if (isRO()) { setOff(stopBtn, true); stopBtn.title = READONLY_WHY; }
         else stopBtn.title = 'Use this when the agent is no longer running but the run never finished';
-        if (!isRemote()) b.appendChild(stopBtn);
+        // a live thread's turn is ended with the thread, so its run offers the button only once the server marks it quiet (its thread has stopped running that turn)
+        if (!isRemote() && (!linkedOf(run) || run.quiet === true)) b.appendChild(stopBtn);
       } else if (typeof run.result === 'string' && run.result.trim()) {
         const bub = h('div', 'bubble');
         bub.appendChild(renderMarkdown(d.reportFull || run.result));

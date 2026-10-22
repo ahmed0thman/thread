@@ -78,12 +78,25 @@
   let halted = false;        // true while the access-link page is showing: no polling at all
   // ---- token in the address (tunnel.test.mjs runs this block on its own) ----
   let token = '';
+  // The token is kept in localStorage, so an address without it (a card link in the chat) opens in any tab of a browser that opened
+  // the board once. A tab opened by an older version has it in sessionStorage.
   function readStoredToken() {
+    let t = '';
+    try { t = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { /* storage unavailable */ }
+    if (t) return t;
     try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
   }
-  // A local link carries the token as ?t=. A link through the tunnel carries it in the fragment, '#t=<token>' followed by the usual
-  // route ('#t=<token>/<project>'): a fragment is never sent to a server, so Cloudflare does not see it. Either way it is kept for
-  // this tab and taken out of the address bar before the route is read.
+  // Both are written, so a board served again by an older plugin version (which reads only sessionStorage) still opens in this tab.
+  function storeToken(t) {
+    try { localStorage.setItem(TOKEN_KEY, t); } catch (e) { /* storage unavailable: keep it in the variable */ }
+    try { sessionStorage.setItem(TOKEN_KEY, t); } catch (e) { /* storage unavailable: keep it in the variable */ }
+  }
+  // A local link carries the token as ?t=, or (from /thread:board, which keeps the token off the browser's command line) a one-time code
+  // as ?c=, which start() trades for the token. A link through the tunnel carries the token in the fragment, '#t=<token>' followed by the
+  // usual route ('#t=<token>/<project>'): a fragment is never sent to a server, so Cloudflare does not see it. Either way it is kept in
+  // this browser (for this address only) and taken out of the address bar before the route is read. What comes in the address always
+  // replaces what was stored: a token or code that is in the address is the newer one.
+  let pendingCode = '';
   (function initToken() {
     let fromUrl = '';
     let route = '';
@@ -92,17 +105,26 @@
       fromUrl = fm[1];
       route = fm[2] || '';
     } else {
-      try { fromUrl = new URLSearchParams(location.search).get('t') || ''; } catch (e) { fromUrl = ''; }
+      try {
+        const sp = new URLSearchParams(location.search);
+        fromUrl = sp.get('t') || '';
+        const c = sp.get('c') || '';
+        if (/^[0-9a-f]{32}$/.test(c)) pendingCode = c;
+      } catch (e) { fromUrl = ''; }
     }
-    if (!fromUrl) { token = readStoredToken(); return; }
-    token = fromUrl;
-    try { sessionStorage.setItem(TOKEN_KEY, fromUrl); } catch (e) { /* storage unavailable: keep it in the variable */ }
+    if (!fromUrl && !pendingCode) { token = readStoredToken(); return; }
+    if (fromUrl) {
+      pendingCode = '';
+      token = fromUrl;
+      storeToken(fromUrl);
+    }
     try {
       if (fm) {
         history.replaceState(null, '', location.pathname + location.search + (route ? '#' + route : ''));
       } else {
         const sp = new URLSearchParams(location.search);
         sp.delete('t');
+        sp.delete('c');
         const qs = sp.toString();
         history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
       }

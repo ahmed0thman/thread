@@ -793,7 +793,9 @@ test('the session start note tells Claude when to raise a waiting item, in tasks
   assert.match(note, /^\[thread plugin\] This session's id is /);
   assert.match(note, /Put each task on the board before you start it \(board_add, or board_update the card\)\./);
   assert.match(note, /Every question, choice, review request or to-do for the user goes through wait_add on that card, with one line in the chat such as "Waiting on you: c37\.w2" \(as wait_add returns it\); never only in the chat\./);
-  assert.ok(note.length < 700, `short: ${note.length}`);
+  assert.ok(note.length < 900, `short, with the one-time setup hint: ${note.length}`);
+  const again = context(await sessionStart(e));   // the hint is said once per machine
+  assert.ok(again.length < 700, `short: ${again.length}`);
   await core.saveConfig(e.projectDir, 'project', { mode: 'chat' });
   const chat = context(await sessionStart(e));
   assert.match(chat, /This session's id is/);

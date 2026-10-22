@@ -433,6 +433,18 @@ test('board links: any port on 127.0.0.1 or localhost, and the tunnel host, coun
   }
 });
 
+test('a page of another local server (a dev app on localhost:3000) is an ordinary link that opens in a new tab', () => {
+  const env = boardEnv();
+  for (const src of ['http://localhost:3000/en/dev/ui?screen=inbox-pages-disconnected', 'http://127.0.0.1:5173/', 'http://localhost:8080/app#/settings', 'http://[::1]:3000/x?y=1']) {
+    const [a] = links(src, env);
+    assert.equal(a.className, 'weburl', src);
+    assert.equal(a.getAttribute('target'), '_blank', src);
+    assert.equal(a.getAttribute('href'), new URL(src).href, src);
+  }
+  // a loopback address that looks like a board link stays in this tab
+  assert.equal(links('http://127.0.0.1:47801/#/2be5b8032e12/c37', env)[0].getAttribute('target'), null);
+});
+
 test('board links: a card that is not here, another project, or another page of the board is a link in this tab', () => {
   const env = boardEnv();
   const miss = links(`${OWN}/?t=${TOK}#/proj/c99`, env)[0];

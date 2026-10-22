@@ -6,9 +6,9 @@ thread gives the work of Claude, its sub-agents, side threads and agents on your
 
 ## Get started
 
-- [Install, update, or try it from a clone](configuration.md#installing-updating-and-trying-a-clone): requirements, the two install commands, updating, `claude --plugin-dir`.
+- [Install, update, or try it from a clone](configuration.md#installing-updating-and-trying-a-clone): requirements, the two install commands, [staying up to date](configuration.md#staying-up-to-date) (auto-update, the "Updated" note, the optional daily check), `claude --plugin-dir`.
 - [Quick start with a side thread](threads.md#quick-start): `/thread:new`, `/thread:report`, `/thread:board` and the flags that change a thread's defaults.
-- [Setup](board.md#setup): `/thread:setup` chooses chat-only or the task board, your own stages, waking, code maps and where the cards live. You never have to run it; the defaults work.
+- [Setup](board.md#setup): `/thread:setup` chooses chat-only or the task board, your own stages, waking, code maps, the update check and where the cards live. You never have to run it; the defaults work.
 - [Workflows](workflows.md): eighteen worked examples, from a side question to planning a release.
 
 ## Keep track of the work
@@ -49,6 +49,7 @@ thread gives the work of Claude, its sub-agents, side threads and agents on your
 ## Keep the board with the project, or check it from your phone
 
 - [Keeping the board in your repo](storage-and-sync.md#keeping-the-board-in-your-repo-claudethread): [what is in the repo and what stays on the machine](storage-and-sync.md#what-is-in-the-repo-and-what-stays-on-the-machine), [turning it on](storage-and-sync.md#turning-it-on), [committing the folder](storage-and-sync.md#committing-the-folder), [worktrees and sub-folders](storage-and-sync.md#worktrees-and-sub-folders), [card ids](storage-and-sync.md#card-ids), [conflicts](storage-and-sync.md#conflicts), [older sessions and the import hint](storage-and-sync.md#older-sessions-and-the-import-hint).
+- [The update check](security.md#the-update-check): opt-in, once a day, what it sends and keeps.
 - [Opening the board from your phone (tunnel)](security.md#opening-the-board-from-your-phone-tunnel): `/thread:board --tunnel`, opt-in, 12 hours, what the link allows.
 
 ## Settings, security and help

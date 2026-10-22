@@ -229,6 +229,37 @@ test('work by worker: done cards from workedBy, tokens from sub-agent runs and t
   assert.equal(m.workersMore, 0);
 });
 
+test('a run of a thread that does a card\'s work counts for its lane (else its thread) and its tokens are not counted twice', () => {
+  const linked = (over) => ({ n: 1, thread: 'c90', turn: 1, agentType: 'code-codex', state: 'done', usage: usage(500, 100), ...over });
+  const cards = [
+    card({ id: 'c80', status: 'done', workedBy: ['lane:code-codex'], runs: [linked({ lane: 'code-codex' })] }),
+    card({ id: 'c81', status: 'done', workedBy: ['thread:c91'], runs: [linked({ thread: 'c91', agentType: 'thread' })] }),
+    card({ id: 'c90', kind: 'thread', status: 'review', thread: { agent: null, lane: { name: 'code-codex' }, forCard: 'c80', runState: 'idle', turns: [{ usage: usage(500, 100) }] } }),
+    card({ id: 'c82', status: 'done', workedBy: ['agent:reviewer'], runs: [linked({ thread: 'c92', agentType: 'reviewer' })] }),
+    card({ id: 'c92', kind: 'thread', status: 'review', thread: { agent: 'reviewer', lane: null, forCard: 'c82', runState: 'idle', turns: [{ usage: usage(20, 10) }] } }),
+  ];
+  const m = model(cards);
+  // the thread card's own turn is the one 600 tokens; the linked run of the task adds none, and the thread-only run is a worker with no tokens;
+  // a thread that runs as an agent is that agent's row (one row for the job, not the agent for its tokens and the thread for its card)
+  assert.deepEqual(m.workers, [
+    { name: 'lane:code-codex', done: 1, tokens: 600 },
+    { name: 'agent:reviewer', done: 1, tokens: 30 },
+    { name: 'thread:c91', done: 1, tokens: 0 },
+  ]);
+  // a plain thread that does a card's work is named after itself, as its run is; a plain thread that does no card's work stays "thread"
+  const plainJob = [
+    card({ id: 'c83', status: 'done', workedBy: ['thread:c93'], runs: [linked({ thread: 'c93', agentType: 'thread' })] }),
+    card({ id: 'c93', kind: 'thread', status: 'review', thread: { agent: null, lane: null, forCard: 'c83', runState: 'idle', turns: [{ usage: usage(7, 3) }] } }),
+    card({ id: 'c94', kind: 'thread', status: 'review', thread: { agent: null, lane: null, runState: 'idle', turns: [{ usage: usage(1, 1) }] } }),
+  ];
+  assert.deepEqual(model(plainJob).workers, [{ name: 'thread:c93', done: 1, tokens: 10 }, { name: 'thread', done: 0, tokens: 2 }]);
+  // without the thread card (it was removed) the task's run counts nothing either: no token is guessed from it
+  assert.deepEqual(model([cards[0]]).workers, [{ name: 'lane:code-codex', done: 1, tokens: 0 }]);
+  // the worker filter offers the lane and the thread, from the runs, as it does the agent types
+  const withRuns = model([card({ status: 'new', runs: [linked({ lane: 'code-codex' }), linked({ n: 2, thread: 'c92', agentType: 'thread' }), { n: 3, agentType: 'worker', agentId: 'a' }] })]);
+  assert.deepEqual(withRuns.choices.workers, ['agent:worker', 'lane:code-codex', 'thread:c92']);
+});
+
 test('worker names from runs and threads follow workedBy: a cut name loses its dots and is cut to 64 characters', () => {
   assert.equal(S.derivedWorker('agent:', 'code-reviewer…'), 'agent:code-reviewer');
   assert.equal(S.derivedWorker('agent:', 'x'.repeat(100)), 'agent:' + 'x'.repeat(58));

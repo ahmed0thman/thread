@@ -154,10 +154,10 @@
     elGateMsg.textContent = '';
     token = readStoredToken();
     try {
-      if (!token) elGateMsg.textContent = 'No access link is stored in this tab. Open the link that /thread:board prints.';
+      if (!token) elGateMsg.textContent = 'No access link is stored in this browser. Open the board from Claude Code with /thread:board.';
       else { applyProjects(await loadProjects()); resumeAfterAuth(); }
     } catch (e) {
-      elGateMsg.textContent = e.auth ? 'That access link is not valid (any more). Run /thread:board again and open the new link.' : e.message;
+      elGateMsg.textContent = e.auth ? 'That access link is not valid (any more). Open the board from Claude Code with /thread:board.' : e.message;
     } finally {
       elGateRetry.classList.remove('busy'); elGateRetry.disabled = false;
     }

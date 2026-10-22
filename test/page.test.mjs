@@ -1479,6 +1479,46 @@ test('run views: the step count is the run\'s own, the newest events are kept wi
   assert.equal(d.events.length, 2001, 'the marker and the 2000 events the server kept');
 });
 
+test('run views: a run of a thread that does the card\'s work shows its lane, a Thread link to the thread\'s page, and its state like a sub-agent run\'s', async () => {
+  const t = runViews();
+  t.env.refEl = (id) => { const a = t.doc.createElement('a'); a.className = 'cref'; a.textContent = id; a.dataset.card = id; return a; };
+  const view = t.page.attachRuns(t.P, t.S);
+  const LINKED = (over = {}) => RUN1({ n: 2, agentId: undefined, thread: 'c9', turn: 3, lane: 'code-codex', agentType: 'code-codex', mode: 'background', description: 'Add the tax rounding', prompt: 'the brief', ...over });
+  t.world.card = { id: 'c1', kind: 'task', title: 'T', status: 'new', source: 'user', createdAt: 'T0', runs: [LINKED()] };
+  t.world.answers = [{ run: 2, running: true, events: [{ kind: 'tool', id: 'x', name: 'Read', summary: 'a' }], next: 10, more: false, quietMs: 0 }];
+  view.update(t.world.card);
+  await vm_cycle(t);
+  const row = t.scConvo.querySelectorAll('.msg-meta')[1];
+  assert.match(row.textContent, /code-codex/, 'the lane is the run\'s name');
+  assert.match(row.textContent, /Thread c9/);
+  const ref = row.querySelectorAll('.cref')[0];
+  assert.ok(ref && ref.dataset.card === 'c9', 'the thread is the page\'s card reference link');
+  assert.match(row.textContent, /run 2 · turn 3/);
+  assert.match(t.scConvo.textContent, /Thread brief/, 'the prompt is the thread\'s brief, not the main session\'s');
+  assert.match(view.side.textContent, /thread c9 · turn 3/);
+  assert.match(view.side.textContent, /code-codex/);
+  assert.equal(t.scConvo.querySelectorAll('.run-stop').length, 0, 'a live thread turn is ended with its thread: no Mark as stopped');
+  assert.match(t.scConvo.textContent, /Working/);
+  assert.match(t.scTrace.textContent, /found a/, 'the live steps come through the same activity route');
+  assert.deepEqual(t.requests, ['/api/p/k1/cards/c1/runs/2/activity?offset=0']);
+  // the server marks a run quiet when its thread no longer runs that turn: only then does it offer Mark as stopped
+  t.world.card = { ...t.world.card, runs: [LINKED({ quiet: true })] };
+  t.world.answers = [{ run: 2, running: true, events: [], next: 10, more: false, quietMs: 20 * 60 * 1000 }];
+  view.update(t.world.card);
+  await vm_cycle(t);
+  assert.equal(t.scConvo.querySelectorAll('.run-stop')[0].textContent, 'Mark as stopped');
+  // the thread card is gone: the id is text, not a link
+  const t2 = runViews();
+  t2.env.refEl = t.env.refEl;
+  const v2 = t2.page.attachRuns(t2.P, t2.S);
+  const c = { id: 'c1', kind: 'task', title: 'T', status: 'new', source: 'user', createdAt: 'T0', runs: [LINKED({ state: 'done', ok: true, finishedAt: 'T1', result: 'all done', steps: 4 })] };
+  t2.env.findCard = (id) => (id === 'c1' ? c : null);
+  v2.update(c);
+  assert.match(t2.scConvo.textContent, /Thread c9/);
+  assert.equal(t2.scConvo.querySelectorAll('.cref').length, 0);
+  assert.match(t2.scConvo.textContent, /all done/);
+});
+
 test('run views: a quiet running run says so, every running run can be marked as stopped, a stopped one says it was', async () => {
   const t = runViews();
   const view = t.page.attachRuns(t.P, t.S);
