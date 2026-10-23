@@ -71,8 +71,9 @@
       : 'Delegation lane ' + info.name + (laneHint(info) ? '. ' + laneHint(info) : '');
     return tag;
   }
-  // What a lane's thread or card may do: agy is read-only in this version, a codex lane without a sandbox has full access.
+  // What a lane's thread or card may do: agy is read-only in this version (except in a full-access thread), a codex lane without a sandbox has full access.
   function laneAccess(card, l) {
+    if (card.kind === 'thread' && card.thread.mode === 'full') return 'Full access (no sandbox, no permission checks)';
     if (l.readOnly || l.implementer === 'agy' || (card.kind === 'thread' && card.thread.mode !== 'write')) return 'Read-only';
     return l.sandbox === 'danger-full-access' ? 'Full access (no sandbox)' : 'Can edit files';
   }
@@ -88,6 +89,27 @@
       l.variant ? ['Variant', l.variant] : ['Effort', effortText(l.effort) || 'CLI default'],
       ['Access', laneAccess(card, l)], ['Source', l.source === 'project' ? 'This project' : 'All projects'],
     ].concat(card.kind === 'thread' ? [['Follow-up', laneFollowUp(card).text]] : []);
+  }
+  // Why a thread that runs with full access cannot take another turn, '' when it can: the card it works for (the thread's own card when it was started
+  // from a card) no longer allows full access, or its title or note changed since. Only a card the page has is judged; the server decides the rest.
+  function fullBlock(card) {
+    const t = card && card.kind === 'thread' ? card.thread : null;
+    if (!t || t.mode !== 'full') return '';
+    const id = t.forCard || card.id;
+    const target = t.forCard ? (typeof findCard === 'function' ? findCard(t.forCard) : null) : card;
+    if (!target) return '';   // the page does not have that card (the server decides)
+    if (target.kind === 'milestone' || (t.forCard && target.kind === 'thread')) return 'Full access is not allowed for ' + id + '.';
+    if (target.allowFull === true && (target.kind === 'thread' || target.fullStale !== true)) return '';
+    return target.allowFull === true ? 'The title or note of ' + id + ' changed after full access was allowed: allow it again on that card’s page.' : 'Full access is no longer allowed for ' + id + ': allow it on that card’s page first.';
+  }
+  // The id of the card whose full-access switch is on for this thread, '' for none: its own card (a card that was started as a thread keeps the
+  // switch), or the card it works for when it runs with full access. The thread's page offers to take it away.
+  function fullSwitchId(card) {
+    const t = card && card.kind === 'thread' ? card.thread : null;
+    if (!t) return '';
+    if (card.allowFull === true) return card.id;
+    const c = t.mode === 'full' && t.forCard && typeof findCard === 'function' ? findCard(t.forCard) : null;
+    return c && c.kind !== 'thread' && c.kind !== 'milestone' && c.allowFull === true ? c.id : '';
   }
   // Whether a lane thread can take a follow-up: it needs the provider's session, and the lane must still be found, approved, on the same
   // provider, with its relay installed (once the lanes have loaded). `why` is the reason when it cannot, in a sentence of its own.
@@ -106,8 +128,10 @@
       if (now.approved === false) return no('lane “' + l.name + '” is not approved. Approve this project’s lane config with the delegate-setup skill.');
       if (now.implementer !== l.implementer) return no('lane “' + l.name + '” now runs on ' + now.implementer + ', which cannot continue a ' + l.implementer + ' session. Start a new thread instead.');
       if (now.relay === false) return no('the ' + now.implementer + ' relay (the ' + now.implementer + '-delegate skill) is not installed.');
-      if (t.mode === 'write' && (now.readOnly || now.implementer === 'agy')) return no('lane “' + l.name + '” is read-only now.');
+      if ((t.mode === 'write' || t.mode === 'full') && (now.readOnly || (now.implementer === 'agy' && t.mode === 'write'))) return no('lane “' + l.name + '” is read-only now.');
     }
+    const fb = fullBlock(card);
+    if (fb) return no(fb.charAt(0).toLowerCase() + fb.slice(1));
     return { ok: true, text: 'Possible', why: '' };
   }
   // The one line over a lane thread's Trace: what the provider shows of a turn. '' when there is nothing to say.
@@ -126,12 +150,12 @@
     const info = laneInfo(card);
     if (!info || card.kind === 'thread') return null;
     if (info.state !== 'ok') {
-      return { name: info.name, provider: '', line: 'Lane ' + info.name, detail: '', readOnly: false, modeNote: '', blocked: info.state === 'loading' ? 'The lane is still loading.' : (info.state === 'missing' ? 'Lane “' + info.name + '” was not found. ' : 'Lane “' + info.name + '” is not approved. ') + laneHint(info) };
+      return { name: info.name, provider: '', line: 'Lane ' + info.name, detail: '', readOnly: false, fullOk: false, modeNote: '', blocked: info.state === 'loading' ? 'The lane is still loading.' : (info.state === 'missing' ? 'Lane “' + info.name + '” was not found. ' : 'Lane “' + info.name + '” is not approved. ') + laneHint(info) };
     }
     const l = info.lane;
     const readOnly = l.readOnly === true || l.implementer === 'agy';
-    const modeNote = l.implementer === 'agy' ? 'agy lanes are read-only in this version.' : readOnly ? 'This lane is read-only.' : l.sandbox === 'danger-full-access' ? 'This lane has no sandbox: in write mode it has full access.' : '';
-    return { name: info.name, provider: l.implementer, line: 'Runs on lane ' + info.name + ' · ' + l.implementer, detail: [l.model, l.variant || effortText(l.effort)].filter(Boolean).join(' · '), readOnly, modeNote, blocked: '' };
+    const modeNote = l.implementer === 'agy' ? 'agy lanes are read-only in this version' + (card.allowFull === true && card.fullStale !== true ? ', except with full access.' : '.') : readOnly ? 'This lane is read-only.' : l.sandbox === 'danger-full-access' ? 'This lane has no sandbox: in write mode it has full access.' : '';
+    return { name: info.name, provider: l.implementer, line: 'Runs on lane ' + info.name + ' · ' + l.implementer, detail: [l.model, l.variant || effortText(l.effort)].filter(Boolean).join(' · '), readOnly, fullOk: l.readOnly !== true, modeNote, blocked: '' };
   }
   // The lane name a task or idea holds, '' for none. A card file written by hand can hold anything: only a name counts.
   const laneOf = (card) => (card && typeof card.lane === 'string' ? card.lane : '');
@@ -168,7 +192,7 @@
     ((lanes && lanes.available && lanes.lanes) || []).forEach((l) => {
       const why = l.approved === false ? 'not approved' : l.relay === false ? 'relay not installed' : '';
       const hint = why === 'not approved' ? 'Approve this project’s lane config with the delegate-setup skill.' : why ? 'Install the ' + l.implementer + '-delegate skill to use this lane.' : '';
-      (l.source === 'project' ? rows.project : rows.global).push({ key: 'lane:' + l.name, kind: 'lane', name: l.name, provider: l.implementer, model: l.model || '', effort: l.variant || effortText(l.effort), desc: '', where: l.source === 'project' ? 'project' : 'global', why, hint, readOnly: l.readOnly === true || l.implementer === 'agy', overrides: l.source === 'project' && l.overridesGlobal === true });
+      (l.source === 'project' ? rows.project : rows.global).push({ key: 'lane:' + l.name, kind: 'lane', name: l.name, provider: l.implementer, model: l.model || '', effort: l.variant || effortText(l.effort), desc: '', where: l.source === 'project' ? 'project' : 'global', why, hint, readOnly: l.readOnly === true || l.implementer === 'agy', laneReadOnly: l.readOnly === true, overrides: l.source === 'project' && l.overridesGlobal === true });
     });
     return rows;
   }

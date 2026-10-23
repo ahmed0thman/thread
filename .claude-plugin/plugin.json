@@ -1,6 +1,6 @@
 {
   "name": "thread",
-  "version": "0.24.2",
+  "version": "0.25.0",
   "description": "A local board for Claude Code: Claude records tasks and asks its questions and reviews as waiting items on cards, you answer them together, and a task with acceptance criteria is not marked done until you approve. Sub-agent runs, side threads and Codex, OpenCode or Claude lane work show live on the cards they belong to.",
   "author": {
     "name": "Ahmed Hisham"

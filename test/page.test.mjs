@@ -925,7 +925,7 @@ test('lane thread: the trace says in one line what the provider shows of a turn'
 
 test('start step for a card with a lane: the lane line, read-only when the lane is, and the reason when it cannot start', () => {
   const { page } = lanePage(LANES);
-  assert.deepEqual(plain(page.laneStartPlan(lcard('code-codex'))), { name: 'code-codex', provider: 'codex', line: 'Runs on lane code-codex · codex', detail: 'gpt-fake · high', readOnly: false, modeNote: '', blocked: '' });
+  assert.deepEqual(plain(page.laneStartPlan(lcard('code-codex'))), { name: 'code-codex', provider: 'codex', line: 'Runs on lane code-codex · codex', detail: 'gpt-fake · high', readOnly: false, fullOk: true, modeNote: '', blocked: '' });
   const ui = page.laneStartPlan(lcard('ui-open', { kind: 'idea' }));
   assert.equal(ui.detail, 'vendor/model-x · max');
   page.setLanes({ ...LANES, lanes: [{ ...LANES.lanes[0], readOnly: true }] });
@@ -1264,6 +1264,32 @@ test('lane access: agy is read-only, a codex lane with no sandbox says so, and a
   page.setLanes({ ...LANES, lanes: [{ ...LANES.lanes[0], sandbox: 'danger-full-access' }, { ...LANES.lanes[0], name: 'agy-fast', implementer: 'agy' }] });
   assert.equal(access(lcard('code-codex')), 'Full access (no sandbox)');
   assert.equal(access(lcard('agy-fast')), 'Read-only');
+});
+
+test('lane access and the start plan with full access: a full thread says so, agy and a writable lane may be started with it, a read-only lane may not', () => {
+  const { page } = lanePage({ ...LANES, lanes: [LANES.lanes[0], { ...LANES.lanes[0], name: 'agy-fast', implementer: 'agy' }, { ...LANES.lanes[0], name: 'ro', readOnly: true }] });
+  const access = (card) => plain(page.laneRows(card)).find((r) => r[0] === 'Access')[1];
+  assert.equal(access(lthread(SNAP({ implementer: 'agy' }), 'idle', { mode: 'full' })), 'Full access (no sandbox, no permission checks)');
+  assert.equal(access(lthread(SNAP({ sandbox: 'workspace-write' }), 'idle', { mode: 'full' })), 'Full access (no sandbox, no permission checks)');
+  assert.equal(page.laneStartPlan(lcard('code-codex')).fullOk, true);
+  assert.equal(page.laneStartPlan(lcard('agy-fast')).fullOk, true, 'agy is read-only only in write mode');
+  assert.equal(page.laneStartPlan(lcard('agy-fast')).readOnly, true);
+  assert.equal(page.laneStartPlan(lcard('ro')).fullOk, false, 'a read-only lane has no full access');
+  assert.equal(page.laneStartPlan(lcard('gone')).fullOk, false);
+  assert.equal(page.laneStartPlan({ ...lcard('agy-fast'), allowFull: true }).modeNote, 'agy lanes are read-only in this version, except with full access.');
+  assert.equal(page.laneStartPlan(lcard('agy-fast')).modeNote, 'agy lanes are read-only in this version.');
+});
+
+test('the card page offers the Allow full access switch, the Full access mode and the tag, and the start step offers it only for a card that allows it', () => {
+  assert.match(html, /const fFull = !create && !isMs \? h\('input'\) : null;/, 'not on a milestone or a new card');
+  assert.match(html, /'Allow full access'/);
+  assert.match(html, /A worker started for this card may run any command as you, with no sandbox: the GPU, the network, every file\./);
+  assert.match(html, /if \(fFull && fFull\.checked !== P\.base\.allowFull\) patch\.allowFull = fFull\.checked;/, 'saved with the other fields');
+  assert.match(html, /fFull\.disabled = ro \|\| isRemote\(\)/, 'read-only when the page is, and through the tunnel');
+  assert.match(html, /if \(fullOn\(cardNow\) && \(!lp \|\| lp\.fullOk\)\) modes\.push\(\['full', 'Full access'\]\);/, 'the radio only for a card that allows it (and has not changed since), and a lane that may');
+  assert.match(html, /fullTag\(c\)\]\.filter\(Boolean\)/, 'the tag on the card page');
+  assert.match(html, /const ft = fullTag\(card\);/, 'and on the tile');
+  assert.match(html, /t\.mode === 'full' \? 'Full access' : t\.mode === 'write' \? 'Can edit files' : 'Read-only'/, 'the thread page says it');
 });
 
 test('start step: it says what runs, offers only read access for agy, and warns about full access', () => {
@@ -1642,4 +1668,55 @@ test('the Milestones view shows a state tag and the waiting items of a milestone
   assert.match(html, /const MS_ORDER = \{ open: 0, empty: 1, done: 2 \};/);
   assert.match(html, /const wt = waitTag\(milestoneWaits\(current\.cards, m\.id\), 'milestone'\);/);
   assert.doesNotMatch(html, /if \(prog\) el\.appendChild\(progressEl\(prog\)\)/, 'the board face has no milestone progress');
+});
+
+test('a full-access thread says why it cannot take a follow-up, and its page offers to take the switch away', () => {
+  const m = /\/\/ ---- delegation lanes[^\n]*\n([\s\S]*?)\/\/ ---- end delegation lanes ----/.exec(html);
+  let cards = [];
+  const page = vm.runInNewContext(`let lanes = null;\n${m[1]}\n({ fullBlock, fullSwitchId })`, vm.createContext({ findCard: (id) => cards.find((c) => c.id === id) || null }));
+  const th = (over = {}, thread = {}) => ({ id: 'c5', kind: 'thread', title: 'T', thread: { mode: 'full', runState: 'idle', ...thread }, ...over });
+  // a card started as a thread: its own switch
+  assert.equal(page.fullBlock(th({ allowFull: true })), '');
+  assert.match(page.fullBlock(th()), /^Full access is no longer allowed for c5: allow it on that card’s page first\.$/);
+  assert.equal(page.fullBlock(th({}, { mode: 'write' })), '', 'only a full thread is judged');
+  // a thread that works for a card: that card's switch, and whether its text changed since
+  cards = [{ id: 'c2', kind: 'task', title: 'Render' }];
+  assert.match(page.fullBlock(th({}, { forCard: 'c2' })), /no longer allowed for c2/);
+  cards = [{ id: 'c2', kind: 'task', allowFull: true }];
+  assert.equal(page.fullBlock(th({}, { forCard: 'c2' })), '');
+  cards = [{ id: 'c2', kind: 'task', allowFull: true, fullStale: true }];
+  assert.match(page.fullBlock(th({}, { forCard: 'c2' })), /^The title or note of c2 changed after full access was allowed: allow it again on that card’s page\.$/);
+  cards = [{ id: 'c2', kind: 'thread', allowFull: true }];
+  assert.match(page.fullBlock(th({}, { forCard: 'c2' })), /not allowed for c2/, 'a thread allows nothing for another');
+  cards = [];
+  assert.equal(page.fullBlock(th({}, { forCard: 'c2' })), '', 'a card the page does not have is left to the server');
+  // the switch the thread's page can take away
+  assert.equal(page.fullSwitchId(th({ allowFull: true }, { mode: 'read' })), 'c5');
+  assert.equal(page.fullSwitchId(th()), '');
+  cards = [{ id: 'c2', kind: 'task', allowFull: true }];
+  assert.equal(page.fullSwitchId(th({}, { forCard: 'c2' })), 'c2');
+  assert.equal(page.fullSwitchId(th({}, { forCard: 'c2', mode: 'write' })), '', 'a write thread has none to show');
+  assert.equal(page.fullSwitchId({ id: 'c1', kind: 'task', allowFull: true }), '');
+  assert.match(html, /const away = actionBtn\('Take away full access', 'small', 'fullaway:'/);
+  assert.match(html, /if \(isRO\(\) \|\| isRemote\(\)\) setOff\(away, true\);/, 'off on a read-only board and through the tunnel');
+  assert.match(html, /\{ allowFull: false \}/, 'it only ever sends off');
+  assert.match(html, /const fb = fullBlock\(card\);\s*if \(fb\) return 'This thread cannot take a follow-up\. ' \+ fb;/, 'the message box says why');
+});
+
+test('the worker picker says an agy lane is read-only except with full access, and another read-only lane cannot edit files', () => {
+  assert.match(html, /r\.provider === 'agy' && !r\.laneReadOnly \? 'This lane is read-only, except with full access' : 'This lane cannot edit files'/);
+  const { page } = lanePage({ ...LANES, lanes: [{ ...LANES.lanes[0], name: 'agy-fast', implementer: 'agy' }, { ...LANES.lanes[0], name: 'agy-ro', implementer: 'agy', readOnly: true }] });
+  const rows = plain(page.workerRows().global);
+  assert.deepEqual(rows.map((r) => [r.name, r.readOnly, r.laneReadOnly]), [['agy-fast', true, false], ['agy-ro', true, true]]);
+});
+
+test('a lane thread in full mode: the follow-up needs its switch, a read-only lane refuses it, an agy lane does not', () => {
+  const { page } = lanePage({ ...LANES, lanes: [{ ...LANES.lanes[0], relay: true }, { ...LANES.lanes[0], name: 'agy-fast', implementer: 'agy', relay: true }, { ...LANES.lanes[0], name: 'ro', readOnly: true, relay: true }] });
+  const full = (lane, implementer, over = {}) => ({ ...lthread(SNAP({ name: lane, implementer }), 'idle', { mode: 'full' }), ...over });
+  assert.match(page.laneFollowUp(full('code-codex', 'codex')).text, /^Not possible: full access is no longer allowed for c\d+: allow it on that card’s page first\.$/);
+  assert.equal(page.laneFollowUp(full('code-codex', 'codex', { allowFull: true })).ok, true);
+  assert.equal(page.laneFollowUp(full('agy-fast', 'agy', { allowFull: true })).ok, true, 'agy may be continued in full mode');
+  assert.match(page.laneFollowUp(full('ro', 'codex', { allowFull: true })).text, /read-only now/);
+  const write = lthread(SNAP({ name: 'agy-fast', implementer: 'agy' }), 'idle', { mode: 'write' });
+  assert.match(page.laneFollowUp(write).text, /read-only now/, 'a write thread on agy is still refused');
 });

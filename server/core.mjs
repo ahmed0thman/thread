@@ -8,12 +8,12 @@ import { existsSync, lstatSync, readFileSync, statSync, readdirSync } from 'node
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dataDir, envValue, legacyStores, mainCheckout, nextCardId, now, projectKey, projectPaths, readRepoMark, readLocalState, readState, repoDrift, repoImport, repoRefusal, repoRootOf, runInStore, storeKey, storePinned, updateLocalState, updateState, withLock } from './state.mjs';
+import { cardsFolder, dataDir, envValue, legacyStores, mainCheckout, nextCardId, now, projectKey, projectPaths, readRepoMark, readLocalState, readState, repoDrift, repoImport, repoRefusal, repoRootOf, runInStore, storeKey, storePinned, updateLocalState, updateState, withLock } from './state.mjs';
 import { EFFORTS, cleanEffort, cleanModel, collapse, sameSession, sessionModel } from './sessions.mjs';
 import { ChatOnlyError, DEFAULT_STAGES, readConfig } from './config.mjs';
 import { openWaits, reviewApproved } from './waits.mjs';
 import { notifyActive } from './notify.mjs';
-import { CARD_ID_RE, CARD_ID_SRC, FIELD_NAMES, MAX_DEPENDS, addHistory, cardById, claudeCard, cleanDependsOn, cleanFields, cleanLinkNames, cleanWorker, criteriaCut, criteriaHash, finishedStageIds, gatedByCriteria, hasCriteria, leftDoneAt, liveBlockers, liveDependsOn, liveLinkNames, milestoneCardLinks, pinLeftDone as pinExit, threadById, watchFinished } from './fields.mjs';
+import { CARD_ID_RE, CARD_ID_SRC, FIELD_NAMES, MAX_DEPENDS, addHistory, cardById, claudeCard, cleanDependsOn, cleanFields, cleanLinkNames, cleanWorker, contentHash, criteriaCut, criteriaHash, finishedStageIds, fullAllowed, gatedByCriteria, hasCriteria, leftDoneAt, liveBlockers, liveDependsOn, liveLinkNames, milestoneCardLinks, pinLeftDone as pinExit, threadById, watchFinished } from './fields.mjs';
 import { codeMapNote } from './codemap.mjs';
 import { RESUME, laneSnapshot, requireRunnableLane, unusableLane } from './lanes.mjs';
 import { closeLinkedRun, closeStaleLinkedRuns, closeThreadRuns, linkedRunsPending, openLinkedRun, turnActivityPath } from './runs.mjs';
@@ -30,7 +30,9 @@ export * from './layout.mjs';
 export const STATUSES = DEFAULT_STAGES.map((s) => s.id);
 
 export const KINDS = ['task', 'idea', 'milestone'];
-export const MODES = ['read', 'write'];
+export const MODES = ['read', 'write', 'full'];
+// A mode that may change files. "full" is "write" with no sandbox and no permission checks, and only for a card the user allowed it on.
+export const canWrite = (mode) => mode === 'write' || mode === 'full';
 export const CONTEXTS = ['brief', 'full'];
 export const AGENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const MAX_BRIEF = 50000;
@@ -623,8 +625,15 @@ function checkKindChange(card, kind) {
   if (kind !== 'task' && kind !== 'idea') throw new Error(`a card can only become a task or an idea, not "${kind.slice(0, 40)}"`);
 }
 
-export async function updateCard(projectDirArg, id, { title, note, status, kind, parent, lane, agent, type, priority, labels, blockedBy, criteria, dependsOn, linkNames, worker } = {}, { source = 'claude' } = {}) {
+// `allowFull` is the user's permission for a worker started for this card to run with no sandbox and no permission checks (mode "full"). It is a
+// local, this-machine field (repo.LOCAL_KEYS) and only the board sets it: a call with source 'claude' that names it is refused, never ignored.
+export const ALLOW_FULL_USER_ONLY = 'only the user can allow full access, on the card\'s page on the board; it cannot be set through the tools';
+export async function updateCard(projectDirArg, id, { title, note, status, kind, parent, lane, agent, type, priority, labels, blockedBy, criteria, dependsOn, linkNames, worker, allowFull } = {}, { source = 'claude' } = {}) {
   const cfg = readConfig(projectDirArg);
+  if (allowFull !== undefined) {
+    if (source !== 'user') throw new Error(ALLOW_FULL_USER_ONLY);
+    if (typeof allowFull !== 'boolean') throw new Error('allowFull must be true or false');
+  }
   if (title !== undefined) {
     if (typeof title !== 'string' || !title.trim()) throw new Error('title must not be empty');
   }
@@ -643,6 +652,7 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
   const by = cleanWorker(worker);
   return updateState(projectDirArg, (state) => {
     const card = findCard(state, id, source === 'claude');
+    const hashBefore = contentHash(card);
     const parentId = source === 'claude' ? claudeId(state, parentId0) : parentId0;
     if (source === 'claude' && cleaned.blockedBy) cleaned.blockedBy = claudeIds(state, cleaned.blockedBy);
     if (!isThread(card)) requireTasks(cfg);
@@ -667,6 +677,18 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
     // one worker: setting a lane takes the agent off, and setting an agent takes the lane off
     if (laneName && card.agent !== undefined) { delete card.agent; changed = true; fields.push('agent'); }
     if (agentName && card.lane !== undefined) { delete card.lane; changed = true; fields.push('lane'); }
+    // the user's switch for full access: a task or idea takes it either way; a thread card (a card that was started as a thread) only loses it
+    // The switch is for the card's title and note as they are (`allowFullHash`, set below once the call's own edits are in): a card whose text changed
+    // since needs the user's yes again, and a yes sent for such a card counts as a change.
+    let fullChange;
+    let bindFull = false;
+    if (allowFull !== undefined && allowFull !== fullAllowed(card)) {
+      if (card.kind === 'milestone') throw new Error('a milestone does no work: full access is for a task or idea');
+      if (isThread(card) && allowFull) throw new Error(`${card.id} is a thread: turn full access on for the card before it is started`);
+      if (allowFull) { card.allowFull = true; bindFull = true; } else { delete card.allowFull; delete card.allowFullHash; }
+      changed = true;
+      fullChange = allowFull;
+    }
     if (source === 'claude') guardCriteria(card, cleaned.criteria);
     const setNow = setFields(state, card, cleaned);
     if (setNow.length) { changed = true; fields.push(...setNow); }
@@ -687,6 +709,11 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
     }
     if (title !== undefined && title.trim() !== card.title) { card.title = title.trim(); changed = true; fields.push('title'); }
     if (note !== undefined && String(note) !== card.note) { card.note = String(note ?? ''); changed = true; fields.push('note'); }
+    // the switch follows the user's own edit of the text it was given for; any other edit (a push, Claude) leaves it behind, which turns it off
+    if (!isThread(card) && card.allowFull === true) {
+      const after = contentHash(card);
+      if (bindFull || (source === 'user' && card.allowFullHash === hashBefore && after !== hashBefore)) card.allowFullHash = after;
+    }
     const from = card.status;
     // A thread's stored stage is set by its run state only: a status it may be sent (its own, or the one it is shown in) is no change.
     if (status !== undefined && !isThread(card) && status !== card.status) {
@@ -722,6 +749,7 @@ export async function updateCard(projectDirArg, id, { title, note, status, kind,
         if (state.repoBacked) watchFinished(card, cfg, ts);
         if (card.status !== from) addHistory(card, source, { type: 'moved', from, to: card.status }, ts, by);
         if (fields.length) addHistory(card, source, { type: 'edited', fields }, ts, by);
+        if (fullChange !== undefined) addHistory(card, source, { type: 'edited', fields: ['full access'], allowed: fullChange }, ts, by);
       }
     }
     return card;
@@ -1093,9 +1121,12 @@ export function buildClaudeArgs(card) {
   const t = card.thread;
   // Read mode names its permission mode too, since the CLI otherwise takes the user's own default (a settings file may skip prompts
   // altogether). dontAsk refuses everything that would prompt; the deny rule beats any allow rule the user's settings add for an edit tool.
-  const modeArgs = t.mode === 'write'
-    ? ['--permission-mode', 'acceptEdits']
-    : ['--permission-mode', 'dontAsk', '--disallowedTools', 'Edit', 'Write', 'NotebookEdit', 'Agent'];
+  // Full access (a card the user allowed it on, see allowFull) skips every permission check; an older version reads that mode as read-only.
+  const modeArgs = t.mode === 'full'
+    ? ['--permission-mode', 'bypassPermissions']
+    : t.mode === 'write'
+      ? ['--permission-mode', 'acceptEdits']
+      : ['--permission-mode', 'dontAsk', '--disallowedTools', 'Edit', 'Write', 'NotebookEdit', 'Agent'];
   const allow = allowedTools();
   const allowArgs = allow.length ? ['--allowedTools', ...allow] : [];
   const dirs = Array.isArray(t.dirs) ? t.dirs.filter((d) => typeof d === 'string' && isAbsolute(d)) : [];
@@ -1118,9 +1149,12 @@ export function buildRelayArgs(projectDirArg, card, { brief, outDir, timeoutMs }
   const t = card.thread;
   const l = t.lane;
   const args = ['--brief', brief, '--cd', projectDirArg, '--lane', l.name, '--out-dir', outDir, '--timeout', `${Math.max(1, Math.round(timeoutMs / 1000))}s`];
-  if (t.mode !== 'write') args.push('--read-only');
+  const full = t.mode === 'full';
+  if (!canWrite(t.mode)) args.push('--read-only');
   // codex applies its sandbox on a resumed turn only when one is passed, so every turn passes it.
-  else if (l.implementer === 'codex') args.push('--sandbox', l.sandbox || 'workspace-write');
+  else if (l.implementer === 'codex') args.push('--sandbox', full ? 'danger-full-access' : l.sandbox || 'workspace-write');
+  // claude and agy have no sandbox flag: full access is their flag that skips permissions (opencode has no sandbox, and a build run already passes --auto)
+  else if (full && (l.implementer === 'claude' || l.implementer === 'agy')) args.push('--dangerously-skip-permissions');
   if (l.session) args.push(RESUME[l.implementer].flag, l.session);
   return args;
 }
@@ -1151,7 +1185,7 @@ export function buildPrompt(card, projectDirArg) {
   const turn = t.turns[t.turns.length - 1];
   const text = turn ? turn.prompt : '';
   // A lane's read-only turn runs in the provider's plan or read-only mode: say what that asks of the answer.
-  const laneRead = t.lane != null && t.mode !== 'write' ? [LANE_READ_NOTE] : [];
+  const laneRead = t.lane != null && !canWrite(t.mode) ? [LANE_READ_NOTE] : [];
   if (!t.sessionId && !(t.lane && t.lane.session)) {
     const brief = threadContext(t) === 'brief';
     const mapNote = projectDirArg && readConfig(projectDirArg).codeMap ? codeMapNote(projectDirArg) : '';
@@ -1163,9 +1197,11 @@ export function buildPrompt(card, projectDirArg) {
         : 'You are now a side thread copied from the main session. The main session continues separately and cannot see anything you do here unless it asks for your report.',
       ...context,
       `Task: ${text}`,
-      t.mode === 'write'
-        ? 'You may edit files. Keep changes limited to this task.'
-        : 'Do not modify any files. Read, search and analyse only.',
+      t.mode === 'full'
+        ? 'You may edit files and run commands without a sandbox or permission checks. Keep changes limited to this task.'
+        : t.mode === 'write'
+          ? 'You may edit files. Keep changes limited to this task.'
+          : 'Do not modify any files. Read, search and analyse only.',
       ...laneRead,
       ...(mapNote ? [mapNote] : []),
       'End your reply with a hand-back digest using exactly these headings: "## Happened", "## Decided", "## Changed", "## Open".',
@@ -1243,7 +1279,7 @@ async function launchOptions(projectDirArg, { sessionId, mode, extraDirs, contex
   if (typeof sessionId !== 'string' || !UUID_RE.test(sessionId)) {
     throw new Error('session_id must be a UUID (the main session id)');
   }
-  if (!MODES.includes(mode)) throw new Error(`invalid mode "${mode}" (use read or write)`);
+  if (!MODES.includes(mode)) throw new Error(`invalid mode "${mode}" (use read, write or full)`);
   if (!CONTEXTS.includes(context)) throw new Error(`invalid context "${context}" (use brief or full)`);
   const text = context === 'brief' && typeof brief === 'string' ? brief.trim() : '';
   if (text.length > MAX_BRIEF) {
@@ -1309,10 +1345,31 @@ function openTurnRun(projectDirArg, state, card) {
   }
 }
 
+// Mode "full" runs with no sandbox and no permission checks, so it needs the user's say-so: `allowFull` on the card the thread works for, set on the
+// board (updateCard refuses it from Claude). It is checked when a thread starts, at every follow-up and again when the runner launches a turn.
+const FULL_NEEDS_CARD = 'mode "full" runs with no sandbox and no permission checks, and only for a card the user allowed it on: pass card (a task or idea) after the user turned on "Allow full access" on its page on the board';
+const fullNotAllowed = (card, id) => (card && card.allowFull === true && card.kind !== 'thread' && card.kind !== 'milestone'
+  ? `full access was allowed for ${id} before its title or note changed: the user must allow it again on that card's page on the board ("Allow full access")`
+  : `full access is not allowed for ${id}: only the user can allow it, on that card's page on the board ("Allow full access")`);
+// '' when the full-access thread `thread` may run a turn. A thread that works for a card needs that card, a task or idea, to allow it (fullAllowed);
+// only a thread without one, a card that was started as a thread, is allowed by its own switch.
+export function fullRefusal(cards, thread) {
+  const id = thread.thread && thread.thread.forCard;
+  const target = id ? cardById(cards, id) : thread;
+  const ok = target && target.kind !== 'milestone' && (id ? target.kind !== 'thread' : target === thread) && fullAllowed(target);
+  return ok ? '' : fullNotAllowed(target, id || thread.id);
+}
+// True when `id` is a card file of a project kept in the repo: the runner reads this machine's local store, which has no repo card in it.
+export function isRepoCardFile(projectDirArg, id) {
+  const root = repoRootOf(projectDirArg);
+  return !!root && typeof id === 'string' && CARD_ID_RE.test(id) && existsSync(join(cardsFolder(root), `${id}.json`));
+}
+
 export async function startThread(projectDirArg, { title, task, sessionId, mode = 'read', extraDirs, context, brief, agent, model, effort, parent, lane, card: forCard } = {}) {
   refuseInsideThread('start');
   const wantCard = typeof forCard === 'string' ? forCard.trim() : '';
   if (wantCard) requireTasks(readConfig(projectDirArg));
+  if (mode === 'full' && !wantCard) throw new Error(FULL_NEEDS_CARD);
   const t = typeof title === 'string' ? title.trim() : '';
   const k = typeof task === 'string' ? task.trim() : '';
   const opts = await launchOptions(projectDirArg, { sessionId, mode, extraDirs, context, brief, agent, model, effort, lane });
@@ -1327,6 +1384,7 @@ export async function startThread(projectDirArg, { title, task, sessionId, mode 
       const target = findCard(state, wantCard, true);
       if (target.kind === 'thread') throw new Error(`card ${wantCard} is a thread: a thread does the work of a task or an idea`);
       if (target.kind === 'milestone') throw new Error(`card ${wantCard} is a milestone: a thread does the work of a task or an idea`);
+      if (mode === 'full' && !fullAllowed(target)) throw new Error(fullNotAllowed(target, target.id));
       forId = target.id;
     }
     const ts = now();
@@ -1379,6 +1437,7 @@ export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mo
   requireTasks(readConfig(projectDirArg));
   const existing = cardById(readState(projectDirArg).cards, cardId);
   if (existing && existing.kind !== 'thread' && existing.kind !== 'milestone') refuseThreadFields(existing, readState(projectDirArg).cards);
+  if (mode === 'full' && existing && !fullAllowed(existing)) throw new Error(fullNotAllowed(existing, existing.id));
   const worker = cardWorker(existing);
   if ((expectLane !== undefined && expectLane !== worker.lane) || (expectAgent !== undefined && expectAgent !== worker.agent)) {
     throw new StaleCardError('the card\'s worker (lane or agent) changed since you looked at it; look at it again and then start it');
@@ -1394,6 +1453,7 @@ export async function startThreadFromCard(projectDirArg, cardId, { sessionId, mo
     const now = cardWorker(card);
     if (now.lane !== worker.lane || now.agent !== worker.agent) throw new Error(`card ${cardId} changed while it was starting; try again`);
     refuseThreadFields(card, state.cards);
+    if (mode === 'full' && !fullAllowed(card)) throw new Error(fullNotAllowed(card, card.id));
     const text = typeof card.note === 'string' ? card.note.trim() : '';
     // A card from a file in the repo: the thread stands for it on this machine, hides it, and only it may delete the file when it is removed.
     if (state.repoBacked && state.base.shared.has(card.id)) {
@@ -1417,6 +1477,11 @@ export async function continueThread(projectDirArg, id, message, { sessionId } =
   // A lane thread is checked against the lanes as they are now, before the lock is taken (loading them can take seconds).
   let fresh = null;
   const before = threadById(readState(projectDirArg).cards, id);
+  // a full-access thread goes on only while the user still allows it on the card (checked again under the lock below)
+  if (isThread(before) && before.thread.mode === 'full') {
+    const bad = fullRefusal(readState(projectDirArg).cards, before);
+    if (bad) throw new Error(`thread ${id} cannot continue: ${bad}`);
+  }
   if (isThread(before) && before.thread.lane != null && (before.thread.runState === 'idle' || before.thread.runState === 'failed')) {
     const l = before.thread.lane;
     const bad = unusableLane(l);
@@ -1432,6 +1497,10 @@ export async function continueThread(projectDirArg, id, message, { sessionId } =
     const th = card.thread;
     if (th.runState === 'running') throw new Error(`thread ${id} is still running`);
     if (th.runState === 'ended') throw new Error(`thread ${id} has ended`);
+    if (th.mode === 'full') {
+      const bad = fullRefusal(state.cards, card);
+      if (bad) throw new Error(`thread ${id} cannot continue: ${bad}`);
+    }
     if (th.lane != null) {
       if (!fresh) throw new Error(`thread ${id} changed while the follow-up was starting; try again`);
       if (!th.lane.session) throw new Error(`thread ${id} has no session to continue: the ${th.lane.implementer} provider gave none; start a new thread instead`);

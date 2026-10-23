@@ -210,6 +210,8 @@
     if (card.kind === 'task' || card.kind === 'idea') ctx.push([workerRows(), workerOffered(card), !!lanes, !!agents, isRemote()]);   // the Worker field and the start step's worker choice
     ctx.push(refSig([card.note].concat(waitsOf(card).map((w) => w.text)).join('\n')));   // the card and item ids in its texts that are links now
     if (card.kind === 'milestone') ctx.push(childrenOf(current.cards, card.id).map((k) => [k.id, k.kind, k.title, k.status, k.thread && k.thread.runState]));
+    // a thread's full access can be taken away on the card it works for, which is another card: its switch and the follow-up block it gives
+    if (isThread(card)) ctx.push([fullSwitchId(card), fullBlock(card)]);
     return ctx;
   }
   function panelKey(card) { return JSON.stringify([card, isRO(), isThread(card) ? sessionInfo(card.thread.parentSessionId) : null, panelCtx(card)]); }

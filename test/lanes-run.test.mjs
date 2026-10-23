@@ -535,7 +535,7 @@ test('lane_list lists the lanes with what each can do, flags the unusable ones, 
   const un = new McpClient(e, { FAKE_DELEGATE_MODE: 'untrusted' });
   t.after(() => un.kill());
   await un.init();
-  assert.match((await un.call('lane_list')).text, /^- agy-fast: .*, read-only \(agy lanes are read-only in this version\), this project, not approved: approve this project's lane config with the delegate-setup skill \(cannot be used: the agy relay is not installed\)$/m);
+  assert.match((await un.call('lane_list')).text, /^- agy-fast: .*, read-only \(agy lanes are read-only in this version, except in mode "full"\), this project, not approved: approve this project's lane config with the delegate-setup skill \(cannot be used: the agy relay is not installed\)$/m);
 });
 
 test('thread_status and thread_report name the lane and provider; thread_start answers with it', async (t) => {

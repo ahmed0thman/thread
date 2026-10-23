@@ -81,7 +81,7 @@ A question, choice (with an **Other** answer in your own words), to-do or review
 
 ### Runs linked to their cards
 
-A sub-agent call whose description starts with the card id, or a thread started for the card on a Codex, OpenCode, Antigravity or Claude lane, shows its prompt, live steps and report on that card; a delegate relay that Claude runs itself from the shell does not, and Claude is told not to do that. See [Task and idea pages](docs/board.md#task-and-idea-pages) and [Delegation lanes](docs/delegation.md).
+A sub-agent call whose description starts with the card id, or a thread started for the card on a Codex, OpenCode, Antigravity or Claude lane, shows its prompt, live steps and report on that card; a delegate relay that Claude runs itself from the shell does not, and Claude is told, as a critical rule, not to do that. The card's History shows its runs among its moves and edits. See [Task and idea pages](docs/board.md#task-and-idea-pages) and [Delegation lanes](docs/delegation.md).
 
 ## Limits and data flow
 
@@ -90,6 +90,7 @@ A sub-agent call whose description starts with the card id, or a thread started 
 - **Thread cards cannot carry acceptance criteria.** Reporting a thread returns its digest to the main session without needing your approval, and ending a thread needs none.
 - **A write thread edits the same working tree** as the main session, at the same time.
 - **Read threads are read-only** because of the CLI flags the plugin passes. That is not a sandbox: a command your own allow rules approve by name still runs.
+- **Full access is opt-in, per card.** When you tick **Allow full access** on a card on this machine's board, a worker started for that card may run with no sandbox and no permission checks (the GPU, the network, every file), as you. Claude's tools and the phone link cannot set it; it is not a sandbox against an agent that reads the board token from the data folder. An OpenCode lane, and a Codex lane configured without a sandbox, already run unsandboxed in write mode. See [Full access](docs/security.md#full-access).
 - **The board is local.** It listens on `127.0.0.1`, needs a token, checks Host and Origin on writes and makes no network calls.
 - **The opt-in update check calls GitHub.** With `updateCheck` on, the MCP server asks `api.github.com` once a day which release is the latest: a plain request that carries nothing about you or the project.
 - **The opt-in tunnel uses Cloudflare.** `/thread:board --tunnel` lasts 12 hours and has its own token and route limits.
@@ -104,7 +105,7 @@ More in [Security](docs/security.md).
 
 All of it is the author's own; no outside user reports exist yet. Details, dates and the checks not run are on the [evidence page](docs/evidence.md).
 
-- **Automated suite:** `node --test` runs 1419 tests, all passing on 0.24.2 on Node 20, 22 and 24 in CI, together with `claude plugin validate .`. The [CI workflow](.github/workflows/test.yml) runs both on pushes to main and on pull requests.
+- **Automated suite:** `node --test` runs 1450 tests, all passing on 0.25.0 on Node 20, 22 and 24 in CI, together with `claude plugin validate .`. The [CI workflow](.github/workflows/test.yml) runs both on pushes to main and on pull requests.
 - **The gate and the answers, on 0.22.0, for real** ([details](docs/evidence.md#6-smoke-test-of-the-promoted-workflow-on-0220)): one fresh Claude Code 2.1.299 session in a scratch project, whose first turn asked whether the plugin's guide had arrived and which was then given two tasks with no mention of the board. Claude put both on the board before editing and raised one review item (the second task needed none, so sending two answers at once was not shown). The answer, sent through the board's own route, reached the next turn; asked in the chat to mark the card done, Claude was refused; after an approval through the same route, the move went through. One run, one model.
 - **Real Claude Code checks, on record** ([details](docs/evidence.md#real-claude-code-checks)):
   - a lean thread run on 0.7.0 (2026-10-13);
@@ -120,7 +121,7 @@ The [full index](docs/README.md) groups every feature by what you want to do. By
 - **Start:** [install, update, try a clone](docs/configuration.md#installing-updating-and-trying-a-clone) · [thread quick start](docs/threads.md#quick-start) · [setup](docs/board.md#setup) · [18 workflows](docs/workflows.md)
 - **[Board, milestones and setup](docs/board.md)**
   - Views: [the board](docs/board.md#the-board) · [projects home and top bar](docs/board.md#projects-home-and-top-bar) · [Summary](docs/board.md#the-summary-view) · [Board](docs/board.md#the-board-view) · [List](docs/board.md#the-list-view) · [Milestones view](docs/board.md#the-milestones-view)
-  - Cards: [task and idea pages](docs/board.md#task-and-idea-pages) · [Notify Claude](docs/board.md#notify-claude) · [fields, workers and the done gate](docs/board.md#card-fields-workers-and-the-done-gate) · [card and item links](docs/board.md#card-and-waiting-item-links)
+  - Cards: [task and idea pages](docs/board.md#task-and-idea-pages) · [Notify Claude](docs/board.md#notify-claude) · [fields, workers and the done gate](docs/board.md#card-fields-workers-and-the-done-gate) · [full access](docs/board.md#full-access) · [card and item links](docs/board.md#card-and-waiting-item-links)
   - Planning: [milestones](docs/board.md#milestones) · [custom stages](docs/board.md#custom-stages) · [chat-only mode](docs/board.md#chat-only-mode)
 - **[Waiting items and waking](docs/reviews-and-waking.md)**
   - [Waiting for you](docs/reviews-and-waking.md#waiting-for-you) · [waking the session](docs/reviews-and-waking.md#waking-the-session)
@@ -135,15 +136,15 @@ The [full index](docs/README.md) groups every feature by what you want to do. By
   - [what is shared](docs/storage-and-sync.md#what-is-in-the-repo-and-what-stays-on-the-machine) · [turning it on](docs/storage-and-sync.md#turning-it-on) · [committing](docs/storage-and-sync.md#committing-the-folder) · [worktrees](docs/storage-and-sync.md#worktrees-and-sub-folders)
   - [card ids](docs/storage-and-sync.md#card-ids) · [conflicts](docs/storage-and-sync.md#conflicts) · [older sessions and the import hint](docs/storage-and-sync.md#older-sessions-and-the-import-hint)
 - **[Security and the tunnel](docs/security.md)**
-  - [security](docs/security.md#security) · [the update check](docs/security.md#the-update-check) · [opening the board from your phone](docs/security.md#opening-the-board-from-your-phone-tunnel)
+  - [security](docs/security.md#security) · [full access](docs/security.md#full-access) · [the update check](docs/security.md#the-update-check) · [opening the board from your phone](docs/security.md#opening-the-board-from-your-phone-tunnel)
 - **Reference:** [commands](docs/commands.md) · [configuration](docs/configuration.md#configuration) · [where the settings live](docs/configuration.md#where-the-settings-live) · [troubleshooting](docs/troubleshooting.md) · [evidence](docs/evidence.md) · [changelog](CHANGELOG.md)
 
 ## Latest release
 
-**0.24.2** (2026-10-23)
+**0.25.0** (2026-10-23)
 
-- Every choice item has an **Other** row, so you can answer in your own words when no option fits.
-- A sub-agent run's card shows its report again: current Claude Code hands it back with a `SubagentHandback` call, which the plugin now reads.
+- **Full access per card:** tick **Allow full access** on a card, and a worker started for it can run with no sandbox (for GPU rendering, the network and so on). Only you can allow it, on this machine's board, and you can take it away from the thread's page.
+- A card's **History** shows the runs on it, and Claude is told, as a critical rule, to hand a card to a lane through `thread_start` so the lane's run shows on the card.
 
 All releases: [CHANGELOG.md](CHANGELOG.md).
 

@@ -40,6 +40,8 @@
 .start-opts > * { flex: 1 1 190px; }
 .radio { display: flex; align-items: center; gap: var(--s2); cursor: pointer; }
 .radio input { margin: 0; accent-color: var(--accent); }
+.full-field { display: flex; flex-direction: column; gap: 4px; }
+.full-field .foot-note { margin-left: 24px; }
 .start-btns { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
 
 .field { display: flex; flex-direction: column; gap: 6px; }

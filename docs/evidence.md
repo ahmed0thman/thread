@@ -8,7 +8,7 @@ The facts below come from the notes on the author's own thread board and from gi
 
 ## Automated checks
 
-The suite runs with `node --test` and the plugin directory validator with `claude plugin validate .`, both from the repository root. The count of tests is whatever the runner reports on the day you run it; numbers quoted elsewhere on this page are what the author saw on a past date, for example 213 tests at 0.7.0, 264 at 0.9.0, 695 and then 741 on 2026-10-14. The current plugin version is 0.24.2.
+The suite runs with `node --test` and the plugin directory validator with `claude plugin validate .`, both from the repository root. The count of tests is whatever the runner reports on the day you run it; numbers quoted elsewhere on this page are what the author saw on a past date, for example 213 tests at 0.7.0, 264 at 0.9.0, 695 and then 741 on 2026-10-14. The current plugin version is 0.25.0.
 
 On 2026-10-20, at 0.22.0 with the launch changes in the working tree, the suite passed in full (1297 tests; 1298 at the 0.23.0 release) on Node 20.18.1, 22.13.0 and 24.16.0 on macOS, and on Node 20.20.2 in a Linux container; `claude plugin validate .` passed on Claude Code 2.1.299. One timing-sensitive assertion in the repo tests, which failed under load on Node 20 and 22, was corrected the same day. The CI workflow (`.github/workflows/test.yml`: the suite on Ubuntu Node 20, 22 and 24 and macOS Node 24, plus the validator) runs on pushes to main and on pull requests; its first run, on the 0.23.0 release commit (2026-10-20), passed every job: the suite on Ubuntu Node 20, 22 and 24 and macOS Node 24, and the validator. On 2026-10-22 the 0.24.0 release commit (1392 tests) passed every job as well: the suite on Ubuntu Node 20, 22 and 24 and macOS Node 24, and the validator on Claude Code 2.1.304. On 2026-10-23 the 0.24.1 release commit (1394 tests) passed every job too. The 0.24.2 release commit (1419 tests) failed one job, Ubuntu Node 22: a repo linked-run test swept once while the runner was still exiting (the sweep rightly leaves a beating runner alone). The test was fixed to sweep until the runner is gone, and the next commit passed every job.
 
@@ -134,6 +134,26 @@ What was asked, and what happened:
 4. **The done gate.** Asked in the chat to "mark the coupon fix card done now". Claude closed the open review item as answered in the chat and called the stage change; the plugin refused it: a card with acceptance criteria moves to done only after an approval given on the board. Claude did not retry: it raised a third review item asking for Approve on the board. After that approval, the next turn moved the card to done, confirmed from the stored state rather than from the chat.
 
 Not exercised: the Send and Approve clicks in a real browser (only the routes they call); two items answered in one batch (only one existed); a question or choice item; a long interactive session rather than resumed `-p` turns. One run on one model: what Claude did on its own here is an observation, not a guarantee.
+
+### 7. What full access lifts, per provider
+
+A quick check, approved by the owner, of the flags the plugin passes in mode `full`: does each one really lift what the normal mode blocks? It ran the CLIs directly with those flags, not through the plugin's runner (the argv the runner builds is checked by the tests against fakes).
+
+| | |
+|---|---|
+| Date | 2026-10-23 |
+| Client versions | Claude Code 2.1.299 (model haiku), codex-cli 0.160.0 (its configured model, effort low) |
+| Where | An empty scratch folder; no board; the scratch Claude session folder was deleted afterwards |
+| The command | `curl -sI https://example.com`, asked for in a one-line prompt, once per mode |
+
+| Mode | Claude (`claude -p`) | Codex (`codex exec`) |
+|---|---|---|
+| Normal (`--permission-mode acceptEdits`; `--sandbox workspace-write`) | refused the Bash call | ran it inside the sandbox: `Could not resolve host` (no network) |
+| Full (`--permission-mode bypassPermissions`; `--sandbox danger-full-access`) | `HTTP/2 200` | `HTTP/2 200` |
+
+The same day the opencode relay (free model `opencode/glm-5.3-flash-free`, build agent with `--auto`, which write and full both pass, since opencode has no sandbox) ran the command too: `HTTP/2 200`.
+
+Not exercised: the agy relay with `--dangerously-skip-permissions` (the session's permission check refused to run a skip flag the owner had not approved for agy), the claude-delegate relay with its skip flag, a GPU job, and a run through the plugin's runner end to end. One run each.
 
 ## Token use, measured once
 

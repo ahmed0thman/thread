@@ -337,6 +337,30 @@
     const FX = isMs ? null : fieldsEditor(fxKeys(), () => onTouched(), !create);
     if (FX) { body.appendChild(FX.root); FX.set(P.base.fields); FX.show(fxKeys()); }
 
+    // Full access: the user's switch for starting a worker of this card with no sandbox and no permission checks (mode "full"). Only the board on
+    // this computer sets it, so the tunnel gets it disabled; a milestone and a new card have none. Saved with Save, like the other fields.
+    const fFull = !create && !isMs ? h('input') : null;
+    let fullField = null, fullStaleNote = null;
+    const fullOn = (c) => c.allowFull === true && c.fullStale !== true;
+    if (fFull) {
+      P.base.allowFull = fullOn(card);
+      fFull.type = 'checkbox';
+      fFull.id = 'f-full';
+      fFull.checked = P.base.allowFull;
+      const fullNote = h('span', 'foot-note', 'A worker started for this card may run any command as you, with no sandbox: the GPU, the network, every file.');
+      fullNote.id = 'f-full-note';
+      fFull.setAttribute('aria-describedby', fullNote.id);
+      const fullLabel = h('label', 'radio');
+      fullLabel.htmlFor = 'f-full';
+      fullLabel.append(fFull, h('span', null, 'Allow full access'));
+      fullField = h('div', 'field full-field');
+      // the card's title or note changed after it was allowed (a push, Claude): the switch counts as off until it is ticked and saved again
+      fullStaleNote = h('span', 'foot-note full-stale', 'Needs to be allowed again: the title or note changed after you allowed full access. Tick it and save to allow it for the card as it is now.');
+      fullStaleNote.hidden = card.fullStale !== true;
+      fullField.append(fullLabel, fullNote, fullStaleNote);
+      body.appendChild(fullField);
+    }
+
     // a milestone's page lists its cards, grouped by stage, and copies that list as a report
     const msSection = isMs ? h('section', 'ms-cards') : null;
     if (msSection) { body.appendChild(msSection); P.root.classList.add('is-ms'); fNote.rows = 3; }
@@ -363,6 +387,7 @@
       if (fTitle.value !== P.base.title || fNote.value !== P.base.note || (fStatus && fStatus.value !== P.base.status)) return true;
       if (fMs && fMs.value !== P.base.parent) return true;
       if (WE && WE.dirty()) return true;
+      if (fFull && fFull.checked !== P.base.allowFull) return true;
       if (FX && Object.keys(fieldsPatch(P.base.fields, FX.values(), fxKeys())).length) return true;
       return create ? fKind.value !== P.base.kind : false;
     };
@@ -428,6 +453,7 @@
             if (fStatus && fStatus.value !== P.base.status) patch.status = fStatus.value;
             if (fMs && fMs.value !== P.base.parent) patch.parent = fMs.value;   // '' takes the card out of its milestone
             if (WE) Object.assign(patch, WE.patch());   // a lane or an agent only when it was changed: null takes it off
+            if (fFull && fFull.checked !== P.base.allowFull) patch.allowFull = fFull.checked;
             if (FX) {
               const fp = fieldsPatch(P.base.fields, FX.values(), fxKeys());
               // the Type select is the card's kind and type together
@@ -446,6 +472,7 @@
             wrote();
             P.base = { title: saved.title, note: saved.note || '', status: saved.status, kind: saved.kind, type: fieldValues(saved).type, parent: saved.parent || '', fields: isMs ? fieldValues(saved) : cardValues(saved) };
             if (FX) FX.set(P.base.fields);
+            if (fFull) { P.base.allowFull = fullOn(saved); fFull.checked = P.base.allowFull; fullStaleNote.hidden = saved.fullStale !== true; }
             if (WE) { WE.saved(saved); workerCard = saved; showWorker(); workerField.hidden = isRemote() || !workerOffered(saved); }
             P.baseUpdatedAt = saved.updatedAt;
             P.latestUpdatedAt = saved.updatedAt;
@@ -466,6 +493,7 @@
       if (fStatus) fStatus.value = P.base.status;
       if (fMs) fMs.value = P.base.parent;
       if (WE) { WE.reset(); showWorker(); }
+      if (fFull) fFull.checked = P.base.allowFull;
       if (fKind) fKind.value = P.base.kind;
       if (FX) { FX.set(P.base.fields); FX.show(fxKeys()); }
       syncMsField();
@@ -500,6 +528,7 @@
       return startSessions().filter(([, info], i) => i === 0 || Date.now() - Date.parse(info.lastSeenAt) <= NOTIFY_RECENT_MS);
     }
 
+    const FULL_MODE_NOTE = 'No sandbox and no permission checks: the worker may run any command as you, with the GPU, the network and every file.';
     const CONTEXT_NOTE = { brief: 'Gets only this card’s title and note.', full: 'Copies the whole session; uses far more tokens.' };
     // A labelled radio choice; the first option is checked.
     function radioGroup(name, legend, options) {
@@ -600,9 +629,15 @@
               if (carry) { ctx.set(carry.context); ctxNote.textContent = CONTEXT_NOTE[ctx.value()]; }
             }
 
-            const mode = radioGroup('start-mode', 'Mode', lp && lp.readOnly ? [['read', 'Read-only']] : [['read', 'Read-only'], ['write', 'Can edit files']]);
+            // Full access (no sandbox, no permission checks) is offered only for a card the user allowed it on; the server checks again. A lane that is read-only has none.
+            const modes = lp && lp.readOnly ? [['read', 'Read-only']] : [['read', 'Read-only'], ['write', 'Can edit files']];
+            if (fullOn(cardNow) && (!lp || lp.fullOk)) modes.push(['full', 'Full access']);
+            const mode = radioGroup('start-mode', 'Mode', modes);
             if (carry) mode.set(carry.mode);
-            mode.box.appendChild(h('p', 'foot-note', lp ? lp.modeNote || 'Edits the same files as your main session.' : 'Edits the same files as your main session.'));
+            const plainNote = lp ? lp.modeNote || 'Edits the same files as your main session.' : 'Edits the same files as your main session.';
+            const modeNote = h('p', 'foot-note', mode.value() === 'full' ? FULL_MODE_NOTE : plainNote);
+            mode.box.appendChild(modeNote);
+            mode.box.addEventListener('change', () => { modeNote.textContent = mode.value() === 'full' ? FULL_MODE_NOTE : plainNote; });
             const opts = h('div', 'start-opts');
             if (ctx) opts.appendChild(ctx.box);
             opts.appendChild(mode.box);
@@ -754,6 +789,7 @@
       if (WE) showWorker();   // the field's own tooltip again when the board is not read-only
       noteEdit.disabled = ro; noteEdit.title = ro ? READONLY_WHY : '';
       if (FX) FX.setDisabled(ro, READONLY_WHY);
+      if (fFull) { fFull.disabled = ro || isRemote(); fFull.title = ro ? READONLY_WHY : isRemote() ? 'Full access can only be allowed on the computer itself, not through the phone link.' : ''; }
       if (ro) P.confirmDelete = P.starting = P.notifying = false;
       renderFoot();
     }
@@ -763,7 +799,7 @@
       if (W) W.update(c);
       title.textContent = c.title;
       const fm = faceModel(c, { cards: current.cards, finished: (b) => finishedIn(b, cfg()), label });
-      headRowWrap.replaceChildren(h('span', 'idchip', c.id), kindMark(c.kind), ...[bugMark(fm), priorityMark(fm)].filter(Boolean));
+      headRowWrap.replaceChildren(h('span', 'idchip', c.id), kindMark(c.kind), ...[bugMark(fm), priorityMark(fm), fullTag(c)].filter(Boolean));
       seenWrap.replaceChildren();
       if (c.seenByClaude === false) seenWrap.appendChild(unseenEl(ws ? 'span' : 'div'));
       if (c.notified === true) seenWrap.appendChild(notifiedEl(ws ? 'span' : 'div', c));
@@ -788,6 +824,13 @@
       });
       syncMsField();
       syncWorkerField(c);
+      if (fFull) {
+        // follows the server while untouched; what the user picked stays, unless the server now says the same
+        const on = fullOn(c);
+        fullStaleNote.hidden = c.fullStale !== true;
+        if (fFull.checked === P.base.allowFull) fFull.checked = on;
+        if (fFull.checked === on) P.base.allowFull = on;
+      }
       if (FX) {
         // the fields follow the server too, one by one, where the user has not touched them
         const nv = cardValues(c), cur = FX.values();
@@ -826,7 +869,7 @@
       metaCreated.replaceChildren(timeEl(c.createdAt));
       metaUpdated.replaceChildren(timeEl(c.updatedAt));
       if (metaDl) laneNodes = showLaneRows(metaDl, laneNodes, c);
-      const ls = laneSig(c) + JSON.stringify([workerRows(), workerOf(c), effectiveWorker(c, NaN).startKey, !!agents]);   // the start step's worker choice follows the lanes and the sub-agents too
+      const ls = laneSig(c) + JSON.stringify([workerRows(), workerOf(c), effectiveWorker(c, NaN).startKey, !!agents, c.allowFull === true, c.fullStale === true]);   // the start step's worker choice follows the lanes and the sub-agents too
       if (P.laneSig !== undefined && P.laneSig !== ls) { if (P.starting) renderFoot(); else syncStart(); }   // the worker changed: the start step, or the button, follows
       P.laneSig = ls;
       // Notify Claude comes and goes with the card (Claude lists it, or it is edited again), and its label with the request

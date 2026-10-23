@@ -191,7 +191,7 @@ function marksPage() {
     h(tag, cls, text) { const e = mk(tag, cls); if (text !== undefined && text !== null) e.textContent = text; return e; },
     shape(cls) { const s = mk('span', 'shape ' + cls); s.setAttribute('aria-hidden', 'true'); return s; },
   };
-  const src = `${block('card fields')}\n${block('card field marks')}\n({ faceModel, bugMark, priorityMark, faceLabels, faceTags, workerChips })`;
+  const src = `${block('card fields')}\n${block('card field marks')}\n({ faceModel, bugMark, priorityMark, faceLabels, faceTags, workerChips, hasFull, fullTag })`;
   return { page: vm.runInNewContext(src, vm.createContext(env)), doc };
 }
 
@@ -235,6 +235,27 @@ test('the tags are blocked (with the blockers in its tooltip), the criteria coun
   assert.ok(tags[0].querySelector('.s-block'));
   assert.ok(tags[2].className.includes('attn'));
   assert.equal(page.faceTags(page.faceModel({ ...NEW, criteria: ['only'] }, ctxOf([])))[0].textContent, '1 criterion');
+});
+
+test('the Full access tag shows on a task or idea the user allowed it on and on a thread that runs with it, never on a milestone or a plain card', () => {
+  const { page } = marksPage();
+  assert.equal(page.fullTag(NEW), null);
+  assert.equal(page.hasFull(null), false);
+  assert.equal(page.fullTag({ ...NEW, allowFull: false }), null);
+  assert.equal(page.fullTag({ ...NEW, allowFull: 'yes' }), null, 'only true counts');
+  assert.equal(page.fullTag({ ...NEW, kind: 'milestone', allowFull: true }), null, 'a milestone does no work');
+  assert.equal(page.fullTag({ ...NEW, kind: 'thread', thread: { mode: 'write' } }), null);
+  const on = page.fullTag({ ...NEW, allowFull: true });
+  assert.equal(on.textContent, 'Full access');
+  assert.ok(on.className.includes('attn') && on.className.includes('full-tag'));
+  assert.ok(on.querySelector('.shape.s-diamond'));
+  assert.match(on.title, /You allowed full access on this card/);
+  const run = page.fullTag({ ...NEW, kind: 'thread', thread: { mode: 'full' } });
+  assert.equal(run.textContent, 'Full access');
+  assert.match(run.title, /^This thread runs with full access: no sandbox, no permission checks\.$/);
+  assert.equal(page.hasFull({ ...NEW, kind: 'thread', allowFull: true, thread: { mode: 'read' } }), false, 'a thread shows the tag only when it runs with full access, whatever its switch says');
+  assert.equal(page.hasFull({ ...NEW, kind: 'thread', allowFull: true, thread: { mode: 'full' } }), true);
+  assert.equal(page.fullTag({ ...NEW, allowFull: true, fullStale: true }), null, 'a card whose text changed since needs to be allowed again: no tag');
 });
 
 test('workers are chips with their words as a tooltip, and none gives nothing', () => {
@@ -410,6 +431,13 @@ test('the history timeline: marker kinds, a move into a finished stage, groups b
   // without a finished() every move is a plain move; a card from before the history has its creation as the one event
   assert.deepEqual(plain(historyEvents(card, labelOf)).map((e) => e.kind), ['moved', 'moved', 'asked', 'moved', 'created']);
   assert.deepEqual(plain(historyEvents({ source: 'claude', createdAt: 'T0' }, labelOf)).map((e) => [e.kind, e.who]), [['created', 'Claude']]);
+  // full access: said in words, and an older entry shape still reads as an edit
+  const fullHist = plain(historyEvents({ source: 'user', createdAt: 'T0', history: [
+    { at: 'T1', by: 'user', type: 'edited', fields: ['full access'], allowed: true },
+    { at: 'T2', by: 'user', type: 'edited', fields: ['full access'], allowed: false },
+    { at: 'T3', by: 'user', type: 'edited', fields: ['full access'] },
+  ] }, labelOf));
+  assert.deepEqual(fullHist.map((e) => e.text), ['You edited the full access', 'You took full access away', 'You allowed full access', 'You created it']);
 
   // days: Today, Yesterday, then a date; a history on one day has one group with no label
   const now = new Date(2026, 9, 13, 15, 0, 0).getTime();
@@ -495,4 +523,83 @@ test('a Type choice that the card already is, after its kind changed elsewhere, 
   assert.match(html, /if \(sameField\(nv\[k\], cur\[k\]\)\) P\.base\.fields\[k\] = nv\[k\];\s*return;/);
   // a Save whose patch is empty takes the choice as the baseline too, and the start button follows
   assert.match(html, /if \(FX\) P\.base\.fields\.type = FX\.values\(\)\.type;\s*msgEl\.textContent = 'No changes to save\.';\s*syncStart\(\);/);
+});
+
+test('the history timeline draws the runs on the card, in time order with the history, with the worker each was of', () => {
+  const { historyEvents } = vm.runInNewContext(`${block('sub-agent runs')}; ({ historyEvents })`);
+  const labelOf = (id) => ({ work: 'In progress' })[id] || id;
+  // the shape of a real card: created by Claude, then two lane runs of threads doing its work, and no other history (2026-10-23)
+  const card = { source: 'claude', createdAt: '2026-10-23T11:59:17.527Z', history: [{ at: '2026-10-23T11:59:17.527Z', by: 'claude', type: 'created', to: 'work' }], runs: [
+    { n: 1, thread: 'c1', turn: 1, lane: 'think', agentType: 'think', state: 'done', ok: true, startedAt: '2026-10-23T11:59:44.475Z', finishedAt: '2026-10-23T12:04:04.848Z' },
+    { n: 2, thread: 'c2', turn: 1, lane: 'debate', agentType: 'debate', state: 'stopped', ok: false, startedAt: '2026-10-23T12:05:13.680Z', finishedAt: '2026-10-23T12:10:01.357Z' },
+    { n: 3, agentType: 'worker', state: 'running', startedAt: '2026-10-23T12:11:00.000Z', finishedAt: null },
+    { n: 4, thread: 'c5', turn: 1, agentType: 'thread', state: 'done', ok: true, startedAt: '2026-10-23T12:12:00.000Z', finishedAt: '2026-10-23T12:13:00.000Z' },
+    { n: 5, state: 'done' },
+  ] };
+  const ev = plain(historyEvents(card, labelOf));
+  assert.deepEqual(ev.map((e) => e.text), [
+    'Claude (thread:c5) finished run 4',
+    'Claude (thread:c5) started run 4',
+    'Claude (agent:worker) started run 3',
+    'Claude (lane:debate) run 2 stopped',
+    'Claude (lane:debate) started run 2',
+    'Claude (lane:think) finished run 1',
+    'Claude (lane:think) started run 1',
+    'Claude created it in In progress',
+  ]);
+  assert.deepEqual(ev.slice(0, 4).map((e) => e.kind), ['run-done', 'run', 'run', 'run-stopped']);
+  assert.equal(ev[5].worker, 'lane:think');
+  assert.deepEqual(plain(historyEvents({ source: 'user', createdAt: 'T0', runs: 'not a list' }, labelOf)).map((e) => e.kind), ['created']);
+});
+
+test('the history draws a linked run as its thread or lane, an empty agent type as sub-agent, an open linked run as ended, and only the newest ten runs', () => {
+  const { historyEvents } = vm.runInNewContext(`${block('sub-agent runs')}; ({ historyEvents })`);
+  const labelOf = (id) => id;
+  const at = (m) => new Date(Date.UTC(2026, 9, 23, 0, m)).toISOString();
+  const card = { source: 'claude', createdAt: at(0), history: [], runs: [
+    { n: 1, thread: 'c7', agentType: 'worker', state: 'done', ok: true, startedAt: at(1), finishedAt: at(2) },
+    { n: 2, thread: 'c7', agentType: 'worker', state: 'done', ok: null, startedAt: at(3), finishedAt: at(4) },
+    { n: 3, thread: 'c8', lane: 'code-codex', agentType: 'code-codex', state: 'done', ok: true, startedAt: at(5), finishedAt: at(6) },
+    { n: 4, agentType: '', state: 'done', startedAt: at(7), finishedAt: at(8) },
+    { n: 5, agentType: 'worker', state: 'done', ok: null, startedAt: at(9), finishedAt: at(10) },
+  ] };
+  assert.deepEqual(plain(historyEvents(card, labelOf)).map((e) => e.text).filter((x) => /finished|ended|stopped/.test(x)), [
+    'Claude (agent:worker) finished run 5',
+    'Claude (agent:sub-agent) finished run 4',
+    'Claude (lane:code-codex) finished run 3',
+    'Claude (thread:c7) run 2 ended',
+    'Claude (thread:c7) finished run 1',
+  ]);
+  assert.equal(plain(historyEvents(card, labelOf)).some((e) => /agent:worker\) started run [12]\b/.test(e.text)), false, 'a linked run is never a sub-agent');
+  // twelve runs: the newest ten only, with their ends, and the card's own entries all there
+  const many = { source: 'claude', createdAt: at(0), history: [{ at: at(0), by: 'claude', type: 'created', to: 'new' }, { at: at(1), by: 'user', type: 'moved', from: 'new', to: 'work' }], runs: Array.from({ length: 12 }, (_, i) => ({ n: i + 1, agentType: 'worker', state: 'done', ok: true, startedAt: at(10 + 2 * i), finishedAt: at(11 + 2 * i) })) };
+  const ev = plain(historyEvents(many, labelOf));
+  assert.equal(ev.length, 2 + 20);
+  assert.equal(ev.filter((e) => e.kind === 'run').length, 10);
+  assert.equal(ev.some((e) => /run [12]$|run [12] /.test(e.text) && /run/.test(e.kind)), false, 'runs 1 and 2 are cut');
+  assert.equal(ev.at(-1).text, 'Claude created it in new');
+  assert.equal(ev.some((e) => e.kind === 'moved'), true);
+});
+
+test('the history order does not depend on an entry whose time does not parse: it takes the time of the one before it', () => {
+  const { historyEvents } = vm.runInNewContext(`${block('sub-agent runs')}; ({ historyEvents })`);
+  const at = (h) => new Date(Date.UTC(2026, 9, 23, h)).toISOString();
+  const card = { source: 'claude', createdAt: at(0), history: [
+    { at: at(0), by: 'claude', type: 'created', to: 'new' },
+    { at: at(5), by: 'claude', type: 'moved', from: 'new', to: 'work' },
+    { at: 'not a time', by: 'user', type: 'edited', fields: ['title'] },
+    { at: at(6), by: 'claude', type: 'moved', from: 'work', to: 'review' },
+  ], runs: [{ n: 1, agentType: 'worker', state: 'done', ok: true, startedAt: at(1), finishedAt: at(4) }] };
+  const texts = plain(historyEvents(card, (x) => x)).map((e) => e.text);
+  assert.deepEqual(texts, [
+    'Claude moved it from work to review',
+    'You edited the title',
+    'Claude moved it from new to work',
+    'Claude (agent:worker) finished run 1',
+    'Claude (agent:worker) started run 1',
+    'Claude created it in new',
+  ]);
+  // a first entry that does not parse sits at the card's creation, before everything after it
+  const first = { source: 'claude', createdAt: at(0), history: [{ at: 'later maybe', by: 'user', type: 'created', to: 'new' }, { at: at(2), by: 'claude', type: 'moved', from: 'new', to: 'work' }] };
+  assert.deepEqual(plain(historyEvents(first, (x) => x)).map((e) => e.text), ['Claude moved it from new to work', 'You created it in new']);
 });

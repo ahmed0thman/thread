@@ -171,6 +171,23 @@
     }
     return out;
   }
+  // Whether full access is on for a card or its thread: the user allowed it on a task or idea (`allowFull`, and not `fullStale`: its title or note
+  // changed since, so it needs the user's yes again), or the thread runs with it (mode 'full'; a thread's own switch alone shows nothing).
+  function hasFull(card) {
+    if (!card || card.kind === 'milestone') return false;
+    if (card.kind === 'thread') return !!card.thread && card.thread.mode === 'full';
+    return card.allowFull === true && card.fullStale !== true;
+  }
+  // The "Full access" tag of a card's face and page header, or null. A worker of such a card may run any command with no sandbox.
+  function fullTag(card) {
+    if (!hasFull(card)) return null;
+    const t = h('span', 'tag attn full-tag');
+    t.title = card.kind === 'thread'
+      ? 'This thread runs with full access: no sandbox, no permission checks.'
+      : 'You allowed full access on this card: a worker started for it may run any command with no sandbox.';
+    t.append(shape('s-diamond'), h('span', null, 'Full access'));
+    return t;
+  }
   // The workers of a card as chips, each with its words as a tooltip. null for none.
   function workerChips(list) {
     const w = strings(list);

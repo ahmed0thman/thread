@@ -112,7 +112,7 @@
       else if (cardMarks[r.key] === 'last') marks.appendChild(badge('Last used', 'Claude used this worker last on this card', 'wp-last'));
       if (cur && chosen) marks.appendChild(badge(chosen.text, chosen.title, 'wp-cur'));
       if (r.kind === 'agent' && r.why !== 'not found') marks.appendChild(badge(r.where === 'user' ? 'User' : 'Project', r.where === 'user' ? 'Defined in your own .claude/agents folder' : 'Defined in this project’s .claude/agents folder', 'wp-where'));
-      if (r.readOnly) marks.appendChild(badge('Read-only', 'This lane cannot edit files'));
+      if (r.readOnly) marks.appendChild(badge('Read-only', r.provider === 'agy' && !r.laneReadOnly ? 'This lane is read-only, except with full access' : 'This lane cannot edit files'));
       if (r.overrides) marks.appendChild(badge('Overrides global', 'A global lane has the same name; this project’s lane is used instead'));
       if (off) marks.appendChild(badge(r.why === 'not found' ? 'Not found' : r.why.charAt(0).toUpperCase() + r.why.slice(1), '', 'attn'));
       top.appendChild(marks);

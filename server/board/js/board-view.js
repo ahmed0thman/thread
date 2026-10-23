@@ -167,6 +167,8 @@
     }
     const lt = laneTag(card);
     if (lt) foot.appendChild(lt);
+    const ft = fullTag(card);
+    if (ft) foot.appendChild(ft);
     faceTags(fm).forEach((tag) => foot.appendChild(tag));
     const waits = cardWaits(card);
     const wt = waitTag(waits, 'card');
@@ -176,7 +178,7 @@
     if (foot.childNodes.length) el.appendChild(foot);
 
     const rs = thread ? reportState(card) : '';
-    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread && !work ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (work ? ', ' + work.aria : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (ms ? ', in milestone ' + ms.title : '') + (laneInfo(card) ? ', lane ' + laneTagText(laneInfo(card)) : '') + fm.aria.map((a) => ', ' + a).join('') + (waits.length ? ', ' + waits.length + ' waiting for you' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : '') + (card.notified === true ? ', Claude notified' : ''));
+    el.setAttribute('aria-label', card.id + ', ' + kind + ', ' + card.title + (thread && !work ? ', ' + (RUN[t.runState] || t.runState).toLowerCase() : '') + (work ? ', ' + work.aria : '') + (thread && t.parentSessionId ? ', from ' + sessionLabel(t.parentSessionId) : '') + (thread && t.agent ? ', agent ' + t.agent : '') + (rs === 'not' ? ', not reported' : rs === 'queued' ? ', report queued' : rs === 'yes' ? ', reported' : '') + (ms ? ', in milestone ' + ms.title : '') + (laneInfo(card) ? ', lane ' + laneTagText(laneInfo(card)) : '') + (hasFull(card) ? ', full access' : '') + fm.aria.map((a) => ', ' + a).join('') + (waits.length ? ', ' + waits.length + ' waiting for you' : '') + (card.seenByClaude === false ? ', Claude has not seen this yet' : '') + (card.notified === true ? ', Claude notified' : ''));
 
     el.addEventListener('click', () => {
       if (Date.now() - lastDragEnd < 200) return;
@@ -304,6 +306,18 @@
       catch (e) { showError(e.message); }
     });
     if (after) after();
+    poll();
+  }
+  // Take the full-access switch away from a card (the only direction a thread's page offers); after(ok)
+  async function takeAwayFull(id, after) {
+    clearError();
+    let ok = false;
+    const pk = selKey;
+    await runAction('fullaway:' + pk + ':' + id, async () => {
+      try { applyCard(await api('PATCH', pp(pk, 'cards/' + encodeURIComponent(id)), { allowFull: false }), pk); ok = true; wrote(); }
+      catch (e) { showError(e.message); }
+    });
+    if (after) after(ok);
     poll();
   }
   // Put a task or idea in a milestone; '' takes it out. after(ok)

@@ -22,6 +22,7 @@ thread gives the work of Claude, its sub-agents, side threads and agents on your
   - [Task and idea pages](board.md#task-and-idea-pages): the card form, sub-agent runs linked to the card with their prompt, steps and report, the History timeline, long text and code blocks with a Copy button.
   - [Notify Claude](board.md#notify-claude): point a session at a card you added.
   - [Card fields, workers and the done gate](board.md#card-fields-workers-and-the-done-gate): type, priority, labels, blocked by, acceptance criteria, **Worked by**, and the done gate.
+  - [Full access](board.md#full-access): the **Allow full access** switch on a card, which lets a worker run with no sandbox and no permission checks; only you can turn it on, on this machine.
   - [Card and waiting item links](board.md#card-and-waiting-item-links): a card or item id in any text is a link with a preview.
 - [Add cards from the chat](commands.md#commands): `/thread:add` takes `--bug`, `--idea`, `--milestone`, `--priority`, `--label`, `--blocked-by`, `--criteria`, `--parent`, `--lane` and `--agent`.
 - [Milestones](board.md#milestones): group cards under a milestone; its state comes from its cards. [Flags](board.md#flags) and [a worked example](board.md#a-worked-example).
@@ -56,6 +57,7 @@ thread gives the work of Claude, its sub-agents, side threads and agents on your
 
 - [Configuration](configuration.md#configuration): environment variables and the files in the data directory. [Where the settings live](configuration.md#where-the-settings-live): the two settings files and their fields.
 - [Security](security.md#security): what runs, what is sent and what is stored.
+- [Full access](security.md#full-access): what a thread in mode `full` is allowed to do, who can allow it, and the limit of that.
 - [Commands](commands.md#commands): every slash command and flag.
 - [Troubleshooting](troubleshooting.md#troubleshooting): what you see, the cause and the fix.
 - [Evidence](evidence.md): the author's dated checks and the measured token result.

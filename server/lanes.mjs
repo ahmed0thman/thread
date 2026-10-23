@@ -114,15 +114,16 @@ export async function requireRunnableLane(projectDir, name, mode) {
   if (!existsSync(relayPath(lane.implementer))) {
     throw new Error(`lane "${name}" runs on ${lane.implementer}, but its relay (the ${lane.implementer}-delegate skill) was not found; install it or choose another lane`);
   }
+  // agy is read-only in write mode only: full access (a card the user allowed it on) is its flag that skips permissions
   if (mode === 'write' && lane.implementer === 'agy') throw new Error(`lane "${name}" runs on agy: agy lanes are read-only in this version`);
-  if (mode === 'write' && lane.readOnly) throw new Error(`lane "${name}" is read-only; start the thread with mode "read", or choose a lane that can edit files`);
+  if ((mode === 'write' || mode === 'full') && lane.readOnly) throw new Error(`lane "${name}" is read-only; start the thread with mode "read", or choose a lane that can edit files`);
   return lane;
 }
 
-// What a lane lets a write thread do, for people to read: agy is read-only in this version (its headless mode auto-denies edits),
-// a codex lane with no sandbox has full access.
+// What a lane lets a write thread do, for people to read: agy is read-only in this version (its headless mode auto-denies edits; only a
+// full-access thread passes it the flag that skips permissions), a codex lane with no sandbox has full access.
 export function accessText(lane) {
-  if (lane.implementer === 'agy') return 'read-only (agy lanes are read-only in this version)';
+  if (lane.implementer === 'agy') return 'read-only (agy lanes are read-only in this version, except in mode "full")';
   if (lane.readOnly) return 'read-only';
   return lane.sandbox === 'danger-full-access' ? 'full access (no sandbox)' : 'can edit files';
 }

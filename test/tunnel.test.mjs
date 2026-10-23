@@ -538,6 +538,37 @@ test('over the tunnel an agent cannot be set, changed or removed, and a refused 
   assert.equal((await a.get(`${P}/agents`)).status, 200, 'the agents can be read, as before');
 });
 
+test('over the tunnel full access cannot be allowed or taken away, and a refused save writes nothing; on the normal listener it can', async (t) => {
+  const b = await boot(t);
+  seedThread(b);
+  const a = await open(b);
+  const P = `/api/p/${b.key}`;
+  const stored = () => JSON.stringify(core.readState(b.projectDir).cards.find((c) => c.id === 'c1'));
+  const before = stored();
+  for (const body of [{ allowFull: true }, { allowFull: true, title: 'Also renamed' }, { allowFull: false }, { allowFull: 'true' }, { allowFull: null }]) {
+    for (const route of [`${P}/cards/c1`, '/api/cards/c1']) {
+      const r = await a.write('PATCH', route, body);
+      assert.equal(r.status, 403, `${route} ${JSON.stringify(body)} -> ${r.status} ${r.text}`);
+      assert.match(r.json.error, /^full access lets a worker run any command without a sandbox, so it can only be allowed or taken away on the computer itself, not through the tunnel$/);
+    }
+  }
+  assert.equal(stored(), before, 'nothing was written');
+  assert.equal((await a.write('POST', `${P}/cards`, { title: 'New from the phone', allowFull: true })).status, 400, 'a new card cannot carry it either');
+  assert.equal(core.readState(b.projectDir).cards.length, 2);
+  assert.equal((await a.write('PATCH', `${P}/cards/c1`, { title: 'Renamed from the phone' })).status, 200, 'the rest of a card can still be edited');
+  const H = { host: `127.0.0.1:${b.port}`, 'x-thread-token': b.token, ...JSON_HDR };
+  const local = await raw(b.port, { method: 'PATCH', path: `${P}/cards/c1`, headers: H, body: JSON.stringify({ allowFull: true }) });
+  assert.equal(local.status, 200, local.text);
+  assert.equal(local.json.allowFull, true);
+  // once on, the phone can still read it and edit the rest, but neither start a thread nor take it away
+  const view = (await a.get(`${P}/state`)).json.cards.find((c) => c.id === 'c1');
+  assert.equal(view.allowFull, true, 'it is shown');
+  assert.equal((await a.write('PATCH', `${P}/cards/c1`, { note: 'A note from the phone' })).status, 200);
+  assert.equal((await a.write('PATCH', `${P}/cards/c1`, { allowFull: false })).status, 403);
+  assert.equal((await a.write('POST', `${P}/cards/c1/start`, { sessionId: PARENT_SESSION, mode: 'full' })).status, 403, 'and the phone cannot start a thread at all');
+  assert.equal(core.readState(b.projectDir).cards.find((c) => c.id === 'c1').allowFull, true);
+});
+
 test('over the tunnel the milestone links and the map layout cannot be changed, a card edit cannot set links, and the layout can be read; the normal listener can', async (t) => {
   const b = await boot(t);
   const m1 = await core.addCard(b.projectDir, { title: 'M1', kind: 'milestone' });

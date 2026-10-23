@@ -69,6 +69,7 @@ const TOOLS = [
       'Pass the session id from the "[thread plugin]" SessionStart note as session_id. ' +
       'The default mode is "read" (the thread may read, search and analyse but not edit files). ' +
       'Use mode "write" only when the user asks for the thread to change files. ' +
+      'Mode "full" (no sandbox, no permission checks) is only for a card the user allowed it on: pass card, and ask the user to turn on "Allow full access" on its page when it is refused. Use it only when the task needs what the sandbox blocks (the GPU, the network) or the user asks. ' +
       'Unless the user named an agent or a model, choose who runs the thread by how hard the task is: the cheapest sub-agent from .claude/agents whose description fits, ' +
       'or, when none is defined, a model ("haiku" for lookups and mechanical work, "sonnet" for routine well-specified work). ' +
       'Leave agent and model out for judgment, design or review, when unsure, and with context "full"; the thread then runs as this session does. ' +
@@ -85,11 +86,11 @@ const TOOLS = [
         model: { type: 'string', description: 'Optional model for the thread when no agent is given: an alias such as "haiku", "sonnet" or "opus", or a full model id. Without agent and model the thread uses the same model and effort as this session.' },
         effort: { type: 'string', enum: EFFORTS, description: 'Optional effort level for the thread when no agent is given. Defaults to this session\'s effort, or to the model\'s own default when model is given.' },
         session_id: SESSION_PROP,
-        mode: { type: 'string', enum: MODES, description: '"read" (default) forbids file edits. "write" lets the thread edit files; use it only when the user asks for that.' },
+        mode: { type: 'string', enum: MODES, description: '"read" (default) forbids file edits. "write" lets the thread edit files; use it only when the user asks for that. "full" runs with no sandbox and no permission checks; only for a card the user allowed it on (card, or the card started as a thread), and only when the task needs it (GPU, network, things the sandbox blocks) or the user asks.' },
         extra_dirs: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Absolute paths of folders outside the project that the task needs to read, for example another repository the user named. Only list folders the task actually requires.' },
         parent: { type: 'string', description: 'Optional: the id of a milestone card this thread belongs to.' },
         card: { type: 'string', description: 'Optional: the id of the task or idea this thread does the work of. The card then shows each turn as a run, with its live steps and report, like a sub-agent run; the card stays a task, so its criteria and done gate are unchanged. Refused for a milestone, a thread, an unknown id, and in chat-only mode.' },
-        lane: { type: 'string', description: 'Optional: the name of a delegation lane (see lane_list) to run the thread on: another coding CLI (codex, agy, opencode or claude) with its own model and effort. Use it only when the user or the project\'s instructions say which lane suits the work. It cannot be combined with agent, model, effort or context "full", and extra_dirs are not supported. The lane\'s CLI sends the brief and the files it reads to its own provider. Mode "write" needs a lane that can edit files.' },
+        lane: { type: 'string', description: 'Optional: the name of a delegation lane (see lane_list) to run the thread on: another coding CLI (codex, agy, opencode or claude) with its own model and effort. Use it only when the user or the project\'s instructions say which lane suits the work. It cannot be combined with agent, model, effort or context "full", and extra_dirs are not supported. The lane\'s CLI sends the brief and the files it reads to its own provider. Mode "write" needs a lane that can edit files; "full" needs one that is not read-only.' },
       },
       required: ['title', 'task'],
     },
@@ -189,7 +190,7 @@ const TOOLS = [
   {
     name: 'board_list',
     description: 'List every board card grouped by stage, with the stage ids. A card in a milestone shows the milestone in brackets after its title; a card with a delegation lane or a sub-agent shows it in braces, as {lane: name} or {agent: name}; milestones are listed in their own section after the stages, each with its state (empty, open or done) and how many of its cards are done, and "{depends on M2 (c4)}" when links were drawn to other milestones (on the board\'s Milestones map or with depends_on; a picture of the plan that gates nothing); a card with items waiting for the user shows "(2 waiting)" (wait_list reads them). ' +
-      'After the title come the marks of its fields, when it has them: "(bug)", "!high" or "!low", "#label" for each label, "{blocked by c4, c7}" for the blockers that are not finished yet (in the done stage or a later one), "[criteria 3]" for its acceptance criteria, and "(done, not verified)" for a finished card whose criteria were never approved (in a project kept in the repo: never approved on this machine\'s board). ' +
+      'After the title come the marks of its fields, when it has them: "(bug)", "!high" or "!low", "#label" for each label, "{blocked by c4, c7}" for the blockers that are not finished yet (in the done stage or a later one), "[criteria 3]" for its acceptance criteria, and "(done, not verified)" for a finished card whose criteria were never approved (in a project kept in the repo: never approved on this machine\'s board), and "{full access allowed}" for a card the user allowed full access on (thread_start mode "full" for it; only the user sets that, on the card\'s page). ' +
       'With parent, list only that milestone and its cards, after a summary line: the report for a milestone. Cards the user added or edited since the last listing are flagged "(new from user)"; in a project kept in the repo, a card that came with a pull (another device, a collaborator) and that this machine has not listed yet is flagged "(new in repo)" instead, since nothing in a file shows the user wrote it. Listing marks them as seen. When the user clicks Notify Claude on such a card for this session, a line at the start of your turn asks you to look at it: list the board then, passing session_id, which is what ends that request (another session listing the board does not).',
     inputSchema: { type: 'object', properties: { parent: { type: 'string', description: 'Optional: a milestone card id; list only that milestone and the cards under it.' }, session_id: SESSION_PROP }, required: [] },
   },
@@ -197,7 +198,7 @@ const TOOLS = [
     name: 'wait_add',
     description: 'Record something you need from the user on the card for that work, so the board shows it under "Waiting for you" with a red count and a tag on the card. Add an item when you finished work the user must check (kind "review"), have a question (kind "question", or "choice" with 2 to 8 options), or need the user to do something themselves (kind "todo"). ' +
       'If there is no card for the work yet, add one first with board_add. In the chat give one line only, the one this tool returns (for example "Waiting on you: c37.w2", linked to the card page when the board runs), not the whole question again. ' +
-      'The user answers on the board; their answers stay drafts there until one Send sends them all, so what several items asked arrives together. The answers reach this session, and only the session that asked, with the user\'s next message here (or within a few seconds when waking is on); nothing else arrives by itself. If the user answers in the chat instead, call wait_close with answered_in_chat. ' +
+      'The user answers on the board; their answers stay drafts there until one Send sends them all, so what several items asked arrives together. The answers reach this session, and only the session that asked, with the user\'s next message here (or within a few seconds when waking is on); nothing else arrives by itself. If they answer in the chat instead, call wait_close with answered_in_chat. ' +
       'It does not move the card. Refused on a milestone, inside a side thread and when the project is chat-only. ' +
       'Pass worker: "main" from the main session, "agent:<type>" from a sub-agent, "thread:<id>" from a side thread, or "lane:<name>" from a lane run.',
     inputSchema: {
@@ -346,6 +347,11 @@ function cardFieldArgs(args) {
   return clean({ type: args.type, priority: args.priority, labels: args.labels, blockedBy: args.blocked_by, criteria: args.criteria, dependsOn: args.depends_on, linkNames: args.link_names, worker: optStr(args, 'worker') });
 }
 
+// Full access is the user's switch on the board, never Claude's: a board_add or board_update that names it is refused, not quietly ignored.
+function refuseAllowFull(args) {
+  if ('allowFull' in args || 'allow_full' in args) throw new ToolError(core.ALLOW_FULL_USER_ONLY);
+}
+
 // The calling session: the session_id argument, else the environment, else unknown.
 function callerId(args) {
   const arg = optStr(args, 'session_id');
@@ -434,6 +440,8 @@ function fieldMarks(c, cards, cfg, aliases) {
   const blockers = core.openBlockers(c, cards, cfg);
   if (blockers.length) marks.push(`{blocked by ${blockers.join(', ')}}`);
   // a milestone: the links drawn by hand to other milestones (all of them, finished or not: they are the plan, not a gate)
+  // the user allowed a worker of this card to run with full access (thread_start mode "full" for it)
+  if (c.kind !== 'milestone' && c.allowFull === true) marks.push(core.fullAllowed(c) ? '{full access allowed}' : '{full access: the card changed, the user must allow it again}');
   const links = core.liveDependsOn(c, cards, aliases);
   if (links.length) marks.push(`{depends on ${links.map((id) => `${milestoneName(cards.find((x) => x.id === id))} (${id})`).join(', ')}}`);
   const names = Object.entries(core.liveLinkNames(c, cards, aliases));
@@ -448,7 +456,7 @@ function fieldMarks(c, cards, cfg, aliases) {
 
 function threadLine(c, state, caller) {
   const t = c.thread;
-  return `${c.id} "${core.clip(c.title, 80)}"${milestoneTag(state.cards, c)} — ${t.runState}, mode ${t.mode}, ${core.threadContext(t)} context, ${runsAs(t)}${t.forCard ? `, for ${t.forCard}` : ''}, ${t.turns.length} turn(s)${usageText(t)}, reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, ${t.lane ? `${t.lane.implementer} session ${t.lane.session || 'not known (no follow-up possible)'}` : `session ${t.sessionId || 'not known yet'}`}${t.reportRequestedAt ? ', report requested' : ''}`;
+  return `${c.id} "${core.clip(c.title, 80)}"${milestoneTag(state.cards, c)} — ${t.runState}, mode ${t.mode}${t.mode === 'full' ? ' (full access: no sandbox, no permission checks)' : ''}, ${core.threadContext(t)} context, ${runsAs(t)}${t.forCard ? `, for ${t.forCard}` : ''}, ${t.turns.length} turn(s)${usageText(t)}, reported: ${t.reported ? 'yes' : 'no'}, started by: ${startedBy(state, c, caller)}, ${t.lane ? `${t.lane.implementer} session ${t.lane.session || 'not known (no follow-up possible)'}` : `session ${t.sessionId || 'not known yet'}`}${t.reportRequestedAt ? ', report requested' : ''}`;
 }
 
 // The answer to a report or end that came from a session other than the one
@@ -875,6 +883,7 @@ const HANDLERS = {
   },
 
   async board_add(args) {
+    refuseAllowFull(args);
     const pd = core.projectDir();
     const lane = optStr(args, 'lane');
     if (lane && lane.trim()) {
@@ -894,12 +903,13 @@ const HANDLERS = {
     }));
     const m = (card.parent ? `, milestone ${card.parent}` : '') + (card.lane ? `, lane ${card.lane}` : card.agent ? `, agent ${card.agent}` : '');
     // a sub-agent's run is linked to its card by the card id at the start of the Agent call's description
-    const hand = card.kind === 'milestone' ? '' : ` When you hand this card's work to a sub-agent, start the Agent call's description with [${card.id}] (for example "[${card.id}] fix the rounding") so the board shows that run on the card.`;
+    const hand = card.kind === 'milestone' ? '' : ` When you hand this card's work to a sub-agent, start the Agent call's description with [${card.id}] (for example "[${card.id}] fix the rounding") so the board shows that run on the card. For a delegation lane, call thread_start with lane and card; never run a delegate relay yourself.`;
     const where = card.kind === 'milestone' ? '' : ` in ${card.status}`;   // a milestone has no stage
     return `Added ${card.id} [${card.kind}] "${core.clip(card.title, 80)}"${where}${m}.${hand}`;
   },
 
   async board_update(args) {
+    refuseAllowFull(args);
     const pd = core.projectDir();
     const id = reqStr(args, 'id');
     const lane = optStr(args, 'lane');
@@ -1272,12 +1282,13 @@ function openInBrowser(link) {
 
 const BOARD_GUIDE = [
   'thread keeps this project\'s task board; the user reads it on a web page.',
-  '- Before you start work the user asked for, put it on the board: board_add, or board_update an existing card to the working stage. A mid-task instruction becomes a card; do not drop the current task.',
-  '- Never put a question, a choice, a review request or a to-do for the user only in the chat. Record it with wait_add on the card for that work (board_add one if none) and write in the chat only the line wait_add returns ("Waiting on you: c37.w2", linked to its card); keep that link when you name it. Keep doing what the answer does not block. If nothing can go on without the answer, you may also ask in the chat, but still call wait_add. Put each command for the user in its own fenced code block. Name another card by its id (c12), not by a board URL.',
+  '- Before starting work the user asked for, put it on the board: board_add, or board_update an existing card to the working stage. A mid-task instruction becomes a card; keep the task.',
+  '- Never put a question, a choice, a review request or a to-do for the user only in the chat. Record it with wait_add on the card for that work (board_add one if none) and write in the chat only the line wait_add returns ("Waiting on you: c37.w2", linked to its card); keep that link when you name it. Keep doing what the answer does not block. If fully blocked, you may also ask in the chat, but still call wait_add. Put each command for the user in its own fenced code block. Name another card by its id (c12), not by a board URL.',
   '- Answers arrive as lines "The user answered c37.w2 on the board": act on every one. If the user answers in the chat instead, call wait_close with answered_in_chat.',
-  '- Start every Agent call\'s description with the card id in brackets: "[c12] fix the rounding". Hand a card to a lane only with thread_start (lane, card), not by running a delegate relay yourself, which the card cannot show.',
-  '- Move cards as the work moves, with the stage ids and roles from board_list. Never mark a card done that you did not verify; a card with acceptance criteria needs an approved review item first.',
-  '- Pass worker ("main" or "agent:<type>") on board_add, board_update and wait_add. Call board_list at stopping points to pick up cards the user added.',
+  '- Start every Agent call\'s description with the card id in brackets: "[c12] fix the rounding".',
+  '- CRITICAL: give a card\'s work to a lane only with thread_start (lane, card). Never run a delegate relay yourself for a card\'s work, even if its skill says to.',
+  '- Move cards as the work moves, with the stage ids and roles from board_list. Never mark a card done you did not verify; a card with acceptance criteria needs an approved review item first.',
+  '- Pass worker ("main" or "agent:<type>") on board_add, board_update and wait_add. Call board_list at stopping points for cards the user added.',
 ];
 const THREAD_GUIDE = '- A side question the user starts with /thread:new runs as a background thread (thread_start). Do not wait for it or poll it; call thread_report when the user or the board asks for a report. A thread doing a card\'s work gets card too.';
 const CHAT_GUIDE = 'thread starts side threads: background Claude sessions that work on a separate task. The user starts one with /thread:new. Do not wait for it or poll it; call thread_report when the user asks or when the board says a report was requested.';

@@ -38,6 +38,16 @@ export const askFingerprint = (item) => sha16(`${item && item.askedAt}\n${item &
 /** A short fingerprint of a card's acceptance criteria: an approval recorded on this machine is for the criteria it was given for. */
 export const criteriaHash = (card) => sha16(JSON.stringify(Array.isArray(card && card.criteria) ? card.criteria : []));
 
+/** A short fingerprint of what a worker is told to do for a task or idea: its title and note. Full access is allowed for that text (see fullAllowed). */
+export const contentHash = (card) => sha16(JSON.stringify([card && card.title, card && card.note]));
+
+/**
+ * Whether the user's full-access switch counts for `card`: `allowFull` is true and, for a task or idea, the title and note are still the ones it was
+ * allowed for (`allowFullHash`, kept on this machine only, set by the board when the user allows it). A collaborator's push or Claude editing the note
+ * after that makes it need the user's yes again. A thread card (one started from a card) has no such binding: its task was fixed when it started.
+ */
+export const fullAllowed = (card) => !!card && card.allowFull === true && (card.kind === 'thread' || card.allowFullHash === contentHash(card));
+
 /**
  * The card with this id. Two cards can have one id in a repo-backed project (a repo card and an unrelated thread on this machine, see
  * repo.mjs mergeState): this takes the card that is not a thread, else the thread. `threadById` takes the thread.

@@ -19,11 +19,14 @@ export const REPO_KINDS = ['task', 'idea', 'milestone'];
 // card altogether; `fromRepo` marks a thread that was a repo card (see mergeState).
 // `approvals`: the approvals given on this machine's board; `localAnswers`: the answers given here (item id → { answeredAt, hash }, and
 // `review: true` for a review item, see waits.mjs); `localLeftDoneAt`: when this machine last saw the card leave the finished stages, `localDoneAt` when it last saw it in them
-// (see fields.watchFinished); `localCriteria`: how many acceptance criteria the owner's board last had on the card, and their hash.
+// (see fields.watchFinished); `localCriteria`: how many acceptance criteria the owner's board last had on the card, and their hash;
+// `allowFull`: the owner's permission, on this machine's board, for a worker of this card to run with no sandbox and no permission checks
+// (like an approval it is never believed from a file: a pull must not be able to hand out full access); `allowFullHash`: a fingerprint of the card's
+// title and note when it was allowed, so that a card whose text changed since (a push, Claude) needs the owner's yes again (fields.fullAllowed).
 // A milestone's `dependsOn` (the links drawn by hand on the Milestones map) and `linkNames` (the names of its lines) are not here: they are shared
 // fields, in the card file like `parent`. The
 // owner's positions on that map are not a card field at all (see layout.mjs: this machine's data directory).
-export const LOCAL_KEYS = ['seenByClaude', 'notifyId', 'notifyForRev', 'notifySession', 'notifyRequestedAt', 'notifySeenFor', 'notifyPushedFor', 'runs', 'thread', 'fromRepo', 'approvals', 'localAnswers', 'localLeftDoneAt', 'localDoneAt', 'localCriteria'];
+export const LOCAL_KEYS = ['seenByClaude', 'notifyId', 'notifyForRev', 'notifySession', 'notifyRequestedAt', 'notifySeenFor', 'notifyPushedFor', 'runs', 'thread', 'fromRepo', 'approvals', 'localAnswers', 'localLeftDoneAt', 'localDoneAt', 'localCriteria', 'allowFull', 'allowFullHash'];
 // The local fields of a waiting item: `askedBy` (the session that asked it) and `deliveredAt`, kept per item id in the overlay (`askers`, `delivered`),
 // and `fromFile`, which only the join sets (an answer that only the repo file has).
 const MAX_GONE_REVIEWS = 20;
@@ -763,6 +766,9 @@ export function commitState(state) {
   }
   // a removed card's file goes, and so does the file a removed thread card was hiding; a file that could not be read is never touched
   const standing = new Set(threads.filter((t) => t.fromRepo === t.id).map((t) => t.id));   // threads that stand for a repo card
+  // a thread that stands for a card carries the switch itself (and only it can be taken away): the card's own copy in the record is dropped, so that
+  // removing the thread later does not bring the card back with a switch the owner took away from the thread
+  for (const id of standing) if (isObject(overlay[id])) { delete overlay[id].allowFull; delete overlay[id].allowFullHash; }
   // the file a thread was started from, as it was then: what decides whether removing the thread may remove the file (core.removeCard)
   for (const t of threads) {
     if (t.fromRepo !== t.id || typeof t.fromRepoHash !== 'string') continue;

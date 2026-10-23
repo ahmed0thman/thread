@@ -152,8 +152,9 @@ function cardFields(body) {
 
 // A lane or a sub-agent (the card's worker) can be set on a saved task or idea from the board (the page's Worker picker), not on a new card.
 const CREATE_KEYS = ['title', 'note', 'status', 'kind', 'parent', ...core.FIELD_NAMES];   // what the page's "New" panel sends (issue.js)
-const PATCH_KEYS = [...CREATE_KEYS, 'lane', 'agent'];
+const PATCH_KEYS = [...CREATE_KEYS, 'lane', 'agent', 'allowFull'];
 const LANE_REMOTE = 'a lane sends the card\'s work to another coding CLI, so it can only be set, changed or removed on the computer itself, not through the tunnel';
+const FULL_REMOTE = 'full access lets a worker run any command without a sandbox, so it can only be allowed or taken away on the computer itself, not through the tunnel';
 const AGENT_REMOTE = 'a sub-agent decides who works on the card when it is started as a thread, so it can only be set, changed or removed on the computer itself, not through the tunnel';
 
 // A key the card calls do not take is a mistake worth telling the sender about (a lane, blocked_by).
@@ -272,6 +273,12 @@ async function handleProject(req, res, projectDir, sub, query, remote = false) {
       if (remote) throw new HttpError(403, AGENT_REMOTE);
       if (body.agent !== null && typeof body.agent !== 'string') throw new HttpError(400, 'agent must be a sub-agent name, or null to remove it');
       args.agent = body.agent === null ? '' : body.agent.trim();
+    }
+    if (body.allowFull !== undefined) {
+      // the user's switch for mode "full" on this card (see core.updateCard); the tunnel can neither turn it on nor take it away
+      if (remote) throw new HttpError(403, FULL_REMOTE);
+      if (typeof body.allowFull !== 'boolean') throw new HttpError(400, 'allowFull must be true or false');
+      args.allowFull = body.allowFull;
     }
     let card;
     try {
@@ -758,6 +765,8 @@ function withViews(card, cfg, cards, aliases) {
   if (view.lane !== undefined && typeof view.lane !== 'string') delete view.lane;   // a card file written by hand or by another version: the page reads a lane as a name
   if (view.agent !== undefined && typeof view.agent !== 'string') delete view.agent;   // and an agent too
   delete view.localCriteria;   // how many criteria this machine's board last had; the page is told the result (criteriaCut)
+  delete view.allowFullHash;   // this machine's own record of the text full access was allowed for; the page is told the result (fullStale)
+  if (card.allowFull === true && card.kind !== 'thread' && card.kind !== 'milestone' && !core.fullAllowed(card)) view.fullStale = true;
   delete view.approvals;   // this machine's own record of the approvals it was given; the page is told the result (verified, approvalElsewhere)
   // where the transcript of a sub-agent run lies stays on the server; a running run that has gone quiet says so (`quiet`, computed here, never stored)
   // A run of a thread that does the card's work has no transcript; it is quiet when its thread is not running that turn any more (the page then offers "Mark as stopped").

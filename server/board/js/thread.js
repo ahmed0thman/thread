@@ -5,6 +5,8 @@
     if (t.runState === 'ended') return 'This thread has ended, so it cannot take new messages.';
     if (t.runState === 'running') return 'A turn is still running. You can send a message when it finishes.';
     if (t.lane) { const f = laneFollowUp(card); return f.ok ? '' : 'This thread cannot take a follow-up. ' + f.why; }
+    const fb = fullBlock(card);
+    if (fb) return 'This thread cannot take a follow-up. ' + fb;
     if (!t.sessionId) {
       return t.runState === 'failed'
         ? 'This thread never started a session because its first turn failed, so there is nothing to continue.'
@@ -160,6 +162,7 @@
       const base = { who, worker, at: x.at };
       if (x.type === 'created') out.push({ ...base, kind: 'created', what: 'created it' + (x.to ? ' in' : ''), to: x.to ? labelOf(x.to) : '', text: whoW + ' created it' + (x.to ? ' in ' + labelOf(x.to) : '') });
       else if (x.type === 'moved') out.push({ ...base, kind: isDone(x) ? 'done' : 'moved', what: 'moved it', from: labelOf(x.from), to: labelOf(x.to), text: whoW + ' moved it from ' + labelOf(x.from) + ' to ' + labelOf(x.to) });
+      else if (x.type === 'edited' && Array.isArray(x.fields) && x.fields.length === 1 && x.fields[0] === 'full access' && typeof x.allowed === 'boolean') { const what = x.allowed ? 'allowed full access' : 'took full access away'; out.push({ ...base, kind: 'edited', what, text: whoW + ' ' + what }); }
       else if (x.type === 'edited') { const what = 'edited the ' + (Array.isArray(x.fields) && x.fields.length ? x.fields.join(', ') : 'card'); out.push({ ...base, kind: 'edited', what, text: whoW + ' ' + what }); }
       else if (x.type === 'worked') out.push({ ...base, kind: 'worked', what: 'worked on it', text: 'Worked on by ' + whoW });
       else if (x.type === 'waiting') { const what = ASKED[x.kind] || 'raised a waiting item'; out.push({ ...base, kind: 'asked', wk: ASKED[x.kind] ? x.kind : '', what, text: whoW + ' ' + what }); }
@@ -168,11 +171,39 @@
       const who = card.source === 'user' ? 'You' : 'Claude';
       out.unshift({ kind: 'created', who, worker: '', what: 'created it', at: card.createdAt, text: who + ' created it' });
     }
-    return out.reverse();
+    // The runs on the card write no history of their own (a lane thread's runner cannot even write a card kept in the repo): each one is drawn
+    // here from the card's runs, its start and, once it is over, how it ended, with the worker it was of. Only the newest HIST_RUNS runs are drawn,
+    // so a long run list does not crowd the moves and edits out.
+    const runList = (Array.isArray(card.runs) ? card.runs : []).filter((r) => r && typeof r === 'object' && typeof r.startedAt === 'string');
+    const byStart = runList.map((r, i) => ({ r, i, v: Date.parse(r.startedAt) })).sort((a, b) => (Number.isFinite(a.v) && Number.isFinite(b.v) ? a.v - b.v : 0) || a.i - b.i);
+    byStart.slice(-HIST_RUNS).forEach(({ r }) => {
+      const linked = typeof r.thread === 'string' && r.thread !== '';
+      const lane = linked && typeof r.lane === 'string' ? r.lane.replace(/…$/, '') : '';
+      const type = typeof r.agentType === 'string' && r.agentType ? r.agentType.replace(/…$/, '') : 'sub-agent';
+      // a run of a thread is the thread's (or its lane's), never a sub-agent's
+      const worker = lane ? 'lane:' + lane : linked ? 'thread:' + r.thread : 'agent:' + type;
+      const n = Number.isInteger(r.n) ? ' ' + r.n : '';
+      const base = { who: 'Claude', worker, kind: 'run' };
+      out.push({ ...base, at: r.startedAt, what: 'started run' + n, text: 'Claude (' + worker + ') started run' + n });
+      if (r.state !== 'running' && typeof r.finishedAt === 'string') {
+        // a linked run that is over without a verdict (ok is not true) ended; only ok === true finished it
+        const ok = r.state === 'done' && (linked ? r.ok === true : r.ok !== false);
+        const what = ok ? 'finished run' + n : r.state === 'done' ? 'run' + n + ' ended' : 'run' + n + ' stopped';
+        out.push({ ...base, kind: ok ? 'run-done' : 'run-stopped', at: r.finishedAt, what, text: 'Claude (' + worker + ') ' + what });
+      }
+    });
+    // oldest first by time, then newest first. The stored history is already in order, so an entry whose time does not parse takes the time of the
+    // one before it that has one (the card's creation for the first), and the sort is a plain stable one.
+    let last = Date.parse(card.createdAt);
+    if (!Number.isFinite(last)) last = 0;
+    const timed = out.map((e, i) => { const v = Date.parse(e.at); if (Number.isFinite(v)) last = v; return { e, i, v: last }; });
+    const sorted = timed.sort((a, b) => a.v - b.v || a.i - b.i).map((x) => x.e);
+    return sorted.reverse();
   }
   // The same, as the plain rows { text, at }.
   function historyRows(card, labelOf) { return historyEvents(card, labelOf).map((e) => ({ text: e.text, at: e.at })); }
   const HIST_SHOWN = 8;   // events the timeline shows before "Show all"
+  const HIST_RUNS = 10;   // runs the history draws (the newest)
   // The day of a time as the timeline groups by it: a local calendar date; '' for a time that does not parse.
   function dayKey(iso) { const d = new Date(iso); return isNaN(d) ? '' : d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
   // "Today", "Yesterday", else "Oct 15" (with the year when it is not this one); '' for a time that does not parse.
@@ -312,7 +343,7 @@
       if (e.wk) li.dataset.wk = e.wk;
       const mark = h('span', 'hist-mark');
       mark.setAttribute('aria-hidden', 'true');
-      mark.appendChild(shape(e.wk ? { question: 's-wq', choice: 's-wc', todo: 's-wt', review: 's-wr' }[e.wk] : { created: 's-ring', moved: 's-tri', done: 's-check', edited: 's-square', worked: 's-hex', asked: 's-wq' }[e.kind] || 's-circle'));
+      mark.appendChild(shape(e.wk ? { question: 's-wq', choice: 's-wc', todo: 's-wt', review: 's-wr' }[e.wk] : { created: 's-ring', moved: 's-tri', done: 's-check', edited: 's-square', worked: 's-hex', asked: 's-wq', run: 's-circle', 'run-done': 's-check', 'run-stopped': 's-cross' }[e.kind] || 's-circle'));
       const body = h('div', 'hist-body');
       const line = h('p', 'hist-what');
       line.append(h('span', 'hist-who', e.who), ' ' + e.what);
@@ -720,7 +751,19 @@
       meta.replaceChildren();
       const work = workState(c);
       meta.appendChild(work ? workEl(work, false) : runPill(t.runState));
-      meta.appendChild(h('span', null, t.mode === 'write' ? 'Can edit files' : 'Read-only'));
+      meta.appendChild(h('span', null, t.mode === 'full' ? 'Full access' : t.mode === 'write' ? 'Can edit files' : 'Read-only'));
+      // full access is the user's switch on a card: a thread started from a card keeps it, and this page is where it is taken away (off only)
+      const sw = fullSwitchId(c);
+      if (sw) {
+        const away = actionBtn('Take away full access', 'small', 'fullaway:' + selKey + ':' + sw, () => takeAwayFull(sw, () => {
+          const next = meta.querySelector('[data-fid="c-fullaway"]');
+          if (panel === P && next && (!document.activeElement || document.activeElement === document.body)) next.focus({ preventScroll: true });
+        }));
+        away.dataset.fid = 'c-fullaway';
+        away.title = isRO() ? READONLY_WHY : isRemote() ? 'Full access can only be changed on the computer itself, not through the phone link.' : 'Your full-access switch is on' + (sw === c.id ? ' for this card' : ' for card ' + sw) + '. Taking it away stops the next turn of a full-access thread; a turn that is running is not stopped.';
+        if (isRO() || isRemote()) setOff(away, true);
+        meta.appendChild(away);
+      }
       if (t.parentSessionId) {
         const from = h('span', 'ws-from', 'from ' + sessionLabel(t.parentSessionId));
         from.title = sessionLabel(t.parentSessionId);
@@ -1277,11 +1320,11 @@
       const ro = isRO();
       const sess = sessionInfo(t.parentSessionId);
       const k = {
-        head: JSON.stringify([c.title, t.runState, t.mode, turns.length, turns[0] && turns[0].startedAt, c.seenByClaude, reportState(c), sess && sess.label, ro, (workState(c) || {}).sig]),
+        head: JSON.stringify([c.title, t.runState, t.mode, fullSwitchId(c), turns.length, turns[0] && turns[0].startedAt, c.seenByClaude, reportState(c), sess && sess.label, ro, (workState(c) || {}).sig]),
         about: JSON.stringify([t.sessionId, t.lane, laneFollowUp(c), t.parentSessionId, turns, reportState(c), sess, t.context, t.brief, t.agent, t.model, t.effort, c.parent, milestoneChoices(), ro]),
         trace: JSON.stringify([turns, t.runState, t.lane && t.lane.implementer]),
         convo: JSON.stringify([turns, t.runState]),
-        composer: t.runState + '|' + t.sessionId + '|' + (t.lane ? laneSig(c) : '') + '|' + ro,
+        composer: t.runState + '|' + t.sessionId + '|' + (t.lane ? laneSig(c) : '') + '|' + fullBlock(c) + '|' + ro,
         foot: t.runState + '|' + ro,
       };
       W.update(c);

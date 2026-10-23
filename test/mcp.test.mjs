@@ -40,7 +40,7 @@ test('initialize carries the usage guide: the full one for a board project, the 
   const r = await c.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'x', version: '1' } });
   const ins = r.result.instructions;
   assert.equal(typeof ins, 'string');
-  for (const word of ['board_add', 'wait_add', 'Waiting on you: c37.w2', 'answered_in_chat', '[c12]', 'worker', 'board_list', 'thread_report', 'never mark', 'did not verify', 'thread_start (lane, card)', 'delegate relay']) {
+  for (const word of ['board_add', 'wait_add', 'Waiting on you: c37.w2', 'answered_in_chat', '[c12]', 'worker', 'board_list', 'thread_report', 'never mark', 'did not verify', 'thread_start (lane, card)', 'delegate relay', 'CRITICAL']) {
     assert.ok(ins.toLowerCase().includes(word.toLowerCase()), `instructions say ${word}`);
   }
   assert.ok(ins.length < 1800, `short: ${ins.length}`);

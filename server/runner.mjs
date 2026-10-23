@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { appendFileSync, createWriteStream, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { MAX_LANE_EVENTS, laneReader, laneTranslator } from './laneevents.mjs';
-import { UUID_RE, activityPath, buildClaudeArgs, buildPrompt, buildRelayArgs, clip, findThread, isThread, pinStore, projectPaths, readStateLocked, setRunState, tail, threadById, updateState } from './core.mjs';
+import { UUID_RE, activityPath, buildClaudeArgs, buildPrompt, buildRelayArgs, canWrite, clip, findThread, fullRefusal, isRepoCardFile, isThread, pinStore, projectPaths, readStateLocked, setRunState, tail, threadById, updateState } from './core.mjs';
 import { relayPath, resumeIdOf, unusableLane } from './lanes.mjs';
 import { MAX_EVENTS, MAX_TEXT, closeLinkedRun, resultText, summarize } from './runs.mjs';
 import { PRIVATE_FILE, mkdirPrivateSync } from './state.mjs';
@@ -45,6 +45,7 @@ let errStream = null;
 let lane = null;        // the thread's lane while this turn runs on one: { implementer, ... }
 let laneOut = null;     // that turn's relay output folder
 let laneMode = 'read';   // the thread's access, for the note about files
+let fullBad = '';        // why a full-access turn may not run (the user no longer allows it on the card): then nothing runs at all
 let laneBad = '';       // why the thread's lane record cannot run (then nothing runs at all)
 let laneTimer = null;
 let translateLane = null;
@@ -259,6 +260,7 @@ function computeOutcome(crash) {
   if (crash) return { ok: false, error: `runner error: ${tail(crash && crash.message ? crash.message : crash, 300)}` };
   if (userEnded) return { ok: false, error: 'ended by user' };
   if (missingDir) return { ok: false, error: `project folder not found: ${projectDir}` };
+  if (fullBad) return { ok: false, error: `this thread cannot run a turn: ${fullBad}` };
   if (laneBad) return { ok: false, error: `this thread's lane cannot run: ${laneBad}. Start a new thread instead.` };
   if (spawnError) {
     if (lane) return { ok: false, error: `could not start the ${lane.implementer} relay: ${tail(spawnError.message, 300)}` };
@@ -383,9 +385,11 @@ async function main() {
     process.stderr.write('usage: runner.mjs <projectDir> <cardId> [store key]\n');
     process.exit(2);
   }
-  let card;
+  let card, cards;
   try {
-    card = findThread(await readStateLocked(projectDir), cardId);
+    const state = await readStateLocked(projectDir);
+    cards = state.cards;
+    card = findThread(state, cardId);
   } catch (e) {
     process.stderr.write(`thread runner: ${e.message}\n`);
     process.exit(1);
@@ -408,6 +412,14 @@ async function main() {
     errStream.write(header);
   } catch { /* logging is best effort */ }
 
+  // Full access is checked again here, as the turn launches: the user may have taken it away since the follow-up was sent, and a thread record
+  // that says "full" is not proof that the user allowed it.
+  // The runner reads this machine's local store, which has no repo card in it: for a card that is a file in the repo only start and continue (which
+  // read the joined board) can check, and the runner leaves that to them. A card that is simply missing (removed since the turn was scheduled) fails.
+  if (card.thread.mode === 'full' && !(card.thread.forCard && isRepoCardFile(projectDir, card.thread.forCard))) {
+    fullBad = fullRefusal(cards, card);
+    if (fullBad) return finish();
+  }
   const prompt = buildPrompt(card, projectDir);
   // A lane record that is present but unusable must never fall through to running claude.
   const tl = card.thread.lane;
@@ -415,7 +427,7 @@ async function main() {
     laneBad = unusableLane(tl);
     if (laneBad) return finish();
     lane = tl;
-    laneMode = card.thread.mode === 'write' ? 'write' : 'read';
+    laneMode = canWrite(card.thread.mode) ? 'write' : 'read';
   }
   let cmd = bin;
   let args;
