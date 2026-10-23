@@ -485,7 +485,8 @@ test('thread_start through MCP takes card, thread_status shows "for c1", and the
   await untilState(e, th.id, 'idle');
   // the runner works in the thread's own store, where the repo's cards are not: the sweep, which sees both, closes the run from the turn's record
   assert.equal(card(e.projectDir, c1.id).runs[0].state, 'running');
-  await core.reconcile(e.projectDir);
+  // the runner says idle and beats a moment longer while it exits, and the sweep leaves a beating thread alone: a board poll comes again
+  await waitFor(async () => { await core.reconcile(e.projectDir); return card(e.projectDir, c1.id).runs[0].state !== 'running'; });
   const closed = card(e.projectDir, c1.id).runs[0];
   assert.equal(closed.state, 'done');
   assert.equal(closed.ok, true);
@@ -507,7 +508,7 @@ test('thread_start through MCP takes card, thread_status shows "for c1", and the
   await core.continueThread(e.projectDir, th.id, 'Once more.');
   assert.equal(card(e.projectDir, c1.id).runs.length, 2);
   await untilState(e, th.id, 'idle');
-  await core.reconcile(e.projectDir);
+  await waitFor(async () => { await core.reconcile(e.projectDir); return card(e.projectDir, c1.id).runs[1].state !== 'running'; });
   assert.equal(card(e.projectDir, c1.id).runs[1].state, 'done');
   await core.updateState(e.projectDir, (s) => { s.cards = s.cards.filter((c) => c.id !== th.id); });
   await core.updateState(e.projectDir, (s) => { s.cards.find((c) => c.id === c1.id).runs.push({ n: 3, thread: 'c9', turn: 1, agentType: 'thread', mode: 'background', description: 'x', state: 'running', sessionId: '', startedAt: new Date().toISOString(), finishedAt: null, ok: null, prompt: null, result: null }); });
