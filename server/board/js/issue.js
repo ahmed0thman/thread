@@ -305,7 +305,7 @@
       fWorker.setAttribute('aria-haspopup', 'dialog');
       workerField.append(workerCaption, h('span', 'foot-note', 'Starting this card as a thread runs it as this worker. A lane’s CLI sends the card and the files it reads to its provider. Only approved lanes can be picked.'));
       body.appendChild(workerField);
-      fWorker.addEventListener('click', () => openWorkerPicker({ value: WE.value, opener: fWorker, onPick: (key) => { WE.pick(key); showWorker(); onTouched(); }, marks: () => workerMarks(workerCard) }));
+      fWorker.addEventListener('click', () => openWorkerPicker({ value: WE.value, opener: fWorker, onPick: (key) => { WE.pick(key); showWorker(); onTouched(); }, marks: () => workerMarks(workerCard), chosen: WE.dirty() ? { text: 'Picked', title: 'Picked here, not saved yet: Save stores it' } : WE.value ? { text: 'Saved', title: 'Saved on this card' } : null }));
       fWorker.addEventListener('mouseenter', () => { if (!fWorker.disabled && !WE.dirty()) fWorker.title = effectiveWorker(workerCard, Date.now()).title; });   // the running time moves on between two drawings
     }
     // A worker picked and not saved yet is shown as picked. Otherwise: what works on the card now, the saved worker, the last one used.
@@ -568,7 +568,7 @@
             workerBtn.replaceChildren(...workerButtonContent(wkKey()));
             step.appendChild(field('Worker', workerBtn, 'f-start-worker'));
             // the step is drawn again for the choice (its session, mode and context carry over), then the focus goes back to the button
-            workerBtn.addEventListener('click', () => openWorkerPicker({ value: wkKey(), opener: workerBtn, onPick: (key) => { P.startWorker = key; renderFoot(); const b = foot.querySelector('.wk-btn'); if (b) b.focus(); }, marks: () => workerMarks(findCard(P.target) || card), findOpener: () => foot.querySelector('.wk-btn') }));
+            workerBtn.addEventListener('click', () => openWorkerPicker({ value: wkKey(), opener: workerBtn, onPick: (key) => { P.startWorker = key; renderFoot(); const b = foot.querySelector('.wk-btn'); if (b) b.focus(); }, marks: () => workerMarks(findCard(P.target) || card), chosen: { text: 'Selected', title: 'Start runs this worker' }, findOpener: () => foot.querySelector('.wk-btn') }));
           }
           const dyn = h('div', 'start-dyn');
           step.appendChild(dyn);

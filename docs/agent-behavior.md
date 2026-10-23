@@ -13,6 +13,7 @@ With the task board on, Claude is told how to use it so that it manages its own 
 - It acts on every answer you send from the board, and closes an item itself when you answer in the chat.
 - It writes any command it asks you to run in its own fenced code block, one command per block, so the board shows it with a Copy button, and names another card by its id (`c12`), not by a board address.
 - It starts each sub-agent call's description with the card id (`[c12] ...`) so the board shows that agent's work on the card, and passes who did the work.
+- It hands a card's work to a [delegation lane](delegation.md#running-a-lane-for-a-card) with `thread_start` and `card`, not by running a delegate skill's relay itself from the shell: a relay it runs on its own never reaches the plugin, so the card would show no working indicator and no steps.
 - It moves cards as the work moves, never marks a card done that it did not verify, and looks at the board at natural stopping points for cards you added.
 - A side question you start with `/thread:new` runs as a thread: Claude does not wait for it or poll it, and reports it when you ask.
 

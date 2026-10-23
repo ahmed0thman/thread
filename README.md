@@ -81,7 +81,7 @@ A question, choice, to-do or review stays on the card it belongs to. Open the Wa
 
 ### Runs linked to their cards
 
-A sub-agent call whose description starts with the card id, or a thread on a Codex, OpenCode, Antigravity or Claude lane, shows its prompt, live steps and report on that card. See [Task and idea pages](docs/board.md#task-and-idea-pages) and [Delegation lanes](docs/delegation.md).
+A sub-agent call whose description starts with the card id, or a thread started for the card on a Codex, OpenCode, Antigravity or Claude lane, shows its prompt, live steps and report on that card; a delegate relay that Claude runs itself from the shell does not, and Claude is told not to do that. See [Task and idea pages](docs/board.md#task-and-idea-pages) and [Delegation lanes](docs/delegation.md).
 
 ## Limits and data flow
 
@@ -104,7 +104,7 @@ More in [Security](docs/security.md).
 
 All of it is the author's own; no outside user reports exist yet. Details, dates and the checks not run are on the [evidence page](docs/evidence.md).
 
-- **Automated suite:** `node --test` runs 1392 tests, all passing on 0.24.0 on Node 20, 22 and 24 in CI, together with `claude plugin validate .`. The [CI workflow](.github/workflows/test.yml) runs both on pushes to main and on pull requests.
+- **Automated suite:** `node --test` runs 1394 tests, all passing on 0.24.1 on Node 20, 22 and 24 in CI, together with `claude plugin validate .`. The [CI workflow](.github/workflows/test.yml) runs both on pushes to main and on pull requests.
 - **The gate and the answers, on 0.22.0, for real** ([details](docs/evidence.md#6-smoke-test-of-the-promoted-workflow-on-0220)): one fresh Claude Code 2.1.299 session in a scratch project, whose first turn asked whether the plugin's guide had arrived and which was then given two tasks with no mention of the board. Claude put both on the board before editing and raised one review item (the second task needed none, so sending two answers at once was not shown). The answer, sent through the board's own route, reached the next turn; asked in the chat to mark the card done, Claude was refused; after an approval through the same route, the move went through. One run, one model.
 - **Real Claude Code checks, on record** ([details](docs/evidence.md#real-claude-code-checks)):
   - a lean thread run on 0.7.0 (2026-10-13);
@@ -140,11 +140,10 @@ The [full index](docs/README.md) groups every feature by what you want to do. By
 
 ## Latest release
 
-**0.24.0** (2026-10-22)
+**0.24.1** (2026-10-23)
 
-- Work on a Codex, OpenCode or Claude lane shows on its task card like a sub-agent run, with live steps and the report.
-- Claude is no longer shown the board's token: `/thread:board` opens the board in your browser itself.
-- You hear about updates: "Updated to X" once with What's new, how to turn on auto-update, and an opt-in daily check for a newer release.
+- Claude is told to hand a card to a lane through `thread_start`, so the lane's run shows on the card instead of nothing.
+- The **Choose a worker** dialog says **Saved**, **Picked** or **Selected** instead of **Current**, and opens on the tab of the worker the card's field shows.
 
 All releases: [CHANGELOG.md](CHANGELOG.md).
 

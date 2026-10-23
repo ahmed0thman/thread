@@ -32,14 +32,18 @@
   // `value` is the worker now chosen (a key, see model.js), `opener` the button to give the focus back to, `onPick(key)` what to do with a choice.
   // `findOpener()` finds the button again when the page was drawn again meanwhile and `opener` is gone.
   // `marks()` says which listed workers work on the card now or were used last: { 'agent:x': 'now', 'lane:y': 'last' } (see workerMarks).
-  function openWorkerPicker({ value, opener, onPick, findOpener, marks: getMarks }) {
+  // `chosen` is the badge on the row of `value`, { text, title } (the card form: Saved or Picked; the start step: Selected), or null for none
+  // (the card form with nothing saved: Claude (default) is then only what the card falls back to, not a choice, so no row is selected).
+  function openWorkerPicker({ value, opener, onPick, findOpener, marks: getMarks, chosen = { text: 'Selected', title: '' } }) {
     closeWorkerPicker();
     let rows = workerRows();
     let found = true;
     let query = '';
-    let tab = workerTabOf(rows, value) || (WORKER_TABS.find(([id]) => rows[id].length) || WORKER_TABS[0])[0];
+    let cardMarks = (getMarks && getMarks()) || {};  // read again each time the lists are drawn
+    // it opens on the tab of the chosen worker, else of the one working on the card now, else of the last one used, so its badge is in view
+    const markedKey = (m) => Object.keys(cardMarks).find((k) => cardMarks[k] === m);
+    let tab = (value && workerTabOf(rows, value)) || workerTabOf(rows, markedKey('now')) || workerTabOf(rows, markedKey('last')) || (WORKER_TABS.find(([id]) => rows[id].length) || WORKER_TABS[0])[0];
     let active = null;   // the row that is a tab stop; the arrows move it
-    let cardMarks = {};  // read again each time the lists are drawn
 
     const scrim = h('div', 'wp-scrim');
     const box = h('div', 'wp');
@@ -95,7 +99,7 @@
       el.setAttribute('role', 'option');
       el.tabIndex = -1;
       el.dataset.key = r.key;
-      const cur = r.key === value;
+      const cur = r.key === value && !!chosen;   // with nothing chosen no row is drawn as the choice
       el.setAttribute('aria-selected', cur ? 'true' : 'false');
       const off = !!r.why;
       if (off) el.setAttribute('aria-disabled', 'true');
@@ -106,7 +110,7 @@
       const marks = h('span', 'wp-marks');
       if (cardMarks[r.key] === 'now') marks.appendChild(badge('Working now', 'This worker is working on this card right now', 'wp-now'));
       else if (cardMarks[r.key] === 'last') marks.appendChild(badge('Last used', 'Claude used this worker last on this card', 'wp-last'));
-      if (cur) marks.appendChild(badge('Current', '', 'wp-cur'));
+      if (cur && chosen) marks.appendChild(badge(chosen.text, chosen.title, 'wp-cur'));
       if (r.kind === 'agent' && r.why !== 'not found') marks.appendChild(badge(r.where === 'user' ? 'User' : 'Project', r.where === 'user' ? 'Defined in your own .claude/agents folder' : 'Defined in this project’s .claude/agents folder', 'wp-where'));
       if (r.readOnly) marks.appendChild(badge('Read-only', 'This lane cannot edit files'));
       if (r.overrides) marks.appendChild(badge('Overrides global', 'A global lane has the same name; this project’s lane is used instead'));

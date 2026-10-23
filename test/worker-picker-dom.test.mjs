@@ -43,11 +43,11 @@ function pickerPage() {
 }
 
 // Opens one picker over a fresh opener button and returns the picked keys, the opener, the scrim and the dialog box.
-function open(t, { value = '', marks } = {}) {
+function open(t, { value = '', marks, chosen } = {}) {
   const picked = [];
   const opener = t.doc.createElement('button');
   t.doc.body.appendChild(opener);
-  t.page.openWorkerPicker({ value, opener, marks: () => (marks || {}), onPick: (key) => picked.push(key) });
+  t.page.openWorkerPicker({ value, opener, marks: () => (marks || {}), onPick: (key) => picked.push(key), ...(chosen !== undefined ? { chosen } : {}) });
   const scrim = t.doc.body.children.filter((c) => c.className === 'wp-scrim')[0];
   assert.ok(scrim, 'the picker opened');
   return { picked, opener, scrim, box: scrim.querySelector('.wp') };
@@ -177,12 +177,12 @@ test('Esc closes the dialog without picking, and so do a press on the scrim and 
   assert.equal(t.page.modal, null);
 });
 
-test('the current choice is marked: aria-selected and a Current badge on exactly that row, which is the tab stop', () => {
+test('the current choice is marked: aria-selected and a Selected badge (the default) on exactly that row, which is the tab stop', () => {
   const t = pickerPage();
   const { box } = open(t, { value: 'agent:worker' });
   const cur = byKey(box, 'agent:worker');
   assert.equal(cur.getAttribute('aria-selected'), 'true');
-  assert.ok(badges(cur).includes('Current'));
+  assert.ok(badges(cur).includes('Selected'));
   assert.deepEqual(rows(box).filter((r) => r.getAttribute('aria-selected') === 'true').map((r) => r.dataset.key), ['agent:worker']);
   assert.deepEqual(rows(box).map((r) => r.tabIndex), rows(box).map((r) => (r === cur ? 0 : -1)), 'only the current row is a tab stop');
 });
@@ -207,7 +207,7 @@ test('a current choice the lists no longer know is shown above the default, stay
   assert.equal(lost.getAttribute('aria-disabled'), 'true');
   assert.equal(lost.querySelector('.wp-name').textContent, 'agent: gone');
   assert.ok(badges(lost).includes('Not found'), 'it is marked as not found');
-  assert.ok(badges(lost).includes('Current'), 'and still as the current choice');
+  assert.ok(badges(lost).includes('Selected'), 'and still as the current choice');
   assert.match(lost.querySelector('.wp-hint').textContent, /No longer available\. Pick another worker\./);
   assert.ok(lost.tabIndex === 0 && rows(box).filter((r) => r.tabIndex === 0).length === 1, 'it keeps the tab stop; the default row does not');
   type(box, 'gone');   // a search that empties every list still keeps it there, selected
@@ -217,4 +217,35 @@ test('a current choice the lists no longer know is shown above the default, stay
   box.fire('keydown', { key: 'Enter', target: again });
   assert.deepEqual(picked, [], 'Enter on it cannot pick a worker that is gone');
   assert.notEqual(t.page.modal, null, 'the dialog is still up');
+});
+
+test('the badge on the chosen row is what the caller says: Saved with its title; with nothing saved no row is selected and Claude (default) gets no badge', () => {
+  const t = pickerPage();
+  let o = open(t, { value: 'agent:worker', chosen: { text: 'Saved', title: 'Saved on this card' } });
+  const saved = byKey(o.box, 'agent:worker').querySelectorAll('.wp-badge').find((b) => b.textContent === 'Saved');
+  assert.equal(saved.title, 'Saved on this card');
+  assert.ok(!rows(o.box).some((r) => badges(r).includes('Selected')), 'the default text is not added beside it');
+  t.page.closeWorkerPicker();
+  o = open(t, { value: '', chosen: null, marks: { 'lane:code-codex': 'last' } });
+  const def = byKey(o.box, '');
+  assert.deepEqual(rows(o.box).filter((r) => r.getAttribute('aria-selected') === 'true'), [], 'no row is drawn as the choice');
+  assert.deepEqual(badges(def), [], 'and no badge says it was chosen');
+  assert.equal(rows(o.box).filter((r) => r.tabIndex === 0).length, 1, 'one row is still the tab stop');
+});
+
+test('with nothing chosen it opens on the tab of the worker working now, else of the last one used; a chosen worker wins', () => {
+  const t = pickerPage();
+  const selectedTab = (box) => tabs(box).find((b) => b.getAttribute('aria-selected') === 'true').id;
+  let o = open(t, { value: '', chosen: null, marks: { 'lane:code-codex': 'last' } });
+  assert.equal(selectedTab(o.box), 'wp-tab-global');
+  assert.ok(badges(byKey(o.box, 'lane:code-codex')).includes('Last used'), 'the Last used badge is in view');
+  t.page.closeWorkerPicker();
+  o = open(t, { value: '', chosen: null, marks: { 'lane:code-codex': 'last', 'lane:review-ro': 'now' } });
+  assert.equal(selectedTab(o.box), 'wp-tab-project', 'working now comes before last used');
+  t.page.closeWorkerPicker();
+  o = open(t, { value: 'agent:worker', marks: { 'lane:code-codex': 'last' } });
+  assert.equal(selectedTab(o.box), 'wp-tab-agents');
+  t.page.closeWorkerPicker();
+  o = open(t, { value: '', marks: {} });
+  assert.equal(selectedTab(o.box), 'wp-tab-agents', 'no marks: the first tab with rows');
 });

@@ -1273,13 +1273,13 @@ function openInBrowser(link) {
 const BOARD_GUIDE = [
   'thread keeps this project\'s task board; the user reads it on a web page.',
   '- Before you start work the user asked for, put it on the board: board_add, or board_update an existing card to the working stage. A mid-task instruction becomes a card; do not drop the current task.',
-  '- Never put a question, a choice, a review request or a to-do for the user only in the chat. Record it with wait_add on the card for that work (board_add one first if there is none) and write in the chat only the line wait_add returns ("Waiting on you: c37.w2", linked to its card); keep that link when you name it. Keep working on whatever the answer does not block. If nothing can go on without the answer, you may also ask in the chat, but still call wait_add. Put any command for the user in its own fenced code block (one per block): the board adds a Copy button. Name another card by its id (c12), not by a board URL.',
+  '- Never put a question, a choice, a review request or a to-do for the user only in the chat. Record it with wait_add on the card for that work (board_add one if none) and write in the chat only the line wait_add returns ("Waiting on you: c37.w2", linked to its card); keep that link when you name it. Keep doing what the answer does not block. If nothing can go on without the answer, you may also ask in the chat, but still call wait_add. Put each command for the user in its own fenced code block. Name another card by its id (c12), not by a board URL.',
   '- Answers arrive as lines "The user answered c37.w2 on the board": act on every one. If the user answers in the chat instead, call wait_close with answered_in_chat.',
-  '- Start every Agent call\'s description with the card id in brackets: "[c12] fix the rounding".',
+  '- Start every Agent call\'s description with the card id in brackets: "[c12] fix the rounding". Hand a card to a lane only with thread_start (lane, card), not by running a delegate relay yourself, which the card cannot show.',
   '- Move cards as the work moves, with the stage ids and roles from board_list. Never mark a card done that you did not verify; a card with acceptance criteria needs an approved review item first.',
   '- Pass worker ("main" or "agent:<type>") on board_add, board_update and wait_add. Call board_list at stopping points to pick up cards the user added.',
 ];
-const THREAD_GUIDE = '- A side question the user starts with /thread:new runs as a background thread (thread_start). Do not wait for it or poll it; call thread_report when the user asks or when the board says a report was requested. When a thread or lane does the work of a card, pass card to thread_start.';
+const THREAD_GUIDE = '- A side question the user starts with /thread:new runs as a background thread (thread_start). Do not wait for it or poll it; call thread_report when the user or the board asks for a report. A thread doing a card\'s work gets card too.';
 const CHAT_GUIDE = 'thread starts side threads: background Claude sessions that work on a separate task. The user starts one with /thread:new. Do not wait for it or poll it; call thread_report when the user asks or when the board says a report was requested.';
 
 // The usage guide sent in the initialize answer, which Claude Code puts in the system prompt. A board project gets the full guide, a
