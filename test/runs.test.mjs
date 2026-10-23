@@ -823,3 +823,42 @@ test('the start hook starts no worker for a project that is chat-only or has no 
   assert.equal(runs.canTrack(w.projectDir), false);
   assert.equal(runs.canTrack(path.join(w.base, 'nowhere')), false);
 });
+
+// Claude Code hands a sub-agent's report back with a SubagentHandback tool call; the agent then ends with no text, and SubagentStop's
+// last_assistant_message is empty. The report is taken from that call (the shape of a real transcript of 2026-10-23).
+const HANDBACK_TEXT = 'Result: all six checks pass.\n\n1. PASS. The field reads "code-codex · last used".';
+const handbackLines = (message) => [
+  { type: 'assistant', message: { id: 'msg_handback', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_handback', name: 'SubagentHandback', input: { message } }], usage: { input_tokens: 1, output_tokens: 1 } } },
+  { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_handback', content: 'Handed back.' }] } },
+].map((l) => JSON.stringify(l)).join('\n') + '\n';
+
+test('SubagentStop with no last message takes the report from the agent\'s SubagentHandback call', async (t) => {
+  const w = world(t);
+  const file = w.install(READ_ID, { description: '[c8] read each file', requestShape: 'background' });
+  fs.appendFileSync(file, handbackLines('an earlier draft'));
+  fs.appendFileSync(file, handbackLines(HANDBACK_TEXT));
+  await hook(w, 'SubagentStart', w.input('SubagentStart', READ_ID));
+  await runs.stopRun(w.projectDir, w.input('SubagentStop', READ_ID, { last_assistant_message: '', agent_transcript_path: file }), { settleMs: 0 });
+  const run = w.card('c8').runs[0];
+  assert.equal(run.state, 'done');
+  assert.equal(run.result, HANDBACK_TEXT, 'the last hand-back is the report');
+  assert.equal(runs.scanTranscript(file).handback, HANDBACK_TEXT);
+});
+
+test('a hand-back call wins over a last message: only the hand-back reaches the main session', async (t) => {
+  const w = world(t);
+  const file = w.install(READ_ID, { description: '[c8] read each file' });
+  fs.appendFileSync(file, handbackLines(HANDBACK_TEXT));
+  await hook(w, 'SubagentStart', w.input('SubagentStart', READ_ID));
+  await runs.stopRun(w.projectDir, w.input('SubagentStop', READ_ID, { last_assistant_message: 'Handing back now.', agent_transcript_path: file }), { settleMs: 0 });
+  assert.equal(w.card('c8').runs[0].result, HANDBACK_TEXT);
+});
+
+test('a transcript with no hand-back call gives no hand-back, and a blank one is ignored', () => {
+  assert.equal(runs.scanTranscript(path.join(FIXTURES, `agent-${READ_ID}.jsonl`)).handback, null);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'handback-'));
+  const file = path.join(dir, 'agent-x.jsonl');
+  fs.writeFileSync(file, handbackLines('   '));
+  assert.equal(runs.scanTranscript(file).handback, null);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

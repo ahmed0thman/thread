@@ -85,7 +85,7 @@
   }
 
   // ----- the drafts -----
-  const draftEmpty = (d) => !d.text.trim() && !d.choices.length && !d.done && !d.verdict && !d.comment.trim();
+  const draftEmpty = (d) => !d.text.trim() && !d.choices.length && !d.otherOn && !d.done && !d.verdict && !d.comment.trim();
   // A stored draft as the page uses it, or null when it is not one. The text is cut to what the server accepts.
   function cleanDraft(id, v) {
     if (!/^c(?=[a-z]*[0-9])[0-9a-z]+\.w[0-9]+$/.test(id) || !v || typeof v !== 'object') return null;
@@ -95,6 +95,8 @@
       done: v.done === true,
       verdict: v.verdict === 'approve' || v.verdict === 'changes' ? v.verdict : '',
       comment: typeof v.comment === 'string' ? v.comment.slice(0, 2000) : '',
+      otherOn: v.otherOn === true,
+      other: typeof v.other === 'string' ? v.other.slice(0, 4000) : '',
     };
   }
   // The project's drafts as the storage holds them now, by item id; {} when there are none or they are rubbish, null when the storage cannot be read.
@@ -265,13 +267,17 @@
   function waitDraft(w) {
     loadDrafts(selKey);
     const k = selKey + '/' + w.id;
-    if (!waitDrafts[k]) waitDrafts[k] = { text: '', choices: [], done: false, verdict: '', comment: '' };
+    if (!waitDrafts[k]) waitDrafts[k] = { text: '', choices: [], done: false, verdict: '', comment: '', otherOn: false, other: '' };
     return waitDrafts[k];
   }
   // Is the answer complete?
   function waitReady(w, d) {
     if (w.kind === 'question') return !!d.text.trim();
-    if (w.kind === 'choice') return w.multi === true ? d.choices.length > 0 : d.choices.length === 1;
+    if (w.kind === 'choice') {
+      if (d.otherOn && !d.other.trim()) return false;
+      const n = d.choices.length + (d.otherOn ? 1 : 0);
+      return w.multi === true ? n > 0 : n === 1;
+    }
     if (w.kind === 'todo') return d.done === true;
     return d.verdict === 'approve' || d.verdict === 'changes';
   }
@@ -279,7 +285,12 @@
   function waitBody(w, d) {
     const b = {};
     if (w.kind === 'question') b.text = d.text.trim();
-    else if (w.kind === 'choice') b.choices = d.choices.slice();
+    else if (w.kind === 'choice') {
+      b.choices = d.choices.slice();
+      // the words go in choices too, first: a board server of an older version does not know `other` and would store the options alone and
+      // lose them; it refuses this body ("not an option") instead, and the draft is kept
+      if (d.otherOn) { b.choices.unshift('Other: ' + d.other.trim()); b.other = d.other.trim(); }
+    }
     else if (w.kind === 'todo') b.done = true;
     else b.verdict = d.verdict;
     if (w.kind !== 'question' && d.comment.trim()) b.comment = d.comment.trim();
@@ -290,7 +301,16 @@
     const a = w.answer && typeof w.answer === 'object' ? w.answer : {};
     let t;
     if (w.kind === 'question' || w.answeredVia === 'chat') t = a.text || '';
-    else if (w.kind === 'choice') t = (Array.isArray(a.choices) ? a.choices : []).join(', ');
+    else if (w.kind === 'choice') {
+      // the free text of an Other answer is also an entry of choices (for older versions); it is shown once, first (a file may hold `other` alone)
+      let all = Array.isArray(a.choices) ? a.choices.slice() : [];
+      if (typeof a.other === 'string' && a.other) {
+        const at = all.indexOf('Other: ' + a.other);
+        if (at >= 0) all.splice(at, 1);
+        all = ['Other: ' + a.other, ...all];
+      }
+      t = all.join(', ');
+    }
     else if (w.kind === 'todo') t = 'Done';
     else t = a.verdict === 'approve' ? 'Approved' : 'Changes requested';
     return w.comment ? (t ? t + ' — ' : '') + w.comment : t;
@@ -390,6 +410,7 @@
       return box;
     };
     let onPick = () => {};
+    let showOther = () => {};
     if (w.kind === 'question') {
       const ta = h('textarea', 'input');
       ta.rows = 3;
@@ -405,9 +426,46 @@
       const multi = w.multi === true;
       const options = (Array.isArray(w.choices) ? w.choices : []).map((c) => [c, c]);
       // a radio button fires change only for the one that was picked, so a single choice replaces the earlier pick
-      onPick = (value, on) => { d.choices = d.choices.filter((c) => multi && c !== value); if (on) d.choices.push(value); };
+      // and picking an option turns Other off (a radio group allows one)
+      onPick = (value, on) => { d.choices = d.choices.filter((c) => multi && c !== value); if (on) { d.choices.push(value); if (!multi) d.otherOn = false; } showOther(); };
       d.choices = d.choices.filter((c) => options.some((o) => o[0] === c));
-      li.appendChild(radios('wait-' + w.id, multi ? 'Pick any that apply' : 'Pick one', options, multi, (v) => d.choices.includes(v)));
+      const box = radios('wait-' + w.id, multi ? 'Pick any that apply' : 'Pick one', options, multi, (v) => d.choices.includes(v));
+      // the last row: Other, with a text box for the user's own answer while it is on
+      const ro2 = h('input');
+      ro2.type = multi ? 'checkbox' : 'radio';
+      ro2.name = 'wait-' + w.id;
+      ro2.value = '';
+      ro2.checked = d.otherOn;
+      ro2.disabled = ro;
+      ro2.dataset.fid = 'w-opt-' + w.id + '-other';
+      const ol = h('label', 'radio');
+      ol.append(ro2, h('span', null, 'Other'));
+      const oi = h('input', 'input');
+      oi.type = 'text';
+      oi.maxLength = 4000;
+      oi.value = d.other;
+      oi.disabled = ro;
+      oi.placeholder = 'Your own answer';
+      oi.setAttribute('aria-label', 'Your own answer to ' + w.id);
+      oi.dataset.fid = 'w-other-' + w.id;
+      oi.addEventListener('input', () => { d.other = oi.value; touched(); });
+      showOther = () => { oi.hidden = !d.otherOn; };
+      showOther();
+      // the box takes focus only when Other was clicked: an arrow key in a radio group also changes the pick, and must not pull the user in.
+      // The click comes before the change; a click made with the keyboard has detail 0.
+      let clicked = false;
+      ro2.addEventListener('click', (e) => { clicked = e.detail > 0; });
+      ro2.addEventListener('change', () => {
+        const byPointer = clicked;
+        clicked = false;
+        d.otherOn = ro2.checked;
+        if (!multi && d.otherOn) d.choices = [];
+        showOther();
+        touched();
+        if (d.otherOn && byPointer && oi.focus) oi.focus({ preventScroll: true });
+      });
+      box.append(ol, oi);
+      li.appendChild(box);
     } else if (w.kind === 'todo') {
       const r = h('input');
       r.type = 'checkbox';

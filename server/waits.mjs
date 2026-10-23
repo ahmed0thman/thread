@@ -17,6 +17,7 @@ export const MIN_CHOICES = 2;
 export const MAX_CHOICES = 8;
 export const MAX_ANSWER = 4000;
 export const MAX_COMMENT = 2000;
+export const OTHER_PREFIX = 'Other: ';   // the free text of an "Other" answer is also the first entry of answer.choices, so older versions show it
 export const MAX_OPEN_WAITS = 20;             // open items on one card
 export const MAX_DELIVERED_AT_ONCE = 20;      // answers one prompt carries; the rest follow with the next (one Send on the board can answer this many)
 export const MAX_BATCH = 50;                  // answers in one batch from the board
@@ -346,15 +347,34 @@ function checkAnswer(item, body) {
     if (c.length > MAX_COMMENT) throw new WaitError(`the comment is too long (${c.length} characters, the limit is ${MAX_COMMENT})`);
     if (c) comment = c;
   }
+  if (item.kind !== 'choice' && b.other !== undefined) throw new WaitError('other belongs to a choice only');
   let answer;
   if (item.kind === 'question') {
     answer = { text: cleanText(b.text, 'the answer', MAX_ANSWER) };
   } else if (item.kind === 'choice') {
     const options = Array.isArray(item.choices) ? item.choices : [];
-    if (!Array.isArray(b.choices) || b.choices.some((c) => typeof c !== 'string' || !options.includes(c))) throw new WaitError('choices must be options of this item');
-    if (new Set(b.choices).size !== b.choices.length) throw new WaitError('an option is chosen twice');
-    if (item.multi === true ? b.choices.length < 1 : b.choices.length !== 1) throw new WaitError(item.multi === true ? 'choose at least one option' : 'choose exactly one option');
-    answer = { choices: b.choices.slice() };
+    let other;
+    if (b.other !== undefined && b.other !== null) {
+      if (typeof b.other !== 'string') throw new WaitError('other must be text');
+      other = cleanText(b.other, 'the other answer', MAX_ANSWER);
+    }
+    // choices may be left out when the answer is Other alone. The page also sends the Other entry inside choices (an older board server then
+    // refuses the body as "not an option" instead of storing the options and dropping the words): it is taken out before the check.
+    let picked = b.choices === undefined && other !== undefined ? [] : b.choices;
+    if (other !== undefined && Array.isArray(picked) && picked.includes(OTHER_PREFIX + other)) {
+      const at = picked.indexOf(OTHER_PREFIX + other);
+      picked = [...picked.slice(0, at), ...picked.slice(at + 1)];
+    }
+    if (!Array.isArray(picked) || picked.some((c) => typeof c !== 'string' || !options.includes(c))) throw new WaitError('choices must be options of this item');
+    if (new Set(picked).size !== picked.length) throw new WaitError('an option is chosen twice');
+    if (item.multi === true) {
+      if (picked.length + (other === undefined ? 0 : 1) < 1) throw new WaitError('choose at least one option, or answer Other');
+    } else if (picked.length + (other === undefined ? 0 : 1) !== 1) {
+      throw new WaitError(picked.length && other !== undefined ? 'choose one option or answer Other, not both' : 'choose exactly one option, or answer Other');
+    }
+    // Older versions read only `choices` (they show and deliver it as it stands), so the free text is also an entry of it, prefixed and first:
+    // a version that names only the first MAX_CHOICES entries still names it.
+    answer = other === undefined ? { choices: picked.slice() } : { choices: [OTHER_PREFIX + other, ...picked], other };
   } else if (item.kind === 'todo') {
     if (b.done !== true) throw new WaitError('done must be true');
     answer = { done: true };
@@ -445,9 +465,16 @@ export function answerPhrase(item, max = 0) {
   // the user's words go in as JSON strings: text in a card file can be written by anyone who can commit, and must not close the quote
   if (item.kind === 'question' || item.answeredVia === 'chat') out = quote(a.text ?? '');
   else if (item.kind === 'choice') {
-    const all = Array.isArray(a.choices) ? a.choices : [];
+    let all = Array.isArray(a.choices) ? a.choices : [];
+    // `other` is the user's own words, and an entry of choices (first when stored by this version, last by an earlier one) repeats it for older
+    // versions: it is said once, first, apart from the options, so that a long list of options cannot push it out of a cut line
+    const other = typeof a.other === 'string' && a.other ? a.other : '';
+    const at = other ? all.indexOf(OTHER_PREFIX + other) : -1;
+    if (at >= 0) all = [...all.slice(0, at), ...all.slice(at + 1)];
     const shown = max ? all.slice(0, MAX_CHOICES) : all;
-    out = `chose ${shown.map(quote).join(', ')}${shown.length < all.length ? `, and ${all.length - shown.length} more` : ''}`;
+    const picked = shown.length || !other ? `chose ${shown.map(quote).join(', ')}${shown.length < all.length ? `, and ${all.length - shown.length} more` : ''}` : '';
+    const own = other ? `answered in their own words ${quote(other)}` : '';
+    out = picked && own ? `${own}, and ${picked}` : picked || own;
   } else if (item.kind === 'todo') out = 'did it';
   else out = a.verdict === 'approve' ? 'approved' : 'asked for changes';
   return item.comment ? `${out}, with the comment ${quote(item.comment)}` : out;

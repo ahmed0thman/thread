@@ -12,6 +12,7 @@ import {
 } from './helpers.mjs';
 import * as core from '../server/core.mjs';
 import { newCardId } from '../server/repo.mjs';
+import { answerHash } from '../server/fields.mjs';
 import * as wake from '../server/wake.mjs';
 import * as runs from '../server/runs.mjs';
 import { startBoardServer } from '../server/http.mjs';
@@ -531,6 +532,44 @@ test('a card\'s agent is a shared field: it lives in the card file next to the l
 });
 
 // ---------------------------------------------------------------- what is never written to a repo file
+
+test('an Other answer round-trips through a repo card file, still counts as given here, and keeps its hash', async (t) => {
+  const e = oneProject(t);
+  core.enableRepo(e.projectDir);
+  const a = await core.addCard(e.projectDir, { title: 'Needs a pick' });
+  await core.addWait(e.projectDir, { card: a.id, kind: 'choice', text: 'Which?', choices: ['one', 'two'], multi: true, sessionId: S1 });
+  await core.answerWait(e.projectDir, a.id, `${a.id}.w1`, { choices: ['two'], other: 'my "own" way' });
+  const file = JSON.parse(repoText(e.projectDir, a.id)).waits[0];
+  assert.deepEqual(file.answer, { choices: ['Other: my "own" way', 'two'], other: 'my "own" way' });
+  const item = core.readState(e.projectDir).cards.find((c) => c.id === a.id).waits[0];
+  assert.deepEqual(item.answer, file.answer, 'read back as written');
+  assert.equal(item.fromFile, undefined, 'given here, so not an answer that only the file has');
+  const rec = core.readState(e.projectDir).cards.find((c) => c.id === a.id).localAnswers[item.id];
+  assert.equal(rec.hash, answerHash(item), 'the local record matches the answer read back');
+  assert.equal(core.answerPhrase(item), 'answered in their own words "my \\"own\\" way", and chose "two"');
+  const got = await core.deliverWaitAnswers(e.projectDir, S1);
+  assert.match(core.deliveryLine(got[0].item), /^The user answered .*: answered in their own words .*, and chose "two"/);
+});
+
+test('a released v0.24.1 rewriting a card that holds an Other answer keeps it', async (t) => {
+  const old = oldServerFrom(t, 'v0.24.1');
+  if (!old) return;
+  const e = oneProject(t);
+  core.enableRepo(e.projectDir);
+  const a = await core.addCard(e.projectDir, { title: 'Needs a pick' });
+  await core.addWait(e.projectDir, { card: a.id, kind: 'choice', text: 'Which?', choices: ['one', 'two'], multi: true, sessionId: S1 });
+  await core.answerWait(e.projectDir, a.id, `${a.id}.w1`, { choices: ['two'], other: 'my own way' });
+  const before = JSON.parse(repoText(e.projectDir, a.id)).waits[0];
+  const r = await runNode([path.join(TEST_DIR, 'fixtures', 'old-other-reader.mjs'), old, e.projectDir, 'touch', a.id], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir }, cwd: e.projectDir });
+  assert.equal(r.code, 0, r.stderr);
+  const file = JSON.parse(repoText(e.projectDir, a.id));
+  assert.equal(file.title, 'Renamed by the older version', 'the older version wrote the card file');
+  assert.deepEqual(file.waits[0], before, 'the answer, with its `other`, is as it was');
+  assert.equal(file.waits[0].answer.other, 'my own way');
+  const item = core.readState(e.projectDir).cards.find((c) => c.id === a.id).waits[0];
+  assert.equal(item.fromFile, undefined, 'still an answer given here');
+  assert.deepEqual(item.answer, before.answer);
+});
 
 test('no absolute path, session id or pid is written to a repo file', async (t) => {
   const e = oneProject(t);

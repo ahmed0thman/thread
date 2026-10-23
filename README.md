@@ -69,7 +69,7 @@ Three things thread does beyond the demo above.
 
 ### Decisions answered together
 
-A question, choice, to-do or review stays on the card it belongs to. Open the Waiting view, answer across cards, and one **Send** delivers everything. See [Waiting items](docs/reviews-and-waking.md#waiting-for-you).
+A question, choice (with an **Other** answer in your own words), to-do or review stays on the card it belongs to. Open the Waiting view, answer across cards, and one **Send** delivers everything. See [Waiting items](docs/reviews-and-waking.md#waiting-for-you).
 
 ![The Board with columns Idea, New, In progress, Review, Blocked and Done; cards show priorities, labels, milestone tags and waiting tags](docs/board.png)
 
@@ -104,7 +104,7 @@ More in [Security](docs/security.md).
 
 All of it is the author's own; no outside user reports exist yet. Details, dates and the checks not run are on the [evidence page](docs/evidence.md).
 
-- **Automated suite:** `node --test` runs 1394 tests, all passing on 0.24.1 on Node 20, 22 and 24 in CI, together with `claude plugin validate .`. The [CI workflow](.github/workflows/test.yml) runs both on pushes to main and on pull requests.
+- **Automated suite:** `node --test` runs 1419 tests, all passing on 0.24.2 on Node 20, 22 and 24 in CI, together with `claude plugin validate .`. The [CI workflow](.github/workflows/test.yml) runs both on pushes to main and on pull requests.
 - **The gate and the answers, on 0.22.0, for real** ([details](docs/evidence.md#6-smoke-test-of-the-promoted-workflow-on-0220)): one fresh Claude Code 2.1.299 session in a scratch project, whose first turn asked whether the plugin's guide had arrived and which was then given two tasks with no mention of the board. Claude put both on the board before editing and raised one review item (the second task needed none, so sending two answers at once was not shown). The answer, sent through the board's own route, reached the next turn; asked in the chat to mark the card done, Claude was refused; after an approval through the same route, the move went through. One run, one model.
 - **Real Claude Code checks, on record** ([details](docs/evidence.md#real-claude-code-checks)):
   - a lean thread run on 0.7.0 (2026-10-13);
@@ -140,10 +140,10 @@ The [full index](docs/README.md) groups every feature by what you want to do. By
 
 ## Latest release
 
-**0.24.1** (2026-10-23)
+**0.24.2** (2026-10-23)
 
-- Claude is told to hand a card to a lane through `thread_start`, so the lane's run shows on the card instead of nothing.
-- The **Choose a worker** dialog says **Saved**, **Picked** or **Selected** instead of **Current**, and opens on the tab of the worker the card's field shows.
+- Every choice item has an **Other** row, so you can answer in your own words when no option fits.
+- A sub-agent run's card shows its report again: current Claude Code hands it back with a `SubagentHandback` call, which the plugin now reads.
 
 All releases: [CHANGELOG.md](CHANGELOG.md).
 

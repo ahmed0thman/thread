@@ -438,6 +438,8 @@ test('two layout saves at once both land', async (t) => {
 const OLD_WRITER = path.join(TEST_DIR, 'fixtures', 'old-milestone-writer.mjs');
 const oldRun = (e, old, args) => runNode([OLD_WRITER, old, e.projectDir, ...args], { env: { ...process.env, THREAD_DATA_DIR: e.dataDir } });
 
+const KNOWS_LINKS = ['v0.21.0', 'v0.24.1'];   // the versions that know the field: they drop the link to a milestone they remove
+
 for (const ref of RELEASED_REFS) test(`the plugin version at ${ref} keeps a milestone's links when it writes the card, and this version ignores a link to a milestone it removed`, async (t) => {
   const old = oldServerFrom(t, ref);
   if (!old) return;
@@ -449,16 +451,17 @@ for (const ref of RELEASED_REFS) test(`the plugin version at ${ref} keeps a mile
   const c1 = cardOf(e, 'c1');
   assert.equal(c1.title, 'Renamed by the older version', 'the older version did write');
   // the version that knows the field drops the link to the milestone it removes; an older one keeps the list as it was
-  assert.deepEqual(c1.dependsOn, ref === 'v0.21.0' ? ['c2'] : ['c2', 'c3'], 'the field is kept as it was');
-  assert.deepEqual(c1.linkNames, { c2: 'first', c3: 'second' }, 'and the names of its lines');
+  assert.deepEqual(c1.dependsOn, KNOWS_LINKS.includes(ref) ? ['c2'] : ['c2', 'c3'], 'the field is kept as it was');
+  const names = ref === 'v0.24.1' ? { c2: 'first' } : { c2: 'first', c3: 'second' };   // 0.24.1 also knows the names and drops the one of the line it removes
+  assert.deepEqual(c1.linkNames, names, 'and the names of its lines');
   assert.deepEqual(core.liveLinkNames(c1, core.readState(e.projectDir).cards), { c2: 'first' }, 'a name of a line that is gone is not shown');
   assert.equal(cardOf(e, 'c3'), undefined, 'and it removed c3 without knowing the link');
   assert.deepEqual(core.liveDependsOn(c1, core.readState(e.projectDir).cards), ['c2'], 'this version reads the link to c3 as gone');
   const next = await core.changeMilestoneLink(e.projectDir, 'c1', { add: 'c1' }).catch((err) => err);
   assert.match(String(next.message), /cannot depend on itself/);
   const done = await core.updateCard(e.projectDir, 'c1', { title: 'Back again' }, { source: 'user' });
-  assert.deepEqual(done.dependsOn, ref === 'v0.21.0' ? ['c2'] : ['c2', 'c3'], 'a write that is not about links leaves them as they are');
-  assert.deepEqual(done.linkNames, { c2: 'first', c3: 'second' }, 'a rename is no write about lines: the stored names stay');
+  assert.deepEqual(done.dependsOn, KNOWS_LINKS.includes(ref) ? ['c2'] : ['c2', 'c3'], 'a write that is not about links leaves them as they are');
+  assert.deepEqual(done.linkNames, names, 'a rename is no write about lines: the stored names stay');
   assert.deepEqual(core.liveLinkNames(done, core.readState(e.projectDir).cards), { c2: 'first' }, 'and the name of the line that is gone is still not shown');
   const fixed = await core.changeMilestoneLink(e.projectDir, 'c1', { remove: 'c2' });
   assert.equal(fixed.dependsOn, undefined, 'a change of the links rebuilds them from the live ones');

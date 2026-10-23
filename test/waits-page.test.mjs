@@ -310,7 +310,9 @@ const type = (el, value) => { el.value = value; el.fire('input'); };
 const pick = (el, checked = true) => { el.checked = checked; el.fire('change'); };
 // the page sets type and name as properties; a real DOM reflects them as attributes, the fake does not
 const inputs = (el, type) => el.querySelectorAll('input').filter((i) => i.type === type);
-const options = (li) => li.querySelectorAll('input').filter((i) => i.name);
+const options = (li) => li.querySelectorAll('input').filter((i) => i.name && i.value !== '');   // the Other row has an empty value
+const otherRow = (li) => ({ on: li.querySelectorAll('input').find((i) => i.name && i.value === ''), text: li.querySelectorAll('input').find((i) => i.dataset.fid && i.dataset.fid.startsWith('w-other-')) });
+const commentOf = (li) => li.querySelectorAll('input').find((i) => i.dataset.fid && i.dataset.fid.startsWith('w-comment-'));
 
 test('the section is hidden for a card with no items, and at the top shows one row per open item', () => {
   const t = openSection();
@@ -362,7 +364,7 @@ test('a question has a text box for the answer; typing makes a draft that is not
   assert.equal(sendBtn(t).textContent, 'Send 1 answer');
   assert.match(t.env.elSendText.textContent, /^1 answer is drafted and not sent yet\. Claude gets them together when you send\.$/);
   assert.equal(t.state.posts.length, 0, 'nothing was sent');
-  assert.deepEqual(plain(stored(t)), { 'c1.w1': { text: ' 5 ', choices: [], done: false, verdict: '', comment: '' } }, 'and it is kept in the browser');
+  assert.deepEqual(plain(stored(t)), { 'c1.w1': { text: ' 5 ', choices: [], done: false, verdict: '', comment: '', otherOn: false, other: '' } }, 'and it is kept in the browser');
   t.state.answers = [{ applied: ['c1.w1'], skipped: [], cards: [CARD([wait('c1.w1', 'question', { state: 'answered', answer: { text: '5' }, answeredVia: 'board' })])] }];
   sendBtn(t).click();
   await tick();
@@ -398,7 +400,7 @@ test('a choice shows radio buttons for one pick and checkboxes for several, and 
   assert.equal(sendBtn(t).textContent, 'Send 1 answer', 'unticking all leaves no draft');
   assert.equal(draftOf(many).hidden, true);
   pick(m[1]); pick(m[2]);
-  type(inputs(many, 'text')[0], ' fine ');
+  type(commentOf(many), ' fine ');
   t.state.answers = [{ applied: ['c1.w1', 'c1.w2'], skipped: [], cards: [CARD([wait('c1.w1', 'choice', { state: 'answered', answer: { choices: ['b'] } }), wait('c1.w2', 'choice', { multi: true, state: 'answered', answer: { choices: ['b', 'c'] } })])] }];
   sendBtn(t).click();
   await tick();
@@ -410,6 +412,130 @@ test('a single choice needs exactly one option and a multiple choice at least on
   const d = (choices) => ({ text: '', choices, done: false, verdict: '', comment: '' });
   assert.deepEqual([[], ['a'], ['a', 'b']].map((c) => page.waitReady(wait('x', 'choice'), d(c))), [false, true, false]);
   assert.deepEqual([[], ['a'], ['a', 'b']].map((c) => page.waitReady(wait('x', 'choice', { multi: true }), d(c))), [false, true, true]);
+});
+
+test('readiness with Other: a single choice is one option or Other with words, a multiple one is any pick, and Other needs words', () => {
+  const { page } = waitsPage();
+  const d = (choices, otherOn = false, other = '') => ({ text: '', choices, done: false, verdict: '', comment: '', otherOn, other });
+  const one = wait('x', 'choice'), many = wait('x', 'choice', { multi: true });
+  assert.deepEqual([d([], true, 'mine'), d([], true, '  '), d([], true, ''), d(['a'], true, 'mine'), d(['a'])].map((x) => page.waitReady(one, x)), [true, false, false, false, true]);
+  assert.deepEqual([d([], true, 'mine'), d([], true, ' '), d(['a'], true, 'mine'), d(['a'], true, ''), d([], false, 'ignored while off')].map((x) => page.waitReady(many, x)), [true, false, true, false, false]);
+  assert.deepEqual(plain(page.waitBody(one, d([], true, '  mine  '))), { choices: ['Other: mine'], other: 'mine' }, 'the words are also an entry of choices: an older board server refuses that instead of dropping them');
+  assert.deepEqual(plain(page.waitBody(many, d(['a', 'c'], true, 'mine'))), { choices: ['Other: mine', 'a', 'c'], other: 'mine' });
+  assert.deepEqual(plain(page.waitBody(many, d(['a'], false, 'ignored while off'))), { choices: ['a'] }, 'no other while it is off');
+});
+
+test('every choice ends with an Other row that shows a text box while it is on; the pick and the words are one draft', async () => {
+  const t = openSection();
+  t.show(CARD([wait('c1.w1', 'choice'), wait('c1.w2', 'choice', { multi: true })]));
+  const one = row(t, 'c1.w1'), many = row(t, 'c1.w2');
+  for (const li of [one, many]) {
+    const o = otherRow(li);
+    assert.ok(o.on, 'there is an Other row');
+    assert.equal(o.on.type, li === one ? 'radio' : 'checkbox');
+    assert.equal(o.on.name, options(li)[0].name, 'in the same group as the options');
+    assert.equal(o.text.hidden, true, 'no text box until Other is picked');
+    assert.equal(o.text.maxLength, 4000);
+    assert.equal(o.text.placeholder, 'Your own answer');
+    assert.equal(o.text.getAttribute('aria-label'), 'Your own answer to ' + li.dataset.wid);
+  }
+  assert.equal(t.env.elSendBar.hidden, true);
+  // single: Other replaces the option, and an option replaces Other
+  const o1 = otherRow(one), oo = options(one);
+  pick(oo[1]);
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer');
+  pick(o1.on);
+  assert.equal(o1.text.hidden, false);
+  assert.deepEqual(plain(t.page.waitDrafts['k1/c1.w1'].choices), [], 'the picked option is cleared');
+  assert.equal(t.env.elSendBar.hidden, true, 'Other without words is a draft, not an answer');
+  assert.equal(draftOf(one).hidden, false);
+  assert.equal(draftOf(one).querySelector('span').textContent, 'Draft, not complete');
+  type(o1.text, '  my own  ');
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer');
+  assert.equal(draftOf(one).querySelector('span').textContent, 'Draft, not sent');
+  assert.deepEqual(plain(stored(t)['c1.w1']), { text: '', choices: [], done: false, verdict: '', comment: '', otherOn: true, other: '  my own  ' }, 'kept in the browser');
+  pick(oo[0]);
+  assert.equal(t.page.waitDrafts['k1/c1.w1'].otherOn, false, 'an option turns Other off');
+  assert.equal(o1.text.hidden, true);
+  // multiple: Other goes with ticked options
+  const om = otherRow(many), mm = options(many);
+  pick(mm[0]); pick(mm[2]); pick(om.on);
+  assert.equal(om.text.hidden, false);
+  assert.deepEqual(plain(t.page.waitDrafts['k1/c1.w2'].choices), ['a', 'c'], 'options stay ticked');
+  assert.equal(sendBtn(t).textContent, 'Send 1 answer', 'only the single choice is complete: the box is empty');
+  type(om.text, 'a fourth way');
+  type(commentOf(many), 'fine');
+  assert.equal(sendBtn(t).textContent, 'Send 2 answers');
+  t.state.answers = [{ applied: ['c1.w1', 'c1.w2'], skipped: [], cards: [CARD([wait('c1.w1', 'choice', { state: 'answered', answer: { choices: ['a'] } }), wait('c1.w2', 'choice', { multi: true, state: 'answered', answer: { choices: ['Other: a fourth way', 'a', 'c'], other: 'a fourth way' } })])] }];
+  sendBtn(t).click();
+  await tick();
+  assert.deepEqual(plain(t.state.posts), [['POST', '/api/p/k1/waits/answer-batch', { items: [{ id: 'c1.w1', choices: ['a'] }, { id: 'c1.w2', choices: ['Other: a fourth way', 'a', 'c'], other: 'a fourth way', comment: 'fine' }] }]]);
+  // unticking Other with the options gone leaves no draft
+  const t2 = openSection();
+  t2.show(CARD([wait('c1.w2', 'choice', { multi: true })]));
+  const m2 = otherRow(row(t2, 'c1.w2'));
+  pick(m2.on);
+  assert.equal(draftOf(row(t2, 'c1.w2')).hidden, false);
+  pick(m2.on, false);
+  assert.equal(draftOf(row(t2, 'c1.w2')).hidden, true);
+  assert.equal(stored(t2), null);
+});
+
+test('the Other box takes focus when Other is clicked, not when a keyboard moves the pick onto it', () => {
+  const t = openSection();
+  t.show(CARD([wait('c1.w1', 'choice'), wait('c1.w2', 'choice', { multi: true })]));
+  for (const id of ['c1.w1', 'c1.w2']) {
+    const o = otherRow(row(t, id));
+    t.doc.activeElement = null;
+    o.on.fire('click', { detail: 0 });   // the click a key (an arrow in the group, or Space) makes
+    pick(o.on);
+    assert.equal(o.text.hidden, false, id + ': the box shows');
+    assert.notEqual(t.doc.activeElement, o.text, id + ': a keyboard change leaves focus where it is');
+    pick(o.on, false);
+    assert.equal(o.text.hidden, true);
+    o.on.fire('click', { detail: 1 });   // a pointer click
+    pick(o.on);
+    assert.equal(t.doc.activeElement, o.text, id + ': a click puts the user in the box');
+  }
+});
+
+test('an Other draft survives a reload, and a stored draft from before Other has it off', () => {
+  const t = openSection();
+  t.show(CARD([wait('c1.w1', 'choice')]));
+  pick(otherRow(row(t, 'c1.w1')).on);
+  type(otherRow(row(t, 'c1.w1')).text, 'my own');
+  const again = openSection({ storage: t.state.storage });
+  again.show(CARD([wait('c1.w1', 'choice')]));
+  const o = otherRow(row(again, 'c1.w1'));
+  assert.equal(o.on.checked, true);
+  assert.equal(o.text.hidden, false);
+  assert.equal(o.text.value, 'my own');
+  again.page.updateSendBar();   // the page does it with every state it draws
+  assert.equal(sendBtn(again).textContent, 'Send 1 answer');
+  const old = openSection({ storage: { data: { 'thread-board-drafts:k1': JSON.stringify({ 'c1.w1': { text: '', choices: ['b'], done: false, verdict: '', comment: '' } }) }, broken: false } });
+  old.show(CARD([wait('c1.w1', 'choice')]));
+  assert.equal(otherRow(row(old, 'c1.w1')).on.checked, false);
+  assert.equal(otherRow(row(old, 'c1.w1')).text.hidden, true);
+  old.page.updateSendBar();
+  assert.equal(sendBtn(old).textContent, 'Send 1 answer');
+});
+
+test('an answered Other shows as its words after "Other: ", once, first, beside any options', () => {
+  const t = openSection();
+  const base = { answeredAt: '2026-10-14T03:05:00.000Z', answeredVia: 'board' };
+  t.show(CARD([
+    wait('c1.w1', 'choice', { ...base, state: 'answered', answer: { choices: ['Other: my words', 'a'], other: 'my words' } }),
+    wait('c1.w5', 'choice', { ...base, state: 'answered', answer: { choices: ['a', 'Other: earlier'], other: 'earlier' } }),
+    wait('c1.w2', 'choice', { ...base, state: 'answered', answer: { choices: ['Other: alone'], other: 'alone' }, comment: 'because' }),
+    wait('c1.w3', 'choice', { ...base, state: 'answered', answer: { choices: ['b'] } }),
+    wait('c1.w4', 'choice', { ...base, state: 'answered', answer: { choices: ['a'], other: 'file only' } }),
+  ]));
+  const text = (id) => t.ctl.host.querySelector(`li[data-wid="${id}"] .wait-line-ans`).textContent;
+  assert.match(text('c1.w1'), /Your answer: Other: my words, a( ·|$)/);
+  assert.match(text('c1.w2'), /Your answer: Other: alone — because( ·|$)/);
+  assert.match(text('c1.w3'), /Your answer: b/);
+  assert.match(text('c1.w5'), /Your answer: Other: earlier, a( ·|$)/, 'stored last by an earlier version: still said once');
+  assert.match(text('c1.w4'), /Your answer: Other: file only, a( ·|$)/, 'an `other` the choices do not repeat is still shown');
 });
 
 test('a to-do is ticked as done and a review is approved or sent back, each with an optional comment, and both go in one send', async () => {

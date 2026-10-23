@@ -204,10 +204,10 @@ const TOOLS = [
       type: 'object',
       properties: {
         card: { type: 'string', description: 'The id of the card this belongs to, for example "c37". A task, idea or thread card; not a milestone.' },
-        kind: { type: 'string', enum: core.WAIT_KINDS, description: '"question": the user types an answer. "choice": the user picks from choices. "todo": the user does something, then ticks Done. "review": the user checks your work and answers Approve or Request changes.' },
+        kind: { type: 'string', enum: core.WAIT_KINDS, description: '"question": the user types an answer. "choice": the user picks from choices, or answers Other in their own words (read the answer and act on it). "todo": the user does something, then ticks Done. "review": the user checks your work and answers Approve or Request changes.' },
         text: { type: 'string', description: 'What you need, written so it stands alone. Up to 2000 characters. The board shows Markdown: put steps and lists on their own lines (a numbered or bulleted list, not "1) ... 2) ..." run together in one paragraph) and keep paragraphs short. Put any command the user should run in a fenced code block (```bash), one command per block, so the board shows it with a Copy button. Name another card by its id (c12), not by a board URL; a plain web address is linked.' },
-        choices: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8, description: 'Only for kind "choice": 2 to 8 options, each up to 120 characters.' },
-        multi: { type: 'boolean', description: 'Only for kind "choice": true lets the user pick several options, false (default) exactly one.' },
+        choices: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8, description: 'Only for kind "choice": 2 to 8 options, each up to 120 characters. The board adds an Other row; do not list one.' },
+        multi: { type: 'boolean', description: 'Only for kind "choice": true lets the user pick several options, false (default) one option or Other.' },
         worker: WORKER_PROP,
         session_id: SESSION_PROP,
       },

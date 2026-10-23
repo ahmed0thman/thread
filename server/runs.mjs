@@ -1,6 +1,6 @@
 // Sub-agent runs on a card. The SubagentStart and SubagentStop hooks record a run on the card named in the
 // Agent call's description ("[c24] fix the tax rounding"); the board reads the run's transcript through
-// runActivity. Imports only state.mjs, config.mjs and sessions.mjs, so a hook can load it quickly.
+// runActivity. The report is the agent's last SubagentHandback call (what the main session got), else SubagentStop's last_assistant_message. Imports only state.mjs, config.mjs and sessions.mjs, so a hook can load it quickly.
 //
 // A run can also stand for one turn of a thread that does the work of a card (thread_start with card): a "linked" run. It has no agent id and
 // no transcript; its steps are the thread turn's activity file, and the runner closes it when the turn is recorded (openLinkedRun, closeLinkedRun).
@@ -174,7 +174,7 @@ function eachLine(file, onLine) {
 export function scanTranscript(file) {
   let events = [];
   const usageById = new Map();
-  let steps = 0, prompt = null, dropped = 0, anon = 0, lines = 0;
+  let steps = 0, prompt = null, dropped = 0, anon = 0, lines = 0, handback = null;
   const ok = eachLine(file, (line) => {
     const v = parseLine(line);
     if (!v) return;
@@ -188,6 +188,12 @@ export function scanTranscript(file) {
     if (events.length > 2 * MAX_RUN_EVENTS) { dropped += events.length - MAX_RUN_EVENTS; events = events.slice(-MAX_RUN_EVENTS); }
     const m = v.type === 'assistant' ? v.message : null;
     if (m && m.usage && typeof m.usage === 'object') usageById.set(typeof m.id === 'string' ? m.id : `line:${anon++}`, m.usage);
+    // Claude Code hands an agent's report back with a SubagentHandback tool call, and the agent then ends with no text of its own
+    if (m && Array.isArray(m.content)) {
+      for (const b of m.content) {
+        if (b && b.type === 'tool_use' && b.name === 'SubagentHandback' && b.input && typeof b.input.message === 'string' && b.input.message.trim()) handback = b.input.message;
+      }
+    }
   });
   if (!ok) return null;
   if (events.length > MAX_RUN_EVENTS) { dropped += events.length - MAX_RUN_EVENTS; events = events.slice(-MAX_RUN_EVENTS); }
@@ -203,7 +209,7 @@ export function scanTranscript(file) {
       usage.output += n(u.output_tokens);
     }
   }
-  return { events, steps, usage, prompt };
+  return { events, steps, usage, prompt, handback };
 }
 
 // Where the last complete line of the first `got` bytes of `buf` ends (the index of its line feed), or -1. With nothing read
@@ -505,7 +511,9 @@ async function recordStop(projectDirArg, input, { found, late, id, find, settleM
   const file = runTranscript({ transcript: transcriptOf, agentId: id });
   let scan = null;
   try { scan = file ? scanTranscript(file) : null; } catch { /* unreadable: the run still closes */ }
-  const report = typeof input.last_assistant_message === 'string' && input.last_assistant_message.trim() ? cut(input.last_assistant_message, MAX_REPORT) : null;
+  // the hand-back is what the main session got (text the agent writes beside it is not delivered), so it wins over the last message
+  const said = scan && scan.handback ? scan.handback : typeof input.last_assistant_message === 'string' && input.last_assistant_message.trim() ? input.last_assistant_message : null;
+  const report = said ? cut(said, MAX_REPORT) : null;
   const dropped = [];
   const closed = await updateState(projectDirArg, (state) => {
     let target = find(state);

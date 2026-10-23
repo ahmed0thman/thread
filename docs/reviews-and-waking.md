@@ -11,9 +11,11 @@ Sometimes Claude finishes work and then needs you: to check it, to answer a ques
 | Kind | Icon, colour | You |
 |---|---|---|
 | **Question** | speech bubble, blue | type an answer |
-| **Choice** | radio dot, purple | pick one option, or several when Claude allowed that (2 to 8 options) |
+| **Choice** | radio dot, purple | pick one option, or several when Claude allowed that (2 to 8 options), or answer **Other** in your own words |
 | **Review** | magnifier, teal | check Claude's work and answer **Approve** or **Request changes** |
 | **To do** | empty box, amber | do something yourself, then tick **Done** |
+
+**Other, on every choice.** A choice ends with an **Other** row, which Claude does not list itself. Pick it and a box appears right under it, **Your own answer** (up to 4,000 characters). On a single choice, Other replaces the option you picked, and picking an option turns Other off. On a multiple choice, Other can go with ticked options. The answer is ready to send when it has one option, or Other with some words; with Other on and an empty box the draft says **Draft, not complete**. Claude receives your words first in the answer, for example `answered in their own words "use the queue", and chose "A", "B"` (or just `answered in their own words "use the queue"`), quoted so that quotes in them cannot close the quote, so that a long list of options cannot cut them off. The answered item shows `Other: use the queue, A, B`. The stored answer holds your words twice: in `other`, and as the first entry of `choices` with the prefix `Other: `. An older plugin version reads only `choices`, so it still shows and delivers your words, as `chose "Other: use the queue", "A", "B"`. If an older session is the one serving the board, it does not know Other: the page also sends your words inside `choices`, so that older server refuses the answer (`choices must be options of this item`) instead of storing the options and losing your words, and your draft is kept; run `/thread:board` in a session on the current version, or reload the older windows, and send again. The server refuses Other together with an option on a single choice, an empty or too long text, and `other` on any other kind.
 
 Every kind except a question also takes an optional comment (for a question, the answer is the text). Cards in a Review stage and threads that have not been reported keep their own tags; the red count is for these explicit items only.
 
